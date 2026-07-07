@@ -1,0 +1,248 @@
+{
+  "scenarios": {
+    "metadata_mapping_failed": {
+      "expected_failure_code": "METADATA_MAPPING_FAILED",
+      "rows": [
+        {
+          "vendor": "broken_meta",
+          "snapshot_key": "meta-bad-1",
+          "timestamp": "2026-01-15T00:00:00Z",
+          "instrument_name": "BAD-SYMBOL",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 100.0,
+          "ask": 120.0,
+          "mark": 110.0,
+          "bid_iv": 0.5,
+          "ask_iv": 0.6,
+          "underlying_price": 95000.0,
+          "open_interest": 10,
+          "volume_24h": 2
+        }
+      ]
+    },
+    "timestamp_alignment_failed": {
+      "expected_failure_code": "TIMESTAMP_ALIGNMENT_FAILED",
+      "rows": [
+        {
+          "vendor": "fixture_alpha",
+          "snapshot_key": "ts-align-1",
+          "timestamp": "2026-01-15T00:00:00Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 1180.0,
+          "ask": 1220.0,
+          "mark": 1200.0,
+          "bid_iv": 0.60,
+          "ask_iv": 0.62,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "volume_24h": 42,
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 5000.0
+        },
+        {
+          "vendor": "fixture_beta",
+          "snapshot_key": "ts-align-1",
+          "timestamp": "2026-01-15T00:02:30Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 1180.5,
+          "ask": 1220.5,
+          "mark": 1200.0,
+          "bid_iv": 0.60,
+          "ask_iv": 0.62,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "volume_24h": 42,
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 5000.0
+        }
+      ]
+    },
+    "bid_ask_sanity_failed": {
+      "expected_failure_code": "BID_ASK_SANITY_FAILED",
+      "rows": [
+        {
+          "vendor": "bad_spread",
+          "snapshot_key": "spread-bad-1",
+          "timestamp": "2026-01-15T00:00:00Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 1300.0,
+          "ask": 1200.0,
+          "mark": 1250.0,
+          "bid_iv": 0.60,
+          "ask_iv": 0.62,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "volume_24h": 42,
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 5000.0
+        }
+      ]
+    },
+    "iv_sanity_failed": {
+      "expected_failure_code": "IV_SANITY_FAILED",
+      "rows": [
+        {
+          "vendor": "bad_iv",
+          "snapshot_key": "iv-bad-1",
+          "timestamp": "2026-01-15T00:00:00Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 1180.0,
+          "ask": 1220.0,
+          "mark": 1200.0,
+          "bid_iv": 750.0,
+          "ask_iv": 62.0,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "volume_24h": 42,
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 5000.0
+        }
+      ]
+    },
+    "mark_mid_drift_failed": {
+      "expected_failure_code": "MARK_MID_DRIFT_FAILED",
+      "rows": [
+        {
+          "vendor": "bad_mark",
+          "snapshot_key": "mark-bad-1",
+          "timestamp": "2026-01-15T00:00:00Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 100.0,
+          "ask": 120.0,
+          "mark": 200.0,
+          "bid_iv": 0.60,
+          "ask_iv": 0.62,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "volume_24h": 42,
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 5000.0
+        }
+      ]
+    },
+    "vendor_diff_failed": {
+      "expected_failure_code": "VENDOR_DIFF_FAILED",
+      "rows": [
+        {
+          "vendor": "fixture_alpha",
+          "snapshot_key": "vendor-diff-1",
+          "timestamp": "2026-01-15T00:00:00Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 980.0,
+          "ask": 1020.0,
+          "mark": 1000.0,
+          "bid_iv": 0.60,
+          "ask_iv": 0.62,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "volume_24h": 42,
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 5000.0
+        },
+        {
+          "vendor": "fixture_beta",
+          "snapshot_key": "vendor-diff-1",
+          "timestamp": "2026-01-15T00:00:20Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 1480.0,
+          "ask": 1520.0,
+          "mark": 1500.0,
+          "bid_iv": 0.60,
+          "ask_iv": 0.62,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "volume_24h": 42,
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 5000.0
+        }
+      ]
+    },
+    "payoff_replay_failed": {
+      "expected_failure_code": "PAYOFF_REPLAY_FAILED",
+      "rows": [
+        {
+          "vendor": "bad_payoff",
+          "snapshot_key": "payoff-bad-1",
+          "timestamp": "2026-01-15T00:00:00Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 1180.0,
+          "ask": 1220.0,
+          "mark": 1200.0,
+          "bid_iv": 0.60,
+          "ask_iv": 0.62,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "volume_24h": 42,
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 4200.0
+        }
+      ]
+    },
+    "oi_volume_mapping_failed": {
+      "expected_failure_code": "OI_VOLUME_MAPPING_FAILED",
+      "rows": [
+        {
+          "vendor": "bad_units",
+          "snapshot_key": "units-bad-1",
+          "timestamp": "2026-01-15T00:00:00Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 1180.0,
+          "ask": 1220.0,
+          "mark": 1200.0,
+          "bid_iv": 0.60,
+          "ask_iv": 0.62,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "oi_unit": "mystery",
+          "volume_24h": 42,
+          "volume_unit": "contracts",
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 5000.0
+        }
+      ]
+    },
+    "surface_no_arb_failed": {
+      "expected_failure_code": "SURFACE_NO_ARB_FAILED",
+      "rows": [
+        {
+          "vendor": "bad_surface",
+          "snapshot_key": "surface-bad-1",
+          "timestamp": "2026-01-15T00:00:00Z",
+          "instrument_name": "BTC-31JAN26-100000-C",
+          "settlement_currency": "USDC",
+          "quote_currency": "USDC",
+          "bid": 1180.0,
+          "ask": 1220.0,
+          "mark": 1200.0,
+          "bid_iv": 0.60,
+          "ask_iv": 0.62,
+          "underlying_price": 98000.0,
+          "open_interest": 150,
+          "volume_24h": 42,
+          "delivery_price": 105000.0,
+          "recorded_long_payoff": 5000.0,
+          "surface_no_arb_error": 0.07
+        }
+      ]
+    }
+  }
+}

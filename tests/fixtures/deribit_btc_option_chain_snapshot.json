@@ -1,0 +1,239 @@
+{
+  "captured_at": "2026-07-07T00:01:00Z",
+  "currency": "BTC",
+  "source": "fixture:deribit-btc-option-chain",
+  "rows": [
+    {
+      "instrument_name": "BTC-25JUL26-90000-C",
+      "summary": {
+        "instrument_name": "BTC-25JUL26-90000-C",
+        "base_currency": "BTC",
+        "quote_currency": "USD",
+        "bid_price": 0.205,
+        "ask_price": 0.215,
+        "mid_price": 0.21,
+        "mark_price": 0.211,
+        "underlying_price": 100000.0,
+        "open_interest": 18.0,
+        "creation_timestamp": 1783382455000
+      },
+      "ticker": {
+        "instrument_name": "BTC-25JUL26-90000-C",
+        "timestamp": 1783382455000,
+        "best_bid_price": 0.205,
+        "best_ask_price": 0.215,
+        "best_bid_amount": 6.0,
+        "best_ask_amount": 7.0,
+        "mark_price": 0.211,
+        "bid_iv": 58.0,
+        "ask_iv": 59.0,
+        "mark_iv": 58.5,
+        "underlying_price": 100000.0,
+        "open_interest": 18.0
+      }
+    },
+    {
+      "instrument_name": "BTC-25JUL26-95000-C",
+      "summary": {
+        "instrument_name": "BTC-25JUL26-95000-C",
+        "base_currency": "BTC",
+        "quote_currency": "USD",
+        "bid_price": 0.182,
+        "ask_price": 0.192,
+        "mid_price": 0.187,
+        "mark_price": 0.188,
+        "underlying_price": 100000.0,
+        "open_interest": 16.5,
+        "creation_timestamp": 1783382455000
+      },
+      "ticker": {
+        "instrument_name": "BTC-25JUL26-95000-C",
+        "timestamp": 1783382455000,
+        "best_bid_price": 0.182,
+        "best_ask_price": 0.192,
+        "best_bid_amount": 5.8,
+        "best_ask_amount": 6.9,
+        "mark_price": 0.188,
+        "bid_iv": 57.0,
+        "ask_iv": 58.0,
+        "mark_iv": 57.5,
+        "underlying_price": 100000.0,
+        "open_interest": 16.5
+      }
+    },
+    {
+      "instrument_name": "BTC-25JUL26-100000-C",
+      "summary": {
+        "instrument_name": "BTC-25JUL26-100000-C",
+        "base_currency": "BTC",
+        "quote_currency": "USD",
+        "bid_price": 0.161,
+        "ask_price": 0.171,
+        "mid_price": 0.166,
+        "mark_price": 0.1665,
+        "underlying_price": 100000.0,
+        "open_interest": 15.2,
+        "creation_timestamp": 1783382455000
+      },
+      "ticker": {
+        "instrument_name": "BTC-25JUL26-100000-C",
+        "timestamp": 1783382455000,
+        "best_bid_price": 0.161,
+        "best_ask_price": 0.171,
+        "best_bid_amount": 5.6,
+        "best_ask_amount": 6.7,
+        "mark_price": 0.1665,
+        "bid_iv": 56.0,
+        "ask_iv": 57.0,
+        "mark_iv": 56.5,
+        "underlying_price": 100000.0,
+        "open_interest": 15.2
+      }
+    },
+    {
+      "instrument_name": "BTC-25JUL26-105000-C",
+      "summary": {
+        "instrument_name": "BTC-25JUL26-105000-C",
+        "base_currency": "BTC",
+        "quote_currency": "USD",
+        "bid_price": 0.141,
+        "ask_price": 0.15,
+        "mid_price": 0.1455,
+        "mark_price": 0.146,
+        "underlying_price": 100000.0,
+        "open_interest": 14.1,
+        "creation_timestamp": 1783382455000
+      },
+      "ticker": {
+        "instrument_name": "BTC-25JUL26-105000-C",
+        "timestamp": 1783382455000,
+        "best_bid_price": 0.141,
+        "best_ask_price": 0.15,
+        "best_bid_amount": 5.4,
+        "best_ask_amount": 6.4,
+        "mark_price": 0.146,
+        "bid_iv": 55.0,
+        "ask_iv": 56.0,
+        "mark_iv": 55.5,
+        "underlying_price": 100000.0,
+        "open_interest": 14.1
+      }
+    },
+    {
+      "instrument_name": "BTC-25JUL26-110000-C",
+      "summary": {
+        "instrument_name": "BTC-25JUL26-110000-C",
+        "base_currency": "BTC",
+        "quote_currency": "USD",
+        "bid_price": 0.121,
+        "ask_price": 0.13,
+        "mid_price": 0.1255,
+        "mark_price": 0.126,
+        "underlying_price": 100000.0,
+        "open_interest": 13.5,
+        "creation_timestamp": 1783382455000
+      },
+      "ticker": {
+        "instrument_name": "BTC-25JUL26-110000-C",
+        "timestamp": 1783382455000,
+        "best_bid_price": 0.121,
+        "best_ask_price": 0.13,
+        "best_bid_amount": 5.0,
+        "best_ask_amount": 6.0,
+        "mark_price": 0.126,
+        "bid_iv": 54.0,
+        "ask_iv": 55.0,
+        "mark_iv": 54.5,
+        "underlying_price": 100000.0,
+        "open_interest": 13.5
+      }
+    },
+    {
+      "instrument_name": "BTC-25JUL26-115000-C",
+      "summary": {
+        "instrument_name": "BTC-25JUL26-115000-C",
+        "base_currency": "BTC",
+        "quote_currency": "USD",
+        "bid_price": 0.103,
+        "ask_price": 0.111,
+        "mid_price": 0.107,
+        "mark_price": 0.1075,
+        "underlying_price": 100000.0,
+        "open_interest": 12.3,
+        "creation_timestamp": 1783382455000
+      },
+      "ticker": {
+        "instrument_name": "BTC-25JUL26-115000-C",
+        "timestamp": 1783382455000,
+        "best_bid_price": 0.103,
+        "best_ask_price": 0.111,
+        "best_bid_amount": 4.7,
+        "best_ask_amount": 5.7,
+        "mark_price": 0.1075,
+        "bid_iv": 53.0,
+        "ask_iv": 54.0,
+        "mark_iv": 53.5,
+        "underlying_price": 100000.0,
+        "open_interest": 12.3
+      }
+    },
+    {
+      "instrument_name": "BTC-25JUL26-120000-C",
+      "summary": {
+        "instrument_name": "BTC-25JUL26-120000-C",
+        "base_currency": "BTC",
+        "quote_currency": "USD",
+        "bid_price": 0.087,
+        "ask_price": 0.094,
+        "mid_price": 0.0905,
+        "mark_price": 0.091,
+        "underlying_price": 100000.0,
+        "open_interest": 11.1,
+        "creation_timestamp": 1783382455000
+      },
+      "ticker": {
+        "instrument_name": "BTC-25JUL26-120000-C",
+        "timestamp": 1783382455000,
+        "best_bid_price": 0.087,
+        "best_ask_price": 0.094,
+        "best_bid_amount": 4.3,
+        "best_ask_amount": 5.1,
+        "mark_price": 0.091,
+        "bid_iv": 52.0,
+        "ask_iv": 53.0,
+        "mark_iv": 52.5,
+        "underlying_price": 100000.0,
+        "open_interest": 11.1
+      }
+    },
+    {
+      "instrument_name": "BTC-25JUL26-125000-C",
+      "summary": {
+        "instrument_name": "BTC-25JUL26-125000-C",
+        "base_currency": "BTC",
+        "quote_currency": "USD",
+        "bid_price": 0.073,
+        "ask_price": 0.079,
+        "mid_price": 0.076,
+        "mark_price": 0.0765,
+        "underlying_price": 100000.0,
+        "open_interest": 10.4,
+        "creation_timestamp": 1783382455000
+      },
+      "ticker": {
+        "instrument_name": "BTC-25JUL26-125000-C",
+        "timestamp": 1783382455000,
+        "best_bid_price": 0.073,
+        "best_ask_price": 0.079,
+        "best_bid_amount": 4.0,
+        "best_ask_amount": 4.8,
+        "mark_price": 0.0765,
+        "bid_iv": 51.0,
+        "ask_iv": 52.0,
+        "mark_iv": 51.5,
+        "underlying_price": 100000.0,
+        "open_interest": 10.4
+      }
+    }
+  ]
+}
