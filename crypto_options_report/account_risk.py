@@ -335,6 +335,13 @@ def build_account_status(
             "positions": normalized_positions,
             "simulation_status": simulation_status,
             "projected_margin": projected_margin,
+            "private_adapter_contract": _private_adapter_contract(
+                source=source,
+                source_endpoint=source_endpoint,
+                positions=normalized_positions,
+                simulation_status=simulation_status,
+                data_age_ms=None,
+            ),
         }
 
     if data_age_ms is not None and data_age_ms > freshness_limit_ms:
@@ -353,6 +360,13 @@ def build_account_status(
             "positions": normalized_positions,
             "simulation_status": simulation_status,
             "projected_margin": projected_margin,
+            "private_adapter_contract": _private_adapter_contract(
+                source=source,
+                source_endpoint=source_endpoint,
+                positions=normalized_positions,
+                simulation_status=simulation_status,
+                data_age_ms=data_age_ms,
+            ),
         }
 
     light, gate, light_reason = classify_margin_light(
@@ -381,6 +395,13 @@ def build_account_status(
         "positions": normalized_positions,
         "simulation_status": simulation_status,
         "projected_margin": projected_margin,
+        "private_adapter_contract": _private_adapter_contract(
+            source=source,
+            source_endpoint=source_endpoint,
+            positions=normalized_positions,
+            simulation_status=simulation_status,
+            data_age_ms=data_age_ms,
+        ),
     }
 
 
@@ -553,6 +574,14 @@ def risk_state_from_account_status(account_status: dict[str, Any]) -> str:
 
 
 def _missing_account_status(freshness_limit_ms: int) -> dict[str, Any]:
+    simulation_status = {
+        "status": "not_requested",
+        "attempted": False,
+        "available": False,
+        "blocks_new_trades": False,
+        "reason_code": "SIMULATION_NOT_REQUESTED",
+        "source_endpoint": "private/simulate_portfolio",
+    }
     return {
         "status": "missing",
         "live_snapshot": False,
@@ -566,14 +595,7 @@ def _missing_account_status(freshness_limit_ms: int) -> dict[str, Any]:
         "margin_model": "unknown",
         "snapshot": None,
         "positions": [],
-        "simulation_status": {
-            "status": "not_requested",
-            "attempted": False,
-            "available": False,
-            "blocks_new_trades": False,
-            "reason_code": "SIMULATION_NOT_REQUESTED",
-            "source_endpoint": "private/simulate_portfolio",
-        },
+        "simulation_status": simulation_status,
         "projected_margin": {
             "status": "not_requested",
             "initial_margin": None,
@@ -584,6 +606,39 @@ def _missing_account_status(freshness_limit_ms: int) -> dict[str, Any]:
             "delta_initial_margin": None,
             "delta_maintenance_margin": None,
         },
+        "private_adapter_contract": _private_adapter_contract(
+            source="not_configured",
+            source_endpoint="private/get_account_summary",
+            positions=[],
+            simulation_status=simulation_status,
+            data_age_ms=None,
+        ),
+    }
+
+
+def _private_adapter_contract(
+    *,
+    source: str,
+    source_endpoint: str,
+    positions: list[dict[str, Any]],
+    simulation_status: dict[str, Any],
+    data_age_ms: int | None,
+) -> dict[str, Any]:
+    endpoints = [source_endpoint, "private/get_positions"]
+    simulation_endpoint = simulation_status.get("source_endpoint")
+    if simulation_endpoint and simulation_endpoint not in endpoints:
+        endpoints.append(str(simulation_endpoint))
+    return {
+        "schema_version": "private_account_adapter_contract.v1",
+        "source": source,
+        "auth_safe": True,
+        "credential_required_for_tests": False,
+        "replay_fixture": source == "deribit_replay",
+        "live_order_submission_possible": False,
+        "source_endpoints": endpoints,
+        "position_count": len(positions),
+        "data_age_ms": data_age_ms,
+        "failure_policy": "force_no_trade_on_missing_auth_stale_partial_or_malformed",
     }
 
 

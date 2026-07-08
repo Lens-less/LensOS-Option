@@ -223,6 +223,7 @@ def build_historical_reconciliation_report(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     merged_config = _merge_config(config)
+    report_generated_at = generated_at or utc_timestamp()
     instrument_map: dict[str, InstrumentMetadata] = {}
     normalized_quotes: list[CanonicalHistoricalQuote] = []
     raw_rows_by_quote_id: dict[str, dict[str, Any]] = {}
@@ -309,6 +310,7 @@ def build_historical_reconciliation_report(
                     "instrument_name": quote.instrument_name,
                     "snapshot_key": quote.snapshot_key,
                     "failure_codes": failure_codes,
+                    "failure_reasons": failure_codes,
                 }
             )
     for quote_id, quote_specific_failures in quote_failures.items():
@@ -322,12 +324,35 @@ def build_historical_reconciliation_report(
                 "instrument_name": first_failure["instrument_name"],
                 "snapshot_key": first_failure["snapshot_key"],
                 "failure_codes": sorted({failure["code"] for failure in quote_specific_failures}),
+                "failure_reasons": sorted({failure["code"] for failure in quote_specific_failures}),
             }
         )
 
+    strict_eligible = decision == "ELIGIBLE"
+    aggregate_eligibility = {
+        "status": "validated" if decision == "ELIGIBLE" else "blocked",
+        "decision": decision,
+        "training_allowed": strict_eligible,
+        "backtest_allowed": strict_eligible,
+        "eligible_quotes": len(eligible_quotes),
+        "quarantined_quotes": len(quarantine_quotes_payload),
+        "failure_counts": failure_counts,
+        "blocks_downstream": decision != "ELIGIBLE",
+    }
+
     return {
         "schema_version": HISTORICAL_REPORT_SCHEMA_VERSION,
-        "generated_at": generated_at or utc_timestamp(),
+        "generated_at": report_generated_at,
+        "raw_data_provenance": {
+            "source_type": "fixture_or_vendor_rows",
+            "raw_rows": len(rows),
+            "source_vendors": sorted(
+                {str(row.get("vendor", "fixture")) for row in rows}
+            ),
+            "ingested_at": report_generated_at,
+            "normalization_schema_version": HISTORICAL_REPORT_SCHEMA_VERSION,
+            "normalization_config": dict(merged_config),
+        },
         "summary": {
             "total_rows": len(rows),
             "normalized_quotes": len(normalized_quotes),
@@ -341,11 +366,12 @@ def build_historical_reconciliation_report(
         },
         "eligibility": {
             "decision": decision,
-            "training_allowed": bool(eligible_quotes),
-            "backtest_allowed": bool(eligible_quotes),
+            "training_allowed": strict_eligible,
+            "backtest_allowed": strict_eligible,
             "eligible_instruments": eligible_instruments,
             "eligible_snapshot_count": len({quote.snapshot_key for quote in eligible_quotes}),
         },
+        "aggregate_eligibility": aggregate_eligibility,
         "canonical_data": {
             "instrument_metadata": [
                 instrument_map[name].to_dict() for name in sorted(instrument_map)

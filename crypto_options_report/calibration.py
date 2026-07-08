@@ -62,6 +62,21 @@ def build_walk_forward_calibration_report(
             "score": 78.0,
             "decision_bucket": "trade_half_or_spread",
         },
+        "model_registry": {
+            "registry_schema_version": "calibration_model_registry.v1",
+            "model_version": "walk_forward_fixture_v1",
+            "artifact_id": "deterministic_fixture_walk_forward_v1",
+            "training_window": "fixture_24_months",
+            "validation_window": "fixture_3_months",
+            "promotion_status": "research_only_unpromoted",
+            "promoted_for_sizing": False,
+            "requires_external_review": True,
+            "blocking_reasons": [
+                "MISSING_EXTERNAL_PROMOTION_REVIEW",
+                "MISSING_VENDOR_HISTORY_PROVENANCE",
+                "MISSING_PAPER_RECONCILIATION",
+            ],
+        },
         "system_comparison": _comparison_rows(
             baseline_mdd=baseline_mdd,
             baseline_cvar=baseline_cvar,
@@ -131,6 +146,15 @@ def validate_walk_forward_calibration_report(report: Any) -> list[str]:
     for check in report.get("leakage_checks") or []:
         if check.get("future_data_used") is not False:
             errors.append("walk_forward_calibration leakage checks must be false")
+    registry = report.get("model_registry") or {}
+    if registry.get("promoted_for_sizing") is not False:
+        errors.append("walk_forward_calibration model registry must not promote sizing")
+    if registry.get("promotion_status") not in {
+        "research_only_unpromoted",
+        "promoted",
+        "rejected",
+    }:
+        errors.append("walk_forward_calibration model registry promotion_status is invalid")
     return errors
 
 

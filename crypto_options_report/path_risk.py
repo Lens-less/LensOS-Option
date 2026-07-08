@@ -192,6 +192,18 @@ def build_path_risk_distribution_report(
     return {
         "schema_version": PATH_RISK_REPORT_SCHEMA_VERSION,
         "generated_at": report_generated_at,
+        "input_evidence": {
+            "status": "research_only_fixture",
+            "source": str(payload.get("source", "path_risk_fixture")),
+            "eligible_path_count": len(applied_paths),
+            "historical_path_count": len(base_paths),
+            "fallback_path_count": max(len(applied_paths) - len(base_paths), 0),
+            "stress_scenario_count": len(stress_report["paths"]),
+            "bootstrap_path_count": len(bootstrap_report["paths"]),
+            "no_lookahead_declared": True,
+            "placeholder_data": True,
+            "readiness_contribution": "placeholder_research_only",
+        },
         "candidate": {
             "instrument_name": candidate.instrument_name,
             "structure": candidate.structure,

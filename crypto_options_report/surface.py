@@ -201,7 +201,7 @@ def _build_expiry_surface(
     valid_quotes = [
         quote
         for quote in sorted(quotes, key=lambda item: item["strike"])
-        if quote["quality_status"] == "valid"
+        if quote["quality_status"] == "valid" and quote.get("option_type") == "call"
     ]
     dte_days = _dte_days(expiry_date, evaluation_now_ms)
     if len(valid_quotes) < DEFAULT_SURFACE_LIMITS["min_quotes_per_expiry"]:
@@ -229,7 +229,7 @@ def _build_expiry_surface(
     if not fit_pass:
         reason_codes.append("SURFACE_FIT_QUALITY_TOO_LOW")
     if not no_arb_pass:
-        reason_codes.append("SURFACE_NO_ARBITRAGE_FAIL")
+        reason_codes.extend(no_arb.get("reason_codes") or ["SURFACE_NO_ARBITRAGE_FAIL"])
 
     points = [
         _build_surface_point(
@@ -289,20 +289,39 @@ def _fit_linear_iv_surface(valid_quotes: list[dict[str, Any]]) -> dict[str, Any]
 def _evaluate_no_arb(valid_quotes: list[dict[str, Any]]) -> dict[str, Any]:
     monotonic_errors = []
     convexity_errors = []
+    reason_codes: list[str] = []
     for left, right in zip(valid_quotes, valid_quotes[1:]):
+        if right["strike"] <= left["strike"]:
+            monotonic_errors.append(1.0)
+            _append_unique(reason_codes, "SURFACE_DUPLICATE_STRIKE")
+            continue
         if right["mid"] > left["mid"]:
             base = max(abs(left["mid"]), 1e-6)
             monotonic_errors.append((right["mid"] - left["mid"]) / base)
 
     for first, second, third in zip(valid_quotes, valid_quotes[1:], valid_quotes[2:]):
-        left_slope = (second["mid"] - first["mid"]) / (second["strike"] - first["strike"])
-        right_slope = (third["mid"] - second["mid"]) / (third["strike"] - second["strike"])
+        left_width = second["strike"] - first["strike"]
+        right_width = third["strike"] - second["strike"]
+        if left_width <= 0 or right_width <= 0:
+            convexity_errors.append(1.0)
+            _append_unique(reason_codes, "SURFACE_DUPLICATE_STRIKE")
+            continue
+        left_slope = (second["mid"] - first["mid"]) / left_width
+        right_slope = (third["mid"] - second["mid"]) / right_width
         if right_slope < left_slope:
             denom = max(abs(left_slope) + abs(right_slope), 1e-6)
             convexity_errors.append((left_slope - right_slope) / denom)
+            _append_unique(reason_codes, "SURFACE_NO_ARBITRAGE_FAIL")
 
     error = round(max(monotonic_errors + convexity_errors + [0.0]), 6)
-    return {"passed": error <= 0.0, "error": error}
+    if error > 0 and not reason_codes:
+        reason_codes.append("SURFACE_NO_ARBITRAGE_FAIL")
+    return {"passed": error <= 0.0, "error": error, "reason_codes": reason_codes}
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
 
 
 def _build_surface_point(

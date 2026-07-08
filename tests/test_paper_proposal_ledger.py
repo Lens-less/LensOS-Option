@@ -67,9 +67,11 @@ class PaperProposalLedgerTests(unittest.TestCase):
             allow_paper=True,
             review_decisions=[
                 {
-                    "proposal_id": "proposal-01",
+                    "proposal_id": "proposal-01-candidate-1",
                     "state": "paper_filled",
                     "simulated_fill_usdc": 118.0,
+                    "observed_fill_usdc": 117.5,
+                    "observed_fee_usdc": 1.7,
                     "state_machine_trigger": "take_profit",
                 }
             ],
@@ -107,9 +109,19 @@ class PaperProposalLedgerTests(unittest.TestCase):
         ]
         return {
             "mode_gate": {"paper_manual_candidates_allowed": True},
-            "walk_forward_calibration": {"status": "validated"},
+            "walk_forward_calibration": {
+                "status": "validated",
+                "model_registry": {"promoted_for_sizing": True},
+            },
             "data_status": {"status": "validated"},
-            "account_status": {"trade_gate": "ALLOW_NEW"},
+            "account_status": {
+                "trade_gate": "ALLOW_NEW",
+                "private_adapter_contract": {
+                    "auth_safe": True,
+                    "replay_fixture": True,
+                    "live_order_submission_possible": False,
+                },
+            },
             "reason_codes": [],
             "ev_candidate_scanner": {"ranked_candidates": candidates},
         }

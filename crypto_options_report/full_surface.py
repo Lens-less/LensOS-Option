@@ -136,13 +136,34 @@ def _view_keys(name: str) -> list[str]:
 
 
 def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
+    data_status = report.get("data_status") or {}
+    account_status = report.get("account_status") or {}
+    calibration = report.get("walk_forward_calibration") or {}
+    paper_ledger = report.get("paper_proposal_ledger") or {}
+    feed_coverage = data_status.get("feed_coverage") or {}
+    private_contract = account_status.get("private_adapter_contract") or {}
+    model_registry = calibration.get("model_registry") or {}
+    persistence = paper_ledger.get("persistence") or {}
     prerequisites = [
-        _gate("data_quality", (report.get("data_status") or {}).get("status") == "validated"),
+        _gate("data_quality", data_status.get("status") == "validated"),
+        _gate("public_response_contract", isinstance(data_status.get("public_response_contract"), dict)),
+        _gate(
+            "public_feed_graph_complete",
+            bool(feed_coverage) and not feed_coverage.get("missing_feeds"),
+        ),
         _gate("pnl_evidence", (report.get("pnl_evidence") or {}).get("status") == "pass"),
         _gate("vol_surface", (report.get("vol_surface_status") or {}).get("status") == "validated"),
+        _gate(
+            "private_account_replay_contract",
+            private_contract.get("auth_safe") is True
+            and private_contract.get("replay_fixture") is True
+            and private_contract.get("live_order_submission_possible") is False,
+        ),
         _gate("portfolio_risk", (report.get("portfolio_risk") or {}).get("schema_version") is not None),
         _gate("position_management", (report.get("position_management") or {}).get("schema_version") is not None),
-        _gate("walk_forward_calibration", (report.get("walk_forward_calibration") or {}).get("status") == "validated"),
+        _gate("walk_forward_calibration", calibration.get("status") == "validated"),
+        _gate("calibration_model_promoted", model_registry.get("promoted_for_sizing") is True),
+        _gate("paper_ledger_persistence", persistence.get("mode") == "persistent_json"),
         _gate("paper_ledger_reconciliation", False),
         _gate("manual_approval_runbook", False),
     ]

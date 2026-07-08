@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import json
 from math import isfinite
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -19,6 +19,16 @@ DEFAULT_QUALITY_LIMITS = {
     "min_valid_quotes_per_expiry": 8,
     "max_bad_quote_ratio_per_expiry": 0.25,
     "max_spread_ratio": 0.50,
+}
+
+PUBLIC_FEED_CONTRACTS = {
+    "option_chain": "required",
+    "ticker": "required",
+    "order_book": "not_implemented",
+    "vol_index": "not_implemented",
+    "funding_basis": "not_implemented",
+    "index_spot": "not_implemented",
+    "events": "not_implemented",
 }
 
 SPREAD_SANITY_FLAGS = {
@@ -43,6 +53,8 @@ BLOCKING_QUALITY_FLAGS = SPREAD_SANITY_FLAGS.union(
         "INVALID_ASK_IV",
         "INVALID_MARK_IV",
         "MISSING_DEPTH",
+        "MISSING_SETTLEMENT_CURRENCY",
+        "MISSING_CANONICAL_METADATA",
     }
 )
 
@@ -165,6 +177,8 @@ def build_market_data_status(
         "snapshot_captured_at": normalized["captured_at"],
         "market_data_age_sec": normalized["snapshot_age_sec"],
         "quality_gate": gate,
+        "public_response_contract": _public_response_contract(normalized),
+        "feed_coverage": _feed_coverage(normalized),
     }
 
 
@@ -219,6 +233,13 @@ def evaluate_market_data_quality(
     for expiry_date in sorted(quotes_by_expiry):
         expiry_quotes = quotes_by_expiry[expiry_date]
         invalid_quotes = [q for q in expiry_quotes if q["quality_status"] != "valid"]
+        invalid_quote_flags = sorted(
+            {
+                flag
+                for quote in invalid_quotes
+                for flag in quote.get("quality_flags", [])
+            }
+        )
         valid_quotes = len(expiry_quotes) - len(invalid_quotes)
         bad_quote_ratio = (
             len(invalid_quotes) / len(expiry_quotes) if expiry_quotes else 1.0
@@ -228,6 +249,12 @@ def evaluate_market_data_quality(
             any(flag in SPREAD_SANITY_FLAGS for flag in q["quality_flags"])
             for q in expiry_quotes
         )
+        duplicate_instruments = _duplicate_count(
+            q["instrument_name"] for q in expiry_quotes
+        )
+        duplicate_strikes = _duplicate_count(
+            (q["strike"], q["option_type"]) for q in expiry_quotes
+        )
         reason_codes: list[str] = []
         if valid_quotes < normalized_limits["min_valid_quotes_per_expiry"]:
             reason_codes.append("INSUFFICIENT_VALID_QUOTES")
@@ -235,6 +262,11 @@ def evaluate_market_data_quality(
             reason_codes.append("BAD_QUOTE_RATIO_EXCEEDED")
         if spread_sanity_failures:
             reason_codes.append("SPREAD_SANITY_FAILED")
+        if duplicate_instruments or duplicate_strikes:
+            reason_codes.append("DUPLICATE_INSTRUMENT_OR_STRIKE")
+        reason_codes.extend(
+            flag for flag in invalid_quote_flags if flag not in reason_codes
+        )
         status = "pass" if not reason_codes else "fail"
         if status == "fail":
             for code in reason_codes:
@@ -250,6 +282,8 @@ def evaluate_market_data_quality(
                 "invalid_quotes": len(invalid_quotes),
                 "stale_quotes": stale_quotes,
                 "spread_sanity_failures": spread_sanity_failures,
+                "duplicate_instruments": duplicate_instruments,
+                "duplicate_strikes": duplicate_strikes,
                 "bad_quote_ratio": round(bad_quote_ratio, 4),
                 "reason_codes": reason_codes,
             }
@@ -270,6 +304,9 @@ def evaluate_market_data_quality(
             "market_data_age_sec": normalized_snapshot["snapshot_age_sec"],
             "fetch_errors": len(normalized_snapshot.get("fetch_errors", [])),
         },
+        "sample_canonical_metadata": [
+            quote["canonical_metadata"] for quote in quotes[: min(len(quotes), 5)]
+        ],
     }
 
 
@@ -322,7 +359,7 @@ def _normalize_quote_row(
     quote = {
         "instrument_name": instrument_name,
         "base_currency": summary.get("base_currency", metadata["base_currency"]),
-        "quote_currency": summary.get("quote_currency", "USD"),
+        "quote_currency": summary.get("quote_currency"),
         "expiry_date": metadata["expiry_date"],
         "strike": metadata["strike"],
         "option_type": metadata["option_type"],
@@ -346,10 +383,120 @@ def _normalize_quote_row(
         "spread_ratio": spread_ratio,
         "exchange_greeks": _normalize_exchange_greeks(ticker.get("greeks")),
     }
+    quote["canonical_metadata"] = _canonical_metadata(
+        instrument_name=instrument_name,
+        quote=quote,
+        summary=summary,
+        metadata=metadata,
+    )
     flags = _quality_flags(quote, limits)
     quote["quality_flags"] = flags
     quote["quality_status"] = "valid" if not flags else "invalid"
     return quote
+
+
+def _public_response_contract(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
+    quotes = normalized_snapshot["quotes"]
+    ticker_missing = sum(quote["depth"] is None for quote in quotes)
+    duplicate_instruments = _duplicate_count(quote["instrument_name"] for quote in quotes)
+    duplicate_strikes = _duplicate_count(
+        (quote["expiry_date"], quote["strike"], quote["option_type"]) for quote in quotes
+    )
+    malformed_quotes = sum(quote["quality_status"] != "valid" for quote in quotes)
+    return {
+        "source": normalized_snapshot["source"],
+        "credential_required": False,
+        "network_required_for_tests": False,
+        "endpoints": {
+            "book_summary": {
+                "status": "available" if quotes else "missing",
+                "rows": len(quotes),
+            },
+            "ticker": {
+                "status": "available" if ticker_missing == 0 else "partial",
+                "missing_rows": ticker_missing,
+            },
+        },
+        "response_classes": {
+            "empty": len(quotes) == 0,
+            "partial": bool(ticker_missing or normalized_snapshot.get("fetch_errors")),
+            "duplicate": bool(duplicate_instruments or duplicate_strikes),
+            "malformed": bool(malformed_quotes),
+            "stale": normalized_snapshot["snapshot_age_sec"]
+            > DEFAULT_QUALITY_LIMITS["market_data_max_age_sec"],
+        },
+        "duplicate_instruments": duplicate_instruments,
+        "duplicate_strikes": duplicate_strikes,
+        "fetch_errors": list(normalized_snapshot.get("fetch_errors", [])),
+    }
+
+
+def _feed_coverage(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
+    response_contract = _public_response_contract(normalized_snapshot)
+    ticker_status = response_contract["endpoints"]["ticker"]["status"]
+    feeds = {}
+    for name, requirement in PUBLIC_FEED_CONTRACTS.items():
+        if name == "option_chain":
+            status = "available" if normalized_snapshot["quotes"] else "missing"
+        elif name == "ticker":
+            status = ticker_status
+        else:
+            status = "missing"
+        feeds[name] = {
+            "requirement": requirement,
+            "status": status,
+            "freshness_status": "fresh"
+            if normalized_snapshot["snapshot_age_sec"]
+            <= DEFAULT_QUALITY_LIMITS["market_data_max_age_sec"]
+            else "stale",
+        }
+    return {
+        "feeds": feeds,
+        "missing_feeds": [
+            name
+            for name, item in feeds.items()
+            if item["requirement"] == "not_implemented"
+            or (
+                item["requirement"] == "required"
+                and item["status"] != "available"
+            )
+        ],
+        "readiness_contribution": "research_only_partial_public_graph",
+    }
+
+
+def _canonical_metadata(
+    *,
+    instrument_name: str | None,
+    quote: dict[str, Any],
+    summary: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    base_currency = quote["base_currency"]
+    quote_currency = quote["quote_currency"]
+    settlement_currency = summary.get("settlement_currency")
+    return {
+        "instrument_name": instrument_name,
+        "venue": "DERIBIT",
+        "base_currency": base_currency,
+        "quote_currency": quote_currency,
+        "settlement_currency": settlement_currency,
+        "settlement_currency_source": (
+            "explicit_settlement_currency"
+            if summary.get("settlement_currency")
+            else "missing"
+        ),
+        "expiry_date": metadata["expiry_date"],
+        "strike_price": metadata["strike"],
+        "option_type": metadata["option_type"],
+        "underlying_index": summary.get("underlying_index", f"{base_currency}_USD"),
+        "underlying_index_source": (
+            "explicit_underlying_index"
+            if summary.get("underlying_index")
+            else "default_registry"
+        ),
+        "timestamp_semantics": "exchange_milliseconds",
+    }
 
 
 def _quality_flags(quote: dict[str, Any], limits: dict[str, float]) -> list[str]:
@@ -399,6 +546,15 @@ def _quality_flags(quote: dict[str, Any], limits: dict[str, float]) -> list[str]
         elif iv_value <= 0 or iv_value > 500:
             flags.append(invalid_flag)
 
+    metadata = quote.get("canonical_metadata") or {}
+    if not metadata.get("instrument_name") or metadata.get("strike_price") is None:
+        flags.append("MISSING_CANONICAL_METADATA")
+    if (
+        not metadata.get("settlement_currency")
+        or metadata.get("settlement_currency_source") != "explicit_settlement_currency"
+    ):
+        flags.append("MISSING_SETTLEMENT_CURRENCY")
+
     return sorted(set(flag for flag in flags if flag in BLOCKING_QUALITY_FLAGS))
 
 
@@ -445,6 +601,16 @@ def _looks_like_option(instrument_name: str | None) -> bool:
         return False
     parts = instrument_name.split("-")
     return len(parts) >= 4 and parts[3] in {"C", "P"}
+
+
+def _duplicate_count(values: Iterable[Any]) -> int:
+    seen = set()
+    duplicates = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    return len(duplicates)
 
 
 def _to_number(value: Any) -> float | None:
