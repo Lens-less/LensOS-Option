@@ -10,6 +10,7 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -24,6 +25,8 @@ from .market_data import (
 
 REPORT_PATH = "/research/report"
 REPORT_ALIASES = {REPORT_PATH, "/report"}
+DASHBOARD_PAGE_PATH = "/dashboard.html"
+DASHBOARD_PAGE_ALIASES = {"/", DASHBOARD_PAGE_PATH, "/dashboard/page"}
 GET_SURFACE_PATHS = {
     "/market/chain",
     "/surface",
@@ -77,6 +80,9 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path in DASHBOARD_PAGE_ALIASES:
+            self._write_html(HTTPStatus.OK, dashboard_page_html())
+            return
         if parsed.path == "/health":
             self._write_json(HTTPStatus.OK, {"status": "ok"})
             return
@@ -125,6 +131,14 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _write_html(self, status: HTTPStatus, body: str) -> None:
+        encoded = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
 
 def serve(host: str, port: int) -> None:
     server = ThreadingHTTPServer((host, port), ResearchReportHandler)
@@ -133,6 +147,14 @@ def serve(host: str, port: int) -> None:
         server.serve_forever()
     finally:
         server.server_close()
+
+
+def dashboard_page_html() -> str:
+    return (
+        files("crypto_options_report")
+        .joinpath("static", "dashboard.html")
+        .read_text(encoding="utf-8")
+    )
 
 
 def _payload_for_path(path: str, query: str) -> dict[str, Any]:

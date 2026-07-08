@@ -7,3 +7,7 @@ __pycache__/
 .coverage
 htmlcov/
 codex_review_output.txt
+.workflow/*.log
+.workflow/*.png
+.workflow/cdp-*.json
+.workflow/tmp/

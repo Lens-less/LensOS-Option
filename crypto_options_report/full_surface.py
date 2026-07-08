@@ -21,6 +21,9 @@ CLI_COMMANDS = [
 
 API_ROUTES = [
     "GET /health",
+    "GET /research/report",
+    "GET /dashboard.html",
+    "GET /dashboard",
     "GET /market/chain",
     "GET /surface",
     "GET /regime",

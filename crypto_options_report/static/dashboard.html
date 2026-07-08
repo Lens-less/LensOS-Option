@@ -1,0 +1,2814 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f0f2f5">
+  <title>Crypto Options 研究控制台</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef2ee;
+      --sidebar: #10171c;
+      --sidebar-soft: #17232a;
+      --panel: #fffefb;
+      --panel-soft: #f7f9f6;
+      --ink: #11161a;
+      --muted: #69737b;
+      --muted-2: #8b959d;
+      --line: #dbe2dc;
+      --line-strong: #c3cdc5;
+      --green: #087a58;
+      --green-soft: #def4e8;
+      --red: #b83333;
+      --red-soft: #f8dddd;
+      --amber: #a16506;
+      --amber-soft: #f9eccd;
+      --cyan: #08718a;
+      --cyan-soft: #dceff4;
+      --graphite: #29333a;
+      --focus: #0f8a68;
+      --shadow: 0 1px 0 rgba(17, 24, 39, 0.04), 0 18px 36px rgba(20, 28, 25, 0.08);
+      --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      --radius: 8px;
+      font-family:
+        Aptos, "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont,
+        "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+      font-variant-numeric: tabular-nums;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      min-width: 320px;
+      background: var(--bg);
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        linear-gradient(180deg, rgba(8, 122, 88, 0.08), rgba(8, 122, 88, 0) 300px),
+        var(--bg);
+      color: var(--ink);
+      line-height: 1.45;
+      text-rendering: optimizeLegibility;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(16, 24, 20, 0.024) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(16, 24, 20, 0.018) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.85), transparent 420px);
+      z-index: 0;
+    }
+
+    ::selection {
+      background: rgba(8, 122, 88, 0.2);
+      color: var(--ink);
+    }
+
+    button {
+      font: inherit;
+      touch-action: manipulation;
+    }
+
+    a {
+      touch-action: manipulation;
+    }
+
+    .app-shell {
+      position: relative;
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr);
+      min-height: 100dvh;
+      z-index: 1;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 16px 12px;
+      background: var(--sidebar);
+      color: #eef6f1;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 18px;
+      z-index: 2;
+      box-shadow: inset -1px 0 rgba(255, 255, 255, 0.06);
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      margin: 0 auto;
+      border: 1px solid rgba(222, 244, 232, 0.2);
+      border-radius: var(--radius);
+      background: rgba(222, 244, 232, 0.08);
+      color: #78e0b4;
+      font-weight: 850;
+      letter-spacing: 0;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .nav {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .nav-item {
+      display: grid;
+      place-items: center;
+      width: 54px;
+      height: 46px;
+      margin: 0 auto;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      color: #aab8c0;
+      font-size: 0.72rem;
+      font-weight: 850;
+      letter-spacing: 0.01em;
+      text-decoration: none;
+      transition:
+        border-color 150ms var(--ease-out),
+        background-color 150ms var(--ease-out),
+        color 150ms var(--ease-out),
+        transform 120ms var(--ease-out);
+    }
+
+    .nav-item.active {
+      border-color: rgba(120, 224, 180, 0.28);
+      background: var(--sidebar-soft);
+      color: #78e0b4;
+    }
+
+    .nav-item:active,
+    .icon-button:active {
+      transform: scale(0.97);
+    }
+
+    .nav-item:focus-visible,
+    .icon-button:focus-visible {
+      outline: 2px solid rgba(15, 138, 104, 0.76);
+      outline-offset: 3px;
+      box-shadow: 0 0 0 4px rgba(8, 122, 88, 0.13);
+    }
+
+    .sidebar-foot {
+      color: #7f9098;
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      text-align: center;
+    }
+
+    .main {
+      width: 100%;
+      max-width: 1560px;
+      min-width: 0;
+      padding: 22px;
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--green);
+      font-size: 0.78rem;
+      font-weight: 850;
+      letter-spacing: 0.02em;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.55rem, 1.1rem + 1.35vw, 2.4rem);
+      line-height: 1.12;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    .subtitle {
+      max-width: 760px;
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 0.96rem;
+      line-height: 1.5;
+      text-wrap: pretty;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .report-status {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      min-height: 38px;
+      max-width: 280px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.68);
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-weight: 760;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .report-status::before {
+      content: "";
+      flex: 0 0 auto;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 3px var(--green-soft);
+    }
+
+    .report-status.is-offline::before {
+      background: var(--amber);
+      box-shadow: 0 0 0 3px var(--amber-soft);
+    }
+
+    .icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--panel);
+      color: var(--ink);
+      cursor: pointer;
+      transition:
+        border-color 150ms var(--ease-out),
+        color 150ms var(--ease-out),
+        transform 120ms var(--ease-out),
+        background-color 150ms var(--ease-out);
+    }
+
+    .refresh-glyph {
+      display: inline-block;
+      font-size: 1.08rem;
+      line-height: 1;
+      transform: translateY(-1px);
+    }
+
+    .command-band {
+      display: grid;
+      grid-template-columns: minmax(210px, 1.05fr) repeat(4, minmax(150px, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .verdict-card {
+      min-height: 106px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: 0 1px 0 rgba(17, 24, 39, 0.03), 0 10px 26px rgba(20, 28, 25, 0.05);
+    }
+
+    .verdict-card:first-child {
+      border-color: rgba(8, 122, 88, 0.24);
+      background: #f7fbf7;
+    }
+
+    .verdict-label {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 850;
+      letter-spacing: 0.02em;
+    }
+
+    .verdict-value {
+      margin-top: 12px;
+      font-size: 1.45rem;
+      line-height: 1.08;
+      font-weight: 850;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .verdict-meta {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      overflow-wrap: anywhere;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      max-width: 100%;
+      padding: 3px 8px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: #f7f9f7;
+      color: var(--graphite);
+      font-size: 0.74rem;
+      font-weight: 850;
+      letter-spacing: 0.01em;
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+
+    .badge.green {
+      border-color: rgba(8, 122, 88, 0.3);
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .badge.red {
+      border-color: rgba(184, 51, 51, 0.28);
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .badge.amber {
+      border-color: rgba(161, 101, 6, 0.3);
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .badge.cyan {
+      border-color: rgba(8, 113, 138, 0.28);
+      background: var(--cyan-soft);
+      color: var(--cyan);
+    }
+
+    .reason-band {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 14px;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .reason-title {
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 850;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .chip-row {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      overflow-x: auto;
+      padding-bottom: 1px;
+    }
+
+    .chip {
+      flex: 0 0 auto;
+      max-width: 340px;
+      min-height: 28px;
+      padding: 6px 9px;
+      border: 1px solid #e5d3b9;
+      border-radius: 999px;
+      background: #fff8ea;
+      color: #724b08;
+      font-size: 0.75rem;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .workbench {
+      display: grid;
+      grid-template-columns: minmax(250px, 0.72fr) minmax(520px, 1.58fr) minmax(280px, 0.82fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .panel {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      justify-content: space-between;
+      min-height: 58px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--panel), var(--panel-soft));
+    }
+
+    .panel-header > div {
+      min-width: 0;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 0.98rem;
+      line-height: 1.2;
+      font-weight: 850;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    .panel-kicker {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+
+    .panel-body {
+      padding: 14px 16px 16px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      position: relative;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 11px;
+      top: 12px;
+      bottom: 12px;
+      width: 1px;
+      background: var(--line-strong);
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 10px;
+      position: relative;
+      min-height: 58px;
+    }
+
+    .timeline-dot {
+      width: 23px;
+      height: 23px;
+      margin-top: 2px;
+      border: 4px solid var(--panel);
+      border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 0 1px rgba(184, 51, 51, 0.25);
+      z-index: 1;
+    }
+
+    .timeline-dot.ok {
+      background: var(--green);
+      box-shadow: 0 0 0 1px rgba(8, 122, 88, 0.25);
+    }
+
+    .timeline-dot.warn {
+      background: var(--amber);
+      box-shadow: 0 0 0 1px rgba(161, 101, 6, 0.24);
+    }
+
+    .timeline-name {
+      font-size: 0.88rem;
+      font-weight: 850;
+      overflow-wrap: anywhere;
+    }
+
+    .timeline-detail {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .matrix-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .matrix-cell {
+      min-height: 92px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfa;
+    }
+
+    .matrix-label {
+      color: var(--muted);
+      font-size: 0.74rem;
+      font-weight: 850;
+      letter-spacing: 0.02em;
+    }
+
+    .matrix-value {
+      margin-top: 12px;
+      font-size: 1.35rem;
+      font-weight: 850;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .matrix-note {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      overflow-wrap: anywhere;
+    }
+
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      min-width: 620px;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 0.86rem;
+      overflow-wrap: break-word;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 850;
+      letter-spacing: 0.02em;
+      background: #fbfcfa;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .risk-table table {
+      min-width: 560px;
+    }
+
+    .risk-table th:nth-child(1),
+    .risk-table td:nth-child(1),
+    .risk-table th:nth-child(2),
+    .risk-table td:nth-child(2) {
+      white-space: nowrap;
+    }
+
+    .risk-table th:nth-child(3),
+    .risk-table td:nth-child(3) {
+      width: 60%;
+    }
+
+    .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.8rem;
+    }
+
+    .empty {
+      display: grid;
+      place-items: center;
+      min-height: 126px;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius);
+      background: #fbfcfa;
+      color: var(--muted);
+      text-align: center;
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }
+
+    .bar-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 118px minmax(120px, 1fr) 76px;
+      gap: 10px;
+      align-items: center;
+      min-height: 32px;
+    }
+
+    .bar-label {
+      min-width: 0;
+      color: var(--ink);
+      font-size: 0.84rem;
+      font-weight: 850;
+      overflow-wrap: anywhere;
+    }
+
+    .bar-track {
+      height: 10px;
+      border-radius: 999px;
+      background: #e5ebe6;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--green), var(--cyan));
+      transition: width 220ms var(--ease-out);
+    }
+
+    .bar-value {
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-weight: 800;
+      text-align: right;
+    }
+
+    .readiness-list,
+    .mode-gate-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .check-row,
+    .gate-row {
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      min-height: 30px;
+      font-size: 0.84rem;
+    }
+
+    .gate-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .gate-row:last-child {
+      border-bottom: 0;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 0 4px var(--red-soft);
+    }
+
+    .dot.ok {
+      background: var(--green);
+      box-shadow: 0 0 0 4px var(--green-soft);
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mini-stat {
+      min-height: 82px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfa;
+    }
+
+    .mini-stat .num {
+      font-size: 1.45rem;
+      font-weight: 850;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .mini-stat .txt {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.8rem;
+      overflow-wrap: anywhere;
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      flex-wrap: wrap;
+    }
+
+    .loading {
+      cursor: progress;
+    }
+
+    .loading .icon-button {
+      opacity: 0.7;
+    }
+
+    .chip-row::-webkit-scrollbar,
+    .table-wrap::-webkit-scrollbar {
+      height: 8px;
+    }
+
+    .chip-row::-webkit-scrollbar-thumb,
+    .table-wrap::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      background: rgba(8, 122, 88, 0.24);
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .nav-item:hover {
+        border-color: rgba(120, 224, 180, 0.28);
+        background: var(--sidebar-soft);
+        color: #78e0b4;
+      }
+
+      .icon-button:hover {
+        border-color: var(--green);
+        color: var(--green);
+        background: #f7fbf7;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      .nav-item,
+      .icon-button,
+      .bar-fill {
+        transition-duration: 1ms;
+      }
+    }
+
+    @media (max-width: 1260px) {
+      .command-band {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .workbench {
+        grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.22fr);
+      }
+
+      .workbench .stack:last-child {
+        grid-column: span 2;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        align-items: start;
+      }
+    }
+
+    @media (max-width: 900px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        height: auto;
+        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-rows: auto;
+        align-items: center;
+        padding: 10px;
+      }
+
+      .brand-mark {
+        margin: 0;
+      }
+
+      .nav {
+        grid-auto-flow: column;
+        grid-auto-columns: 46px;
+        overflow-x: auto;
+        gap: 8px;
+      }
+
+      .nav-item {
+        width: 46px;
+        height: 40px;
+        margin: 0;
+      }
+
+      .sidebar-foot {
+        display: none;
+      }
+
+      .topbar,
+      .reason-band,
+      .workbench,
+      .workbench .stack:last-child {
+        grid-template-columns: 1fr;
+      }
+
+      .workbench .stack:last-child {
+        grid-column: auto;
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .main {
+        padding: 14px 9px 28px;
+      }
+
+      .command-band,
+      .matrix-grid,
+      .split {
+        grid-template-columns: 1fr;
+      }
+
+      h1 {
+        font-size: 1.28rem;
+      }
+
+      .panel-header {
+        flex-direction: column;
+      }
+
+      .verdict-label {
+        align-items: flex-start;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+      }
+
+      .report-status {
+        max-width: 100%;
+        white-space: normal;
+      }
+
+      .chip {
+        max-width: 260px;
+      }
+
+      .bar-row {
+        grid-template-columns: 92px minmax(90px, 1fr) 58px;
+      }
+    }
+
+    /* Ant Design Pro inspired reskin. This keeps the static dashboard dependency-free. */
+    :root {
+      --bg: #f0f2f5;
+      --sidebar: #001529;
+      --sidebar-soft: #0b1f3a;
+      --panel: #ffffff;
+      --panel-soft: #fafafa;
+      --ink: rgba(0, 0, 0, 0.88);
+      --muted: rgba(0, 0, 0, 0.45);
+      --muted-2: rgba(0, 0, 0, 0.35);
+      --line: #f0f0f0;
+      --line-strong: #d9d9d9;
+      --green: #52c41a;
+      --green-soft: #f6ffed;
+      --red: #ff4d4f;
+      --red-soft: #fff2f0;
+      --amber: #faad14;
+      --amber-soft: #fffbe6;
+      --cyan: #1677ff;
+      --cyan-soft: #e6f4ff;
+      --graphite: rgba(0, 0, 0, 0.65);
+      --focus: #1677ff;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      --radius: 8px;
+      --ease-out: cubic-bezier(0.2, 0, 0, 1);
+    }
+
+    html,
+    body {
+      background: var(--bg);
+      overflow-x: hidden;
+    }
+
+    body {
+      background: var(--bg);
+    }
+
+    body::before {
+      display: none;
+    }
+
+    ::selection {
+      background: #bae0ff;
+      color: var(--ink);
+    }
+
+    .app-shell {
+      grid-template-columns: 216px minmax(0, 1fr);
+      background: var(--bg);
+    }
+
+    .sidebar {
+      padding: 0;
+      background: var(--sidebar);
+      color: rgba(255, 255, 255, 0.85);
+      gap: 0;
+      box-shadow: 2px 0 8px rgba(0, 21, 41, 0.35);
+    }
+
+    .brand-block {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 64px;
+      padding: 0 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      margin: 0;
+      border: 0;
+      border-radius: 6px;
+      background: #1677ff;
+      color: #ffffff;
+      font-size: 0.78rem;
+      box-shadow: none;
+      flex: 0 0 auto;
+    }
+
+    .brand-copy {
+      display: grid;
+      min-width: 0;
+      line-height: 1.25;
+    }
+
+    .brand-copy strong {
+      color: #ffffff;
+      font-size: 0.96rem;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .brand-copy span {
+      color: rgba(255, 255, 255, 0.45);
+      font-size: 0.72rem;
+    }
+
+    .nav {
+      gap: 4px;
+      padding: 12px 8px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      width: auto;
+      height: 44px;
+      margin: 0;
+      padding: 0 16px;
+      border: 0;
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .nav-item.active,
+    .nav-item:hover {
+      background: #1677ff;
+      color: #ffffff;
+    }
+
+    .sidebar-foot {
+      padding: 18px 20px;
+      color: rgba(255, 255, 255, 0.35);
+      font-size: 0.75rem;
+      text-align: left;
+    }
+
+    .main {
+      max-width: none;
+      padding: 0 24px 24px;
+    }
+
+    .topbar {
+      margin: 0 -24px 24px;
+      padding: 20px 24px;
+      min-height: 112px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    .eyebrow {
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 400;
+    }
+
+    h1 {
+      font-size: clamp(1.5rem, 1.18rem + 0.9vw, 2rem);
+      font-weight: 650;
+      line-height: 1.25;
+    }
+
+    .subtitle {
+      max-width: 820px;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .report-status {
+      min-height: 32px;
+      padding: 4px 11px;
+      border-color: #b7eb8f;
+      border-radius: 6px;
+      background: var(--green-soft);
+      color: #389e0d;
+      font-size: 0.82rem;
+      font-weight: 500;
+    }
+
+    .report-status.is-offline {
+      border-color: #ffe58f;
+      background: var(--amber-soft);
+      color: #d48806;
+    }
+
+    .report-status::before {
+      width: 6px;
+      height: 6px;
+      background: currentColor;
+      box-shadow: none;
+    }
+
+    .icon-button {
+      width: 34px;
+      height: 34px;
+      border-color: var(--line-strong);
+      border-radius: 6px;
+      background: #ffffff;
+      color: var(--graphite);
+    }
+
+    .command-band {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .verdict-card {
+      min-height: 118px;
+      padding: 18px;
+      border-color: var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .verdict-card:first-child {
+      border-color: #91caff;
+      background: #ffffff;
+      box-shadow: inset 3px 0 0 #1677ff, var(--shadow);
+    }
+
+    .verdict-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .verdict-value {
+      margin-top: 16px;
+      font-size: clamp(1.32rem, 1.12rem + 0.45vw, 1.58rem);
+      font-weight: 700;
+      word-break: keep-all;
+    }
+
+    .verdict-card:first-child .verdict-value {
+      font-size: clamp(1.18rem, 1.02rem + 0.35vw, 1.34rem);
+      white-space: nowrap;
+    }
+
+    .verdict-meta {
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+
+    .badge {
+      min-height: 22px;
+      padding: 1px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+
+    .badge.green {
+      border-color: #b7eb8f;
+      background: var(--green-soft);
+      color: #389e0d;
+    }
+
+    .badge.red {
+      border-color: #ffccc7;
+      background: var(--red-soft);
+      color: #cf1322;
+    }
+
+    .badge.amber {
+      border-color: #ffe58f;
+      background: var(--amber-soft);
+      color: #d48806;
+    }
+
+    .badge.cyan {
+      border-color: #91caff;
+      background: var(--cyan-soft);
+      color: #0958d9;
+    }
+
+    .reason-band {
+      margin-bottom: 16px;
+      padding: 12px 16px;
+      border-color: #ffe58f;
+      border-radius: var(--radius);
+      background: var(--amber-soft);
+    }
+
+    .reason-title {
+      color: #ad6800;
+      font-size: 0.84rem;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+
+    .chip {
+      border-color: #ffd591;
+      border-radius: 4px;
+      background: #fff7e6;
+      color: #ad6800;
+      font-size: 0.76rem;
+      font-weight: 600;
+    }
+
+    .workbench {
+      grid-template-columns: 304px minmax(520px, 1fr) 336px;
+      gap: 16px;
+    }
+
+    .stack {
+      gap: 16px;
+    }
+
+    .panel {
+      border-color: var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      min-height: 60px;
+      padding: 16px 20px;
+      border-bottom-color: var(--line);
+      background: #ffffff;
+    }
+
+    .panel-title {
+      font-size: 1rem;
+      font-weight: 650;
+    }
+
+    .panel-kicker {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 400;
+    }
+
+    .panel-body {
+      padding: 16px 20px 20px;
+    }
+
+    .timeline {
+      gap: 12px;
+    }
+
+    .timeline::before {
+      background: #d9d9d9;
+    }
+
+    .timeline-dot {
+      width: 17px;
+      height: 17px;
+      margin-top: 3px;
+      border: 3px solid #ffffff;
+      background: var(--red);
+      box-shadow: 0 0 0 1px #ffccc7;
+    }
+
+    .timeline-dot.ok {
+      background: var(--green);
+      box-shadow: 0 0 0 1px #b7eb8f;
+    }
+
+    .timeline-dot.warn {
+      background: var(--amber);
+      box-shadow: 0 0 0 1px #ffe58f;
+    }
+
+    .timeline-name {
+      font-size: 0.88rem;
+      font-weight: 650;
+    }
+
+    .timeline-detail {
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .matrix-grid {
+      gap: 12px;
+    }
+
+    .matrix-cell,
+    .mini-stat {
+      border-color: var(--line);
+      border-radius: 6px;
+      background: #fafafa;
+    }
+
+    .matrix-label,
+    .mini-stat .txt {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+
+    .matrix-value,
+    .mini-stat .num {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    table {
+      min-width: 680px;
+    }
+
+    th,
+    td {
+      padding: 12px 10px;
+      border-bottom-color: var(--line);
+      font-size: 0.86rem;
+    }
+
+    th {
+      color: var(--muted);
+      background: #fafafa;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+
+    .empty {
+      min-height: 118px;
+      border-color: #d9d9d9;
+      border-radius: 6px;
+      background: #fafafa;
+      color: var(--muted);
+    }
+
+    .bar-track {
+      height: 8px;
+      background: #f5f5f5;
+    }
+
+    .bar-fill {
+      background: #1677ff;
+    }
+
+    .bar-value {
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .gate-row {
+      border-bottom-color: var(--line);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      background: var(--red);
+      box-shadow: 0 0 0 4px var(--red-soft);
+    }
+
+    .dot.ok {
+      background: var(--green);
+      box-shadow: 0 0 0 4px var(--green-soft);
+    }
+
+    .footer {
+      margin-top: 20px;
+      color: var(--muted);
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .nav-item:hover {
+        background: #1677ff;
+        color: #ffffff;
+      }
+
+      .icon-button:hover {
+        border-color: #1677ff;
+        color: #1677ff;
+        background: #ffffff;
+      }
+    }
+
+    @media (max-width: 1260px) {
+      .command-band {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .workbench {
+        grid-template-columns: minmax(280px, 0.82fr) minmax(0, 1.18fr);
+      }
+
+      .workbench .stack:last-child {
+        grid-column: span 2;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 900px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 0;
+        height: auto;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        z-index: 5;
+      }
+
+      .brand-block {
+        height: 56px;
+        padding: 0 12px;
+        border-bottom: 0;
+      }
+
+      .brand-copy {
+        display: none;
+      }
+
+      .nav {
+        display: flex;
+        gap: 4px;
+        overflow-x: auto;
+        padding: 8px 10px 8px 0;
+      }
+
+      .nav-item {
+        flex: 0 0 auto;
+        height: 36px;
+        padding: 0 12px;
+        font-size: 0.82rem;
+      }
+
+      .sidebar-foot {
+        display: none;
+      }
+
+      .main {
+        padding: 0 12px 20px;
+      }
+
+      .topbar {
+        grid-template-columns: 1fr;
+        margin: 0 -12px 16px;
+        padding: 18px 12px;
+        min-height: auto;
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+      }
+
+      .command-band,
+      .reason-band,
+      .workbench,
+      .workbench .stack:last-child {
+        grid-template-columns: 1fr;
+      }
+
+      .workbench .stack:last-child {
+        grid-column: auto;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .main {
+        padding: 0 8px 18px;
+      }
+
+      .brand-mark {
+        width: 30px;
+        height: 30px;
+      }
+
+      .nav-item {
+        height: 34px;
+        padding: 0 10px;
+      }
+
+      h1 {
+        font-size: 1.35rem;
+      }
+
+      .subtitle {
+        font-size: 0.9rem;
+      }
+
+      .command-band,
+      .matrix-grid,
+      .split {
+        grid-template-columns: 1fr;
+      }
+
+      .verdict-card {
+        min-height: 104px;
+      }
+
+      .panel-header {
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .bar-row {
+        grid-template-columns: 84px minmax(90px, 1fr) 64px;
+      }
+    }
+
+    /* Ant Design specification pass: PageContainer + StatisticCard.Group + ProCard grid. */
+    .app-shell {
+      grid-template-columns: 240px minmax(0, 1fr);
+      background: var(--bg);
+    }
+
+    .main {
+      padding: 0 24px 32px;
+      min-width: 0;
+    }
+
+    .topbar {
+      min-height: 116px;
+      margin: 0 -24px 24px;
+      padding: 22px 24px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: #ffffff;
+      box-shadow: none;
+    }
+
+    .eyebrow {
+      margin-bottom: 7px;
+      color: #1677ff;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+
+    h1 {
+      color: var(--ink);
+      font-size: 1.42rem;
+      font-weight: 650;
+      line-height: 1.3;
+    }
+
+    .subtitle {
+      max-width: 760px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.62;
+    }
+
+    .top-actions {
+      align-items: center;
+      gap: 8px;
+    }
+
+    .report-status {
+      max-width: none;
+      overflow: visible;
+      text-overflow: clip;
+      white-space: nowrap;
+    }
+
+    .command-band {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.15fr) minmax(180px, 1fr) minmax(180px, 1fr) minmax(220px, 0.88fr);
+      grid-template-rows: repeat(2, minmax(56px, auto));
+      gap: 0;
+      overflow: hidden;
+      margin-bottom: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #ffffff;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    }
+
+    .verdict-card {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 18px 20px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      background: #ffffff;
+      box-shadow: none;
+    }
+
+    .verdict-card:last-child {
+      border-right: 0;
+    }
+
+    .verdict-card:first-child {
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: #f7fbff;
+      box-shadow: inset 3px 0 0 #1677ff;
+    }
+
+    .verdict-card:nth-child(1),
+    .verdict-card:nth-child(2),
+    .verdict-card:nth-child(3) {
+      grid-row: 1 / span 2;
+      min-height: 118px;
+    }
+
+    .verdict-card:nth-child(1) {
+      grid-column: 1;
+    }
+
+    .verdict-card:nth-child(2) {
+      grid-column: 2;
+    }
+
+    .verdict-card:nth-child(3) {
+      grid-column: 3;
+    }
+
+    .verdict-card:nth-child(4),
+    .verdict-card:nth-child(5) {
+      grid-column: 4;
+      min-height: 0;
+      padding: 12px 16px;
+      background: #ffffff;
+    }
+
+    .verdict-card:nth-child(4) {
+      grid-row: 1;
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .verdict-card:nth-child(5) {
+      grid-row: 2;
+      border-right: 0;
+    }
+
+    .verdict-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .verdict-value {
+      margin-top: 10px;
+      line-height: 1.24;
+    }
+
+    .verdict-card:nth-child(4) .verdict-value,
+    .verdict-card:nth-child(5) .verdict-value {
+      margin-top: 4px;
+      font-size: 1.08rem;
+    }
+
+    .verdict-meta {
+      margin-top: 8px;
+      min-height: 18px;
+    }
+
+    .reason-band {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      align-items: start;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding: 13px 16px;
+      border: 1px solid #ffe58f;
+      border-radius: var(--radius);
+      background: #fffbe6;
+      box-shadow: none;
+    }
+
+    .reason-content {
+      min-width: 0;
+    }
+
+    .reason-copy {
+      margin: 0 0 8px;
+      color: #874d00;
+      font-size: 0.83rem;
+      line-height: 1.45;
+    }
+
+    .reason-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 24px;
+      color: #ad6800;
+      white-space: nowrap;
+    }
+
+    .reason-title::before {
+      content: "!";
+      width: 18px;
+      height: 18px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #faad14;
+      color: #ffffff;
+      font-size: 0.76rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .reason-band .chip-row {
+      min-width: 0;
+      padding-top: 1px;
+    }
+
+    .reason-band .chip {
+      padding: 2px 8px;
+      font-size: 0.73rem;
+    }
+
+    .workbench {
+      display: grid;
+      grid-template-columns: minmax(0, 16fr) minmax(320px, 8fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .workbench > .stack {
+      min-width: 0;
+    }
+
+    #evidence {
+      grid-column: 1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+      gap: 16px;
+    }
+
+    .workbench > .stack:nth-child(2) {
+      grid-column: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .workbench > .stack:nth-child(2) > .panel:first-child,
+    .workbench > .stack:nth-child(2) > .panel:nth-child(3) {
+      grid-column: auto;
+    }
+
+    #readiness {
+      grid-column: 2;
+      grid-row: 1 / span 2;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      position: static;
+      top: auto;
+      align-self: start;
+    }
+
+    .panel {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #ffffff;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    }
+
+    .panel-header {
+      min-height: 56px;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+    }
+
+    .panel-title {
+      font-size: 0.98rem;
+      font-weight: 650;
+      line-height: 1.3;
+    }
+
+    .panel-kicker {
+      display: block;
+      margin-top: 3px;
+      line-height: 1.45;
+    }
+
+    .panel-body {
+      padding: 16px;
+    }
+
+    .matrix-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .matrix-cell,
+    .mini-stat {
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: #fafafa;
+      box-shadow: none;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #ffffff;
+    }
+
+    table {
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+
+    th {
+      background: #fafafa;
+    }
+
+    td:first-child,
+    th:first-child {
+      padding-left: 14px;
+    }
+
+    td:last-child,
+    th:last-child {
+      padding-right: 14px;
+    }
+
+    @media (max-width: 1320px) {
+      .command-band {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-rows: auto;
+      }
+
+      .verdict-card:nth-child(n) {
+        grid-column: auto;
+        grid-row: auto;
+        min-height: 108px;
+        padding: 16px;
+        border-right: 1px solid var(--line);
+        border-bottom: 0;
+      }
+
+      .verdict-card:nth-child(3) {
+        border-right: 0;
+      }
+
+      .verdict-card:nth-child(n + 4) {
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 1180px) {
+      .workbench {
+        grid-template-columns: 1fr;
+      }
+
+      #evidence,
+      .workbench > .stack:nth-child(2),
+      #readiness {
+        grid-column: auto;
+        grid-row: auto;
+      }
+
+      #readiness {
+        position: static;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 900px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .main {
+        padding: 0 12px 20px;
+      }
+
+      .topbar {
+        grid-template-columns: 1fr;
+        min-height: auto;
+        margin: 0 -12px 16px;
+        padding: 18px 12px;
+      }
+
+      .command-band,
+      #readiness {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .verdict-card:nth-child(n) {
+        grid-column: auto;
+        grid-row: auto;
+        min-height: 104px;
+      }
+
+      .verdict-card:nth-child(2n) {
+        border-right: 0;
+      }
+
+      .verdict-card:nth-child(3) {
+        border-right: 1px solid var(--line);
+      }
+
+      #evidence {
+        grid-template-columns: 1fr;
+      }
+
+    }
+
+    @media (max-width: 620px) {
+      .main {
+        padding: 0 8px 18px;
+      }
+
+      .topbar {
+        margin: 0 -8px 14px;
+        padding: 16px 8px;
+      }
+
+      .command-band,
+      .reason-band,
+      .matrix-grid,
+      .split,
+      #readiness {
+        grid-template-columns: 1fr;
+      }
+
+      .reason-band .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .reason-band .chip {
+        max-width: 100%;
+        white-space: normal;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        line-height: 1.35;
+      }
+
+      .verdict-card,
+      .verdict-card:first-child,
+      .verdict-card:nth-child(3) {
+        border-right: 0;
+      }
+
+      .verdict-card + .verdict-card {
+        border-top: 1px solid var(--line);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell" id="app">
+    <aside class="sidebar" aria-label="研究分区">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">CO</div>
+        <div class="brand-copy">
+          <strong>Crypto Options</strong>
+          <span>研究控制台</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a class="nav-item active" href="#overview" title="总览">总览</a>
+        <a class="nav-item" href="#evidence" title="证据链">证据链</a>
+        <a class="nav-item" href="#risk" title="风险">风险矩阵</a>
+        <a class="nav-item" href="#candidates" title="候选">候选排序</a>
+        <a class="nav-item" href="#readiness" title="就绪">发布就绪</a>
+      </nav>
+      <div class="sidebar-foot">研究</div>
+    </aside>
+
+    <main class="main">
+      <section class="topbar" id="overview" aria-label="控制台页眉">
+        <div>
+          <p class="eyebrow">工作台 / research_only</p>
+          <h1>Crypto Options 研究控制台</h1>
+          <p class="subtitle">
+            集中查看 BTC short-call 系统的证据链、门禁、就绪状态和禁止交易原因。
+          </p>
+        </div>
+        <div class="top-actions">
+          <div class="report-status" id="source-pill" aria-live="polite">报告快照</div>
+          <button class="icon-button" type="button" id="refresh" title="刷新报告" aria-label="刷新报告">
+            <span class="refresh-glyph" aria-hidden="true">↻</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="command-band" aria-label="系统裁决">
+        <article class="verdict-card">
+          <div class="verdict-label">当前动作 <span class="badge cyan">research</span></div>
+          <div class="verdict-value" id="action">暂无</div>
+          <div class="verdict-meta" id="effective-mode">暂无</div>
+        </article>
+        <article class="verdict-card">
+          <div class="verdict-label">风险状态</div>
+          <div class="verdict-value" id="risk-state">暂无</div>
+          <div class="verdict-meta" id="portfolio-action">暂无</div>
+        </article>
+        <article class="verdict-card">
+          <div class="verdict-label">发布就绪</div>
+          <div class="verdict-value" id="readiness">暂无</div>
+          <div class="verdict-meta" id="paper-state">paper mode 已阻断</div>
+        </article>
+        <article class="verdict-card">
+          <div class="verdict-label">候选数</div>
+          <div class="verdict-value" id="candidate-count">暂无</div>
+          <div class="verdict-meta" id="candidate-meta">暂无</div>
+        </article>
+        <article class="verdict-card">
+          <div class="verdict-label">校准状态</div>
+          <div class="verdict-value" id="calibration">暂无</div>
+          <div class="verdict-meta" id="model-version">暂无</div>
+        </article>
+      </section>
+
+      <section class="reason-band" aria-label="阻断原因列表">
+        <div class="reason-title">阻断原因</div>
+        <div class="reason-content">
+          <p class="reason-copy">系统保持 research_only，仅展示证据、门禁和状态，不生成交易指令。</p>
+          <div class="chip-row" id="reason-codes"></div>
+        </div>
+      </section>
+
+      <section class="workbench" aria-label="报告工作区">
+        <div class="stack" id="evidence">
+          <article class="panel">
+            <header class="panel-header">
+              <div>
+                <h2 class="panel-title">证据链</h2>
+                <span class="panel-kicker" id="generated-at">暂无</span>
+              </div>
+              <span class="badge" id="mode-badge">暂无</span>
+            </header>
+            <div class="panel-body">
+              <div class="timeline" id="evidence-chain"></div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <header class="panel-header">
+              <div>
+                <h2 class="panel-title">Mode Gate 输出门禁</h2>
+                <span class="panel-kicker">按合约阻断的输出</span>
+              </div>
+              <span class="badge red">已阻断</span>
+            </header>
+            <div class="panel-body">
+              <ul class="mode-gate-list" id="mode-gate-list"></ul>
+            </div>
+          </article>
+        </div>
+
+        <div class="stack">
+          <article class="panel" id="risk">
+            <header class="panel-header">
+              <div>
+                <h2 class="panel-title">风险矩阵</h2>
+                <span class="panel-kicker" id="risk-summary">暂无</span>
+              </div>
+              <span class="badge" id="final-action">暂无</span>
+            </header>
+            <div class="panel-body">
+              <div class="matrix-grid">
+                <div class="matrix-cell">
+                  <div class="matrix-label">数据质量</div>
+                  <div class="matrix-value" id="matrix-data">暂无</div>
+                  <div class="matrix-note" id="matrix-data-note">暂无</div>
+                </div>
+                <div class="matrix-cell">
+                  <div class="matrix-label">账户门禁</div>
+                  <div class="matrix-value" id="matrix-account">暂无</div>
+                  <div class="matrix-note" id="matrix-account-note">暂无</div>
+                </div>
+                <div class="matrix-cell">
+                  <div class="matrix-label">卖出权限</div>
+                  <div class="matrix-value" id="sell-permission">暂无</div>
+                  <div class="matrix-note" id="limiting-dimension">暂无</div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <header class="panel-header">
+              <div>
+                <h2 class="panel-title">组合风险信号</h2>
+                <span class="panel-kicker" id="portfolio-summary">暂无</span>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div class="table-wrap risk-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>来源</th>
+                      <th>级别</th>
+                      <th>原因</th>
+                    </tr>
+                  </thead>
+                  <tbody id="risk-signal-rows"></tbody>
+                </table>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel" id="candidates">
+            <header class="panel-header">
+              <div>
+                <h2 class="panel-title">候选排序</h2>
+                <span class="panel-kicker" id="scanner-status">暂无</span>
+              </div>
+              <span class="badge" id="score-status">暂无</span>
+            </header>
+            <div class="panel-body">
+              <div id="candidate-empty" class="empty">当前报告没有排序候选。</div>
+              <div id="candidate-table-wrap" class="table-wrap" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>候选</th>
+                      <th>结构</th>
+                      <th>动作</th>
+                      <th>评分</th>
+                      <th>成本后 EV</th>
+                      <th>Kill conditions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="candidate-rows"></tbody>
+                </table>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <header class="panel-header">
+              <div>
+                <h2 class="panel-title">Backtest 对比</h2>
+                <span class="panel-kicker">按确定性对照版本比较 Calmar</span>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div class="bar-list" id="backtest-bars"></div>
+            </div>
+          </article>
+        </div>
+
+        <div class="stack" id="readiness">
+          <article class="panel">
+            <header class="panel-header">
+              <div>
+                <h2 class="panel-title">发布就绪</h2>
+                <span class="panel-kicker" id="missing-count">暂无</span>
+              </div>
+              <span class="badge" id="readiness-badge">暂无</span>
+            </header>
+            <div class="panel-body">
+              <ul class="readiness-list" id="readiness-list"></ul>
+            </div>
+          </article>
+
+          <article class="panel">
+            <header class="panel-header">
+              <div>
+                <h2 class="panel-title">数据质量</h2>
+                <span class="panel-kicker" id="data-source">暂无</span>
+              </div>
+              <span class="badge" id="quality-badge">暂无</span>
+            </header>
+            <div class="panel-body">
+              <div class="split">
+                <div class="mini-stat">
+                  <div class="num" id="data-validated">暂无</div>
+                  <div class="txt">已验证</div>
+                </div>
+                <div class="mini-stat">
+                  <div class="num" id="data-age">暂无</div>
+                  <div class="txt">快照年龄</div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <header class="panel-header">
+              <div>
+                <h2 class="panel-title">Vol Surface</h2>
+                <span class="panel-kicker" id="surface-model">暂无</span>
+              </div>
+              <span class="badge" id="surface-badge">暂无</span>
+            </header>
+            <div class="panel-body">
+              <div class="split">
+                <div class="mini-stat">
+                  <div class="num" id="expiry-count">暂无</div>
+                  <div class="txt">评估到期</div>
+                </div>
+                <div class="mini-stat">
+                  <div class="num" id="eligible-expiry-count">暂无</div>
+                  <div class="txt">合格到期</div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <div class="footer">
+        <span>报告: <span class="mono">/research/report</span></span>
+        <span>JSON: <span class="mono">/dashboard</span></span>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const app = document.getElementById("app");
+    const els = {};
+    const DISPLAY_LABELS = {
+      "n/a": "暂无",
+      "offline preview": "离线预览",
+      "离线预览": "离线预览",
+      "Unavailable": "不可用",
+      "available": "可用",
+      "missing": "缺失",
+      "blocked": "已阻断",
+      "validated": "已验证",
+      "stale": "已过期",
+      "auth_failed": "认证失败",
+      "pass": "通过",
+      "fail": "失败",
+      "allowed": "允许",
+      "clear": "无阻断",
+      "locked": "已锁定",
+      "calibrated": "已校准",
+      "uncalibrated": "未校准",
+      "review": "待复核",
+      "green": "通过",
+      "red": "阻断",
+      "yellow": "复核",
+      "data_quality": "数据质量",
+      "pnl_evidence": "PnL 证据",
+      "vol_surface": "Vol Surface",
+      "portfolio_risk": "组合风险",
+      "position_management": "仓位管理",
+      "walk_forward_calibration": "Walk-forward 校准",
+      "paper_ledger_reconciliation": "Paper ledger 对账",
+      "manual_approval_runbook": "Manual approval runbook",
+      "margin_light": "margin_light",
+      "permission_cap": "permission_cap",
+      "not_configured": "未配置",
+      "dependency_gate": "依赖门禁",
+      "halt_system": "系统 HALT",
+      "no_new_trades": "禁止新交易",
+      "allow_new": "允许新交易",
+      "reduce_existing": "降低现有风险",
+      "close_all_and_pause": "全部关闭并暂停",
+      "close_batch": "关闭受影响批次",
+      "baseline": "基线",
+      "regime_only": "仅 Regime",
+      "pricing_only": "仅定价",
+      "full_system": "完整系统"
+    };
+    const REASON_LABELS = {
+      "MISSING_VALIDATED_MARKET_DATA": "缺少已验证市场数据",
+      "MISSING_ACCOUNT_API_SNAPSHOT": "缺少账户 API 快照",
+      "MISSING_CALIBRATED_MODEL": "缺少已校准模型",
+      "MISSING_BACKTEST_ALIGNMENT": "缺少 Backtest 对齐",
+      "Account state is missing, stale, auth-failed, or otherwise halted.": "账户状态缺失、过期、认证失败或已进入 HALT。",
+      "Validated market data is missing.": "缺少已验证市场数据。",
+      "Regime or volatility cap sets sell permission to zero.": "Regime 或 volatility cap 将卖出权限降为 0。",
+      "Account margin light is green and projected margin allows new trades.": "账户保证金灯号为 green，预测保证金允许新交易。",
+      "Yellow margin state blocks new positions but permits reductions.": "Yellow 保证金状态阻断新仓，但允许降低风险。",
+      "Red margin state requires existing risk reduction.": "Red 保证金状态要求降低现有风险。",
+      "Market data quality gate is validated.": "市场数据质量门禁已验证。",
+      "Blocked market data quality fails closed for new and existing decisions.": "市场数据质量被阻断，新决策和现有决策均 fail closed。",
+      "Permission cap blocks naked calls but allows defined-risk spreads.": "Permission cap 阻断裸卖 calls，但允许 defined-risk spreads。",
+      "Permission cap allows research-mode candidate evaluation.": "Permission cap 允许 research-mode 候选评估。",
+      "No MDD circuit is active.": "当前没有激活的 MDD circuit。",
+      "MDD circuit breaker is halted.": "MDD circuit breaker 已 HALT。",
+      "MDD circuit requires closing all risk and pausing.": "MDD circuit 要求关闭全部风险并暂停。",
+      "MDD circuit requires closing the affected batch.": "MDD circuit 要求关闭受影响批次。",
+      "MDD circuit is clear.": "MDD circuit 无阻断。",
+      "No blocking event window is active.": "当前没有激活的阻断事件窗口。",
+      "Event risk window is active.": "Event risk window 已激活。",
+      "Liquidity state is normal.": "流动性状态正常。",
+      "Liquidity state limits new risk.": "流动性状态限制新增风险。",
+      "Exchange status is online.": "交易所状态在线。",
+      "Exchange status is not safe for research replay.": "交易所状态不适合 research replay。",
+      "No position-state blocker is active.": "当前没有激活的仓位状态阻断。",
+      "Score calibration is not promoted into sizing, so final actionable size remains zero.": "评分校准尚未提升到 sizing，因此最终可执行仓位保持为 0。"
+    };
+
+    const FALLBACK_REPORT = {
+      generated_at: "离线预览",
+      mode: "research_only",
+      effective_mode: "research_only",
+      action: "RESEARCH_ONLY",
+      risk_state: "HALT",
+      reason_codes: [
+        "MISSING_VALIDATED_MARKET_DATA",
+        "MISSING_ACCOUNT_API_SNAPSHOT",
+        "MISSING_CALIBRATED_MODEL",
+        "MISSING_BACKTEST_ALIGNMENT"
+      ],
+      mode_gate: {
+        trade_recommendation_allowed: false,
+        recommended_size_allowed: false,
+        order_instructions_allowed: false,
+        paper_manual_candidates_allowed: false
+      },
+      data_status: {
+        status: "missing",
+        source: "not_configured",
+        validated: false,
+        reason_code: "MISSING_VALIDATED_MARKET_DATA"
+      },
+      account_status: {
+        status: "missing",
+        margin_light: "HALT",
+        trade_gate: "NO_TRADE",
+        reason_code: "MISSING_ACCOUNT_API_SNAPSHOT"
+      },
+      vol_surface_status: {
+        status: "missing",
+        validated: false,
+        fit_model: "linear_iv_vs_log_moneyness",
+        reason_code: "MISSING_VALIDATED_MARKET_DATA",
+        expiries: [],
+        summary: {
+          expiries_evaluated: 0,
+          eligible_expiries: 0
+        }
+      },
+      permission_state: {
+        status: "blocked",
+        primary_regime_label: "不可用",
+        sell_permission: 0,
+        limiting_cap: 0,
+        limiting_dimension: "dependency_gate"
+      },
+      ev_candidate_scanner: {
+        status: "blocked",
+        score_status: "UNCALIBRATED_RESEARCH_ONLY",
+        ranked_candidates: [],
+        summary: {
+          top_candidate_id: null
+        }
+      },
+      portfolio_risk: {
+        final_action: "halt_system",
+        summary: {
+          signal_count: 3
+        },
+        signals: [
+          {
+            source: "margin_light",
+            severity: "halt_system",
+            reason: "账户状态缺失、过期、认证失败或已进入 HALT。"
+          },
+          {
+            source: "data_quality",
+            severity: "halt_system",
+            reason: "缺少已验证市场数据。"
+          },
+          {
+            source: "permission_cap",
+            severity: "no_new_trades",
+            reason: "Regime 或 volatility cap 将卖出权限降为 0。"
+          }
+        ]
+      },
+      walk_forward_calibration: {
+        score: {
+          status: "calibrated",
+          model_version: "walk_forward_fixture_v1"
+        },
+        system_comparison: [
+          { variant: "baseline", calmar: 0.48 },
+          { variant: "regime_only", calmar: 0.66 },
+          { variant: "pricing_only", calmar: 0.71 },
+          { variant: "full_system", calmar: 0.92 }
+        ]
+      },
+      full_system_surface: {
+        backtest_comparison: [
+          { variant: "baseline", calmar: 0.48 },
+          { variant: "regime_only", calmar: 0.66 },
+          { variant: "pricing_only", calmar: 0.71 },
+          { variant: "full_system", calmar: 0.92 }
+        ],
+        release_readiness: {
+          status: "NO-GO",
+          paper_mode_allowed: false,
+          missing_prerequisites: [
+            "data_quality",
+            "vol_surface",
+            "paper_ledger_reconciliation",
+            "manual_approval_runbook"
+          ],
+          prerequisites: [
+            { name: "data_quality", satisfied: false },
+            { name: "pnl_evidence", satisfied: true },
+            { name: "vol_surface", satisfied: false },
+            { name: "portfolio_risk", satisfied: true },
+            { name: "position_management", satisfied: true },
+            { name: "walk_forward_calibration", satisfied: true },
+            { name: "paper_ledger_reconciliation", satisfied: false },
+            { name: "manual_approval_runbook", satisfied: false }
+          ]
+        }
+      }
+    };
+
+    function el(id) {
+      if (!els[id]) {
+        els[id] = document.getElementById(id);
+      }
+      return els[id];
+    }
+
+    function valueText(value, fallback = "暂无") {
+      if (value === null || value === undefined || value === "") {
+        return fallback;
+      }
+      if (typeof value === "number") {
+        return Number.isInteger(value) ? String(value) : value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+      }
+      return String(value);
+    }
+
+    function displayText(value, fallback = "暂无") {
+      const raw = valueText(value, fallback);
+      return DISPLAY_LABELS[raw] || REASON_LABELS[raw] || raw;
+    }
+
+    function setText(id, value, fallback) {
+      el(id).textContent = displayText(value, fallback);
+    }
+
+    function snapshotLabel(value) {
+      const raw = valueText(value, "");
+      if (!raw || raw === "暂无") {
+        return "报告快照";
+      }
+      if (raw.toLowerCase() === "offline preview" || raw === "离线预览") {
+        return "离线预览";
+      }
+      const date = new Date(raw);
+      if (!Number.isNaN(date.getTime())) {
+        return `更新于 ${new Intl.DateTimeFormat("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit"
+        }).format(date)}`;
+      }
+      return `快照 ${raw}`;
+    }
+
+    function setReportStatus(meta, generated) {
+      const node = el("source-pill");
+      node.className = `report-status ${meta.fallback ? "is-offline" : "is-live"}`;
+      node.textContent = meta.fallback ? "连接失败，显示离线预览" : snapshotLabel(generated);
+      node.title = meta.fallback
+        ? `使用 fallback 数据: ${valueText(meta.error, "API 不可用")}`
+        : `报告路由: ${valueText(meta.source)}/research/report`;
+    }
+
+    function percent(value) {
+      if (typeof value !== "number") {
+        return "暂无";
+      }
+      return `${Math.round(value * 100)}%`;
+    }
+
+    function badgeClass(value) {
+      const normalized = valueText(value).toLowerCase();
+      if (["go", "green", "validated", "available", "pass", "allow_new", "research_only", "calibrated"].includes(normalized)) {
+        return "green";
+      }
+      if (["halt", "red", "blocked", "missing", "no-go", "fail", "no_trade", "halt_system", "locked"].includes(normalized)) {
+        return "red";
+      }
+      if (["yellow", "stale", "uncalibrated", "review", "reduce_existing", "no_new_trades"].includes(normalized)) {
+        return "amber";
+      }
+      return "cyan";
+    }
+
+    function setBadge(id, value) {
+      const node = el(id);
+      node.className = `badge ${badgeClass(value)}`;
+      const text = displayText(value);
+      node.textContent = text;
+      node.title = text;
+    }
+
+    function clear(node) {
+      while (node.firstChild) {
+        node.removeChild(node.firstChild);
+      }
+    }
+
+    function appendCell(row, text, className, raw = false) {
+      const cell = document.createElement("td");
+      if (className) {
+        cell.className = className;
+      }
+      cell.textContent = raw ? valueText(text) : displayText(text);
+      row.appendChild(cell);
+      return cell;
+    }
+
+    function normalizedBaseUrl(value) {
+      const url = new URL(value, window.location.href);
+      return url.href.endsWith("/") ? url.href : `${url.href}/`;
+    }
+
+    function reportBaseUrl() {
+      const current = new URL(window.location.href);
+      const configured = current.searchParams.get("api_base");
+      if (configured) {
+        try {
+          return normalizedBaseUrl(configured);
+        } catch {
+          return window.location.protocol === "file:"
+            ? "http://127.0.0.1:8765/"
+            : `${window.location.origin}/`;
+        }
+      }
+      if (window.location.protocol === "file:") {
+        return "http://127.0.0.1:8765/";
+      }
+      return `${window.location.origin}/`;
+    }
+
+    function loadReportUrl() {
+      const reportUrl = new URL("research/report", reportBaseUrl());
+      const current = new URL(window.location.href);
+      for (const [key, value] of current.searchParams.entries()) {
+        if (key === "api_base") {
+          continue;
+        }
+        reportUrl.searchParams.set(key, value);
+      }
+      if (!reportUrl.searchParams.has("mode")) {
+        reportUrl.searchParams.set("mode", "research_only");
+      }
+      return reportUrl;
+    }
+
+    async function loadReport() {
+      app.classList.add("loading");
+      const url = loadReportUrl();
+      try {
+        const response = await fetch(url, { headers: { "Accept": "application/json" } });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        render(await response.json(), { source: url.origin, fallback: false });
+      } catch (error) {
+        render(FALLBACK_REPORT, {
+          source: "离线预览",
+          fallback: true,
+          error: error.message
+        });
+      } finally {
+        app.classList.remove("loading");
+      }
+    }
+
+    function render(report, meta = {}) {
+      const full = report.full_system_surface || {};
+      const readiness = full.release_readiness || {};
+      const permission = report.permission_state || {};
+      const scanner = report.ev_candidate_scanner || {};
+      const portfolio = report.portfolio_risk || {};
+      const data = report.data_status || {};
+      const account = report.account_status || {};
+      const surface = report.vol_surface_status || {};
+      const calibration = report.walk_forward_calibration || {};
+      const score = calibration.score || {};
+      const generated = valueText(report.generated_at);
+
+      setReportStatus(meta, generated);
+      setText("action", report.action);
+      setText("effective-mode", `mode: ${valueText(report.effective_mode)}`);
+      setText("risk-state", report.risk_state);
+      setText("portfolio-action", portfolio.final_action);
+      setText("readiness", readiness.status);
+      setText("paper-state", readiness.paper_mode_allowed ? "paper mode 允许" : "paper mode 已阻断");
+      setText("candidate-count", (scanner.ranked_candidates || []).length);
+      setText("candidate-meta", scanner.status);
+      setText("calibration", score.status || (report.calibration_status || {}).status);
+      setText("model-version", score.model_version || (report.calibration_status || {}).model_version);
+      setText("generated-at", generated);
+      setText("risk-summary", `${displayText(report.risk_state)} 风险状态，来源 ${displayText(portfolio.final_action)}`);
+      setText("portfolio-summary", `已评估 ${valueText((portfolio.summary || {}).signal_count, 0)} 条信号`);
+      setText("scanner-status", `${displayText(scanner.status)} / ${(scanner.summary || {}).top_candidate_id || "无首选候选"}`);
+      setText("missing-count", `缺失 ${(readiness.missing_prerequisites || []).length} 项前置条件`);
+      setText("data-source", data.source);
+      setText("surface-model", surface.fit_model);
+      setText("matrix-data", data.status);
+      setText("matrix-data-note", data.reason_code || data.source);
+      setText("matrix-account", account.trade_gate);
+      setText("matrix-account-note", `${displayText(account.status)} / ${displayText(account.margin_light)}`);
+      setText("sell-permission", percent(permission.sell_permission));
+      setText("limiting-dimension", permission.limiting_dimension);
+      setText("data-validated", data.validated ? "是" : "否");
+      setText("data-age", data.market_data_age_sec === undefined ? "暂无" : `${valueText(data.market_data_age_sec)} 秒`);
+
+      const surfaceSummary = surface.summary || {};
+      setText("expiry-count", surfaceSummary.expiries_evaluated || (surface.expiries || []).length || 0);
+      setText("eligible-expiry-count", surfaceSummary.eligible_expiries || 0);
+
+      setBadge("mode-badge", report.mode);
+      setBadge("final-action", portfolio.final_action);
+      setBadge("readiness-badge", readiness.status);
+      setBadge("quality-badge", data.status);
+      setBadge("surface-badge", surface.status);
+      setBadge("score-status", scanner.score_status);
+
+      renderReasons(report.reason_codes || []);
+      renderEvidence(report);
+      renderModeGate(report.mode_gate || {});
+      renderCandidates(scanner);
+      renderRiskSignals(portfolio);
+      renderBacktests(full.backtest_comparison || calibration.system_comparison || []);
+      renderReadiness(readiness);
+    }
+
+    function renderReasons(codes) {
+      const list = el("reason-codes");
+      clear(list);
+      const values = codes.length ? codes : ["NO_ACTIVE_REASON_CODES"];
+      values.forEach((code) => {
+        const item = document.createElement("span");
+        item.className = "chip";
+        item.textContent = code;
+        item.title = code;
+        list.appendChild(item);
+      });
+    }
+
+    function renderEvidence(report) {
+      const data = report.data_status || {};
+      const account = report.account_status || {};
+      const surface = report.vol_surface_status || {};
+      const permission = report.permission_state || {};
+      const calibration = report.walk_forward_calibration || {};
+      const portfolio = report.portfolio_risk || {};
+      const chain = [
+        ["市场数据", data.status, data.reason_code || data.source],
+        ["账户与保证金", account.status, account.reason_code || account.trade_gate],
+        ["Vol Surface", surface.status, surface.reason_code || surface.fit_model],
+        ["Regime 权限", permission.status, permission.primary_regime_label],
+        ["校准", (calibration.score || {}).status || "missing", (calibration.score || {}).model_version],
+        ["组合仲裁", portfolio.final_action, (portfolio.final_signal || {}).reason]
+      ];
+      const node = el("evidence-chain");
+      clear(node);
+      chain.forEach(([name, status, detail]) => {
+        const item = document.createElement("div");
+        item.className = "timeline-item";
+        const dot = document.createElement("span");
+        dot.className = `timeline-dot ${badgeClass(status) === "green" ? "ok" : badgeClass(status) === "amber" ? "warn" : ""}`;
+        const body = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "timeline-name";
+        title.textContent = `${name}: ${displayText(status)}`;
+        const sub = document.createElement("div");
+        sub.className = "timeline-detail";
+        sub.textContent = displayText(detail);
+        body.appendChild(title);
+        body.appendChild(sub);
+        item.appendChild(dot);
+        item.appendChild(body);
+        node.appendChild(item);
+      });
+    }
+
+    function renderModeGate(gate) {
+      const items = [
+        ["交易建议", gate.trade_recommendation_allowed],
+        ["推荐仓位", gate.recommended_size_allowed],
+        ["订单指令", gate.order_instructions_allowed],
+        ["Paper/manual 候选", gate.paper_manual_candidates_allowed]
+      ];
+      const list = el("mode-gate-list");
+      clear(list);
+      items.forEach(([name, allowed]) => {
+        const row = document.createElement("li");
+        row.className = "gate-row";
+        const label = document.createElement("span");
+        label.textContent = name;
+        const state = document.createElement("span");
+        state.className = `badge ${allowed ? "green" : "red"}`;
+        state.textContent = allowed ? "允许" : "已阻断";
+        row.appendChild(label);
+        row.appendChild(state);
+        list.appendChild(row);
+      });
+    }
+
+    function renderCandidates(scanner) {
+      const rows = scanner.ranked_candidates || [];
+      const tbody = el("candidate-rows");
+      clear(tbody);
+      el("candidate-empty").hidden = rows.length > 0;
+      el("candidate-table-wrap").hidden = rows.length === 0;
+      rows.slice(0, 8).forEach((candidate) => {
+        const row = document.createElement("tr");
+        appendCell(row, candidate.candidate_id, "mono", true);
+        appendCell(row, candidate.structure_type, "", true);
+        appendCell(row, candidate.action, "", true);
+        appendCell(row, candidate.ranking_score, "", true);
+        appendCell(row, candidate.ev_after_cost_usdc, "", true);
+        appendCell(row, (candidate.kill_conditions || []).join(", ") || "无");
+        tbody.appendChild(row);
+      });
+    }
+
+    function renderRiskSignals(portfolio) {
+      const tbody = el("risk-signal-rows");
+      clear(tbody);
+      (portfolio.signals || []).slice(0, 8).forEach((signal) => {
+        const row = document.createElement("tr");
+        appendCell(row, signal.source, "", true);
+        appendCell(row, signal.severity);
+        appendCell(row, signal.reason);
+        tbody.appendChild(row);
+      });
+    }
+
+    function renderBacktests(items) {
+      const list = el("backtest-bars");
+      clear(list);
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "当前报告没有 Backtest 对比。";
+        list.appendChild(empty);
+        return;
+      }
+      const maxCalmar = Math.max(...items.map((item) => Number(item.calmar) || 0), 1);
+      items.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "bar-row";
+
+        const label = document.createElement("div");
+        label.className = "bar-label";
+        label.textContent = displayText(item.variant);
+
+        const track = document.createElement("div");
+        track.className = "bar-track";
+        const fill = document.createElement("div");
+        fill.className = "bar-fill";
+        fill.style.width = `${Math.max(4, Math.round(((Number(item.calmar) || 0) / maxCalmar) * 100))}%`;
+        track.appendChild(fill);
+
+        const value = document.createElement("div");
+        value.className = "bar-value";
+        value.textContent = `${valueText(item.calmar)} Calmar`;
+
+        row.appendChild(label);
+        row.appendChild(track);
+        row.appendChild(value);
+        list.appendChild(row);
+      });
+    }
+
+    function renderReadiness(readiness) {
+      const list = el("readiness-list");
+      clear(list);
+      (readiness.prerequisites || []).forEach((gate) => {
+        const item = document.createElement("li");
+        item.className = "check-row";
+        const dot = document.createElement("span");
+        dot.className = gate.satisfied ? "dot ok" : "dot";
+        const label = document.createElement("span");
+        label.textContent = displayText(gate.name);
+        const state = document.createElement("span");
+        state.className = `badge ${gate.satisfied ? "green" : "red"}`;
+        state.textContent = gate.satisfied ? "通过" : "缺失";
+        item.appendChild(dot);
+        item.appendChild(label);
+        item.appendChild(state);
+        list.appendChild(item);
+      });
+    }
+
+    document.getElementById("refresh").addEventListener("click", loadReport);
+    loadReport();
+  </script>
+</body>
+</html>
