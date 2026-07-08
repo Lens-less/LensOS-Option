@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
+from pathlib import Path
 from typing import Any
 
 ACCOUNT_MARGIN_GREEN = "GREEN"
@@ -279,6 +281,19 @@ def load_account_scenario(name: str) -> dict[str, Any]:
     return deepcopy(ACCOUNT_SCENARIOS[name])
 
 
+def load_private_replay_fixture(path: str | Path, *, scenario: str) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    scenarios = payload.get("scenarios") or {}
+    if scenario not in scenarios:
+        raise ValueError(f"private replay scenario {scenario!r} not found in {path}")
+    scenario_payload = deepcopy(scenarios[scenario])
+    replay_metadata = dict(payload.get("replay_metadata") or {})
+    replay_metadata.update(scenario_payload.get("replay_metadata") or {})
+    replay_metadata.setdefault("fixture_name", payload.get("fixture_name"))
+    scenario_payload["replay_metadata"] = replay_metadata
+    return scenario_payload
+
+
 def build_account_status(
     *,
     generated_at: str,
@@ -291,6 +306,7 @@ def build_account_status(
     account = dict(account_payload.get("account") or {})
     positions = list(account_payload.get("positions") or [])
     simulation = dict(account_payload.get("simulation") or {})
+    replay_metadata = dict(account_payload.get("replay_metadata") or {})
 
     raw_status = str(account.get("status") or "available")
     source = str(account.get("source") or "deribit_replay")
@@ -319,6 +335,37 @@ def build_account_status(
 
     if raw_status == "missing":
         return _missing_account_status(freshness_limit_ms)
+    if raw_status in {"partial", "malformed", "schema_drift"}:
+        reason_code = {
+            "partial": "PARTIAL_ACCOUNT_REPLAY",
+            "malformed": "MALFORMED_ACCOUNT_REPLAY",
+            "schema_drift": "ACCOUNT_SCHEMA_DRIFT",
+        }[raw_status]
+        return {
+            "status": raw_status,
+            "live_snapshot": False,
+            "source": source,
+            "source_endpoint": source_endpoint,
+            "reason_code": reason_code,
+            "margin_light": ACCOUNT_MARGIN_HALT,
+            "trade_gate": ACCOUNT_GATE_NO_TRADE,
+            "freshness_limit_ms": freshness_limit_ms,
+            "data_age_ms": data_age_ms,
+            "margin_model": margin_model,
+            "snapshot": snapshot if raw_status == "partial" else None,
+            "positions": normalized_positions,
+            "simulation_status": simulation_status,
+            "projected_margin": projected_margin,
+            "private_adapter_contract": _private_adapter_contract(
+                source=source,
+                source_endpoint=source_endpoint,
+                positions=normalized_positions,
+                simulation_status=simulation_status,
+                data_age_ms=data_age_ms,
+                replay_metadata=replay_metadata,
+                failure_class=raw_status,
+            ),
+        }
     if raw_status == "auth_failed":
         return {
             "status": "auth_failed",
@@ -341,6 +388,8 @@ def build_account_status(
                 positions=normalized_positions,
                 simulation_status=simulation_status,
                 data_age_ms=None,
+                replay_metadata=replay_metadata,
+                failure_class="auth_failed",
             ),
         }
 
@@ -366,6 +415,8 @@ def build_account_status(
                 positions=normalized_positions,
                 simulation_status=simulation_status,
                 data_age_ms=data_age_ms,
+                replay_metadata=replay_metadata,
+                failure_class="stale",
             ),
         }
 
@@ -401,6 +452,8 @@ def build_account_status(
             positions=normalized_positions,
             simulation_status=simulation_status,
             data_age_ms=data_age_ms,
+            replay_metadata=replay_metadata,
+            failure_class=None,
         ),
     }
 
@@ -612,6 +665,8 @@ def _missing_account_status(freshness_limit_ms: int) -> dict[str, Any]:
             positions=[],
             simulation_status=simulation_status,
             data_age_ms=None,
+            replay_metadata={},
+            failure_class="missing",
         ),
     }
 
@@ -623,6 +678,8 @@ def _private_adapter_contract(
     positions: list[dict[str, Any]],
     simulation_status: dict[str, Any],
     data_age_ms: int | None,
+    replay_metadata: dict[str, Any] | None = None,
+    failure_class: str | None = None,
 ) -> dict[str, Any]:
     endpoints = [source_endpoint, "private/get_positions"]
     simulation_endpoint = simulation_status.get("source_endpoint")
@@ -638,6 +695,12 @@ def _private_adapter_contract(
         "source_endpoints": endpoints,
         "position_count": len(positions),
         "data_age_ms": data_age_ms,
+        "failure_class": failure_class,
+        "redaction_proof": (replay_metadata or {}).get(
+            "redaction_proof",
+            "no_credentials_or_account_identifiers",
+        ),
+        "replay_fixture_id": (replay_metadata or {}).get("fixture_name"),
         "failure_policy": "force_no_trade_on_missing_auth_stale_partial_or_malformed",
     }
 

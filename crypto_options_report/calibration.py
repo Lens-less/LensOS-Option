@@ -13,6 +13,7 @@ def build_walk_forward_calibration_report(
     baseline_backtest: dict[str, Any] | None = None,
     portfolio_risk: dict[str, Any] | None = None,
     position_management: dict[str, Any] | None = None,
+    promotion_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic no-leakage calibration evidence report."""
 
@@ -22,6 +23,7 @@ def build_walk_forward_calibration_report(
     forced_exit_count = 1
     if position_management:
         forced_exit_count = int((position_management.get("summary") or {}).get("forced_exit_count") or 0)
+    model_registry = _model_registry(promotion_evidence or {})
 
     return {
         "schema_version": WALK_FORWARD_CALIBRATION_SCHEMA_VERSION,
@@ -62,21 +64,7 @@ def build_walk_forward_calibration_report(
             "score": 78.0,
             "decision_bucket": "trade_half_or_spread",
         },
-        "model_registry": {
-            "registry_schema_version": "calibration_model_registry.v1",
-            "model_version": "walk_forward_fixture_v1",
-            "artifact_id": "deterministic_fixture_walk_forward_v1",
-            "training_window": "fixture_24_months",
-            "validation_window": "fixture_3_months",
-            "promotion_status": "research_only_unpromoted",
-            "promoted_for_sizing": False,
-            "requires_external_review": True,
-            "blocking_reasons": [
-                "MISSING_EXTERNAL_PROMOTION_REVIEW",
-                "MISSING_VENDOR_HISTORY_PROVENANCE",
-                "MISSING_PAPER_RECONCILIATION",
-            ],
-        },
+        "model_registry": model_registry,
         "system_comparison": _comparison_rows(
             baseline_mdd=baseline_mdd,
             baseline_cvar=baseline_cvar,
@@ -147,15 +135,77 @@ def validate_walk_forward_calibration_report(report: Any) -> list[str]:
         if check.get("future_data_used") is not False:
             errors.append("walk_forward_calibration leakage checks must be false")
     registry = report.get("model_registry") or {}
-    if registry.get("promoted_for_sizing") is not False:
-        errors.append("walk_forward_calibration model registry must not promote sizing")
     if registry.get("promotion_status") not in {
         "research_only_unpromoted",
         "promoted",
         "rejected",
     }:
         errors.append("walk_forward_calibration model registry promotion_status is invalid")
+    if registry.get("promoted_for_sizing") is True:
+        if registry.get("promotion_status") != "promoted":
+            errors.append("promoted calibration registry must have promotion_status promoted")
+        evidence = registry.get("promotion_evidence") or {}
+        required_evidence = {
+            "validated_historical_data",
+            "validated_path_risk",
+            "out_of_sample_passed",
+            "external_review_approved",
+        }
+        missing = sorted(key for key in required_evidence if evidence.get(key) is not True)
+        if missing:
+            errors.append(
+                "promoted calibration registry missing evidence: " + ",".join(missing)
+            )
+    elif registry.get("promoted_for_sizing") is not False:
+        errors.append("walk_forward_calibration model registry promoted_for_sizing must be bool")
     return errors
+
+
+def _model_registry(promotion_evidence: dict[str, Any]) -> dict[str, Any]:
+    evidence = {
+        "validated_historical_data": promotion_evidence.get("validated_historical_data") is True,
+        "validated_path_risk": promotion_evidence.get("validated_path_risk") is True,
+        "out_of_sample_passed": promotion_evidence.get("out_of_sample_passed") is True,
+        "external_review_approved": promotion_evidence.get("external_review_approved") is True,
+        "paper_reconciliation_observed": promotion_evidence.get("paper_reconciliation_observed") is True,
+    }
+    promoted = all(
+        evidence[key]
+        for key in (
+            "validated_historical_data",
+            "validated_path_risk",
+            "out_of_sample_passed",
+            "external_review_approved",
+        )
+    )
+    blocking_reasons = []
+    if not evidence["validated_historical_data"]:
+        blocking_reasons.append("MISSING_VENDOR_HISTORY_PROVENANCE")
+    if not evidence["validated_path_risk"]:
+        blocking_reasons.append("MISSING_VALIDATED_PATH_RISK")
+    if not evidence["out_of_sample_passed"]:
+        blocking_reasons.append("MISSING_OUT_OF_SAMPLE_EVIDENCE")
+    if not evidence["external_review_approved"]:
+        blocking_reasons.append("MISSING_EXTERNAL_PROMOTION_REVIEW")
+    if not evidence["paper_reconciliation_observed"]:
+        blocking_reasons.append("MISSING_PAPER_RECONCILIATION")
+    return {
+        "registry_schema_version": "calibration_model_registry.v1",
+        "model_version": "walk_forward_fixture_v1",
+        "artifact_id": "deterministic_fixture_walk_forward_v1",
+        "training_window": "fixture_24_months",
+        "validation_window": "fixture_3_months",
+        "leakage_check_status": "pass",
+        "out_of_sample_evidence": {
+            "status": "pass" if evidence["out_of_sample_passed"] else "missing",
+            "source": promotion_evidence.get("out_of_sample_source", "fixture_or_external_review"),
+        },
+        "promotion_status": "promoted" if promoted else "research_only_unpromoted",
+        "promoted_for_sizing": promoted,
+        "requires_external_review": not promoted,
+        "promotion_evidence": evidence,
+        "blocking_reasons": blocking_reasons,
+    }
 
 
 def _comparison_rows(

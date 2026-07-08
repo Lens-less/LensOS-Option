@@ -20,6 +20,10 @@ _EXPORTS = {
         ".path_risk",
         "build_path_risk_report_from_fixture",
     ),
+    "build_path_risk_report_from_historical_report": (
+        ".path_risk",
+        "build_path_risk_report_from_historical_report",
+    ),
     "build_pnl_evidence_report": (".pnl", "build_pnl_evidence_report"),
     "inverse_long_call_settlement_coin": (".pnl", "inverse_long_call_settlement_coin"),
     "build_regime_permission_state": (".regime", "build_regime_permission_state"),
@@ -29,13 +33,16 @@ _EXPORTS = {
     ),
     "build_market_data_status": (".market_data", "build_market_data_status"),
     "fetch_deribit_option_chain_snapshot": (".market_data", "fetch_deribit_option_chain_snapshot"),
+    "load_public_replay_fixture": (".market_data", "load_public_replay_fixture"),
     "load_snapshot_fixture": (".market_data", "load_snapshot_fixture"),
     "normalize_market_snapshot": (".market_data", "normalize_market_snapshot"),
+    "load_private_replay_fixture": (".account_risk", "load_private_replay_fixture"),
 }
 
 _OPTIONAL_EXPORTS = {
     "build_market_data_status",
     "fetch_deribit_option_chain_snapshot",
+    "load_public_replay_fixture",
     "load_snapshot_fixture",
     "normalize_market_snapshot",
 }

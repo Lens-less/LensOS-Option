@@ -1,0 +1,102 @@
+{
+  "fixture_name": "public_deribit_replay_contract_suite",
+  "base_snapshot": "deribit_btc_option_chain_snapshot.json",
+  "scenarios": {
+    "success": {
+      "source": "public_replay:success"
+    },
+    "empty_response": {
+      "source": "public_replay:empty_response",
+      "rows": []
+    },
+    "duplicate_instrument": {
+      "source": "public_replay:duplicate_instrument",
+      "mutations": [
+        {
+          "op": "duplicate_row",
+          "source_index": 0
+        }
+      ]
+    },
+    "partial_ticker": {
+      "source": "public_replay:partial_ticker",
+      "mutations": [
+        {
+          "op": "set",
+          "path": ["rows", 0, "ticker"],
+          "value": null
+        }
+      ]
+    },
+    "rate_limit": {
+      "source": "public_replay:rate_limit",
+      "rows": [],
+      "adapter_events": [
+        {
+          "endpoint": "public/ticker",
+          "class": "rate_limit",
+          "retryable": true,
+          "status_code": 429
+        }
+      ]
+    },
+    "transient_network": {
+      "source": "public_replay:transient_network",
+      "rows": [],
+      "adapter_events": [
+        {
+          "endpoint": "public/get_book_summary_by_currency",
+          "class": "transient_network",
+          "retryable": true
+        }
+      ]
+    },
+    "schema_drift": {
+      "source": "public_replay:schema_drift",
+      "adapter_events": [
+        {
+          "endpoint": "public/ticker",
+          "class": "schema_drift",
+          "retryable": false,
+          "missing_fields": ["best_bid_price", "best_ask_price"]
+        }
+      ],
+      "mutations": [
+        {
+          "op": "delete",
+          "path": ["rows", 0, "ticker", "best_bid_price"]
+        },
+        {
+          "op": "delete",
+          "path": ["rows", 0, "ticker", "best_ask_price"]
+        }
+      ]
+    },
+    "stale_timestamp": {
+      "source": "public_replay:stale_timestamp",
+      "captured_at": "2026-07-06T23:30:00Z"
+    },
+    "stale_vol_index": {
+      "source": "public_replay:stale_vol_index",
+      "feeds": {
+        "vol_index": {
+          "index_name": "BTC DVOL",
+          "currency": "BTC",
+          "timestamp": "2026-07-06T23:30:00Z",
+          "volatility": 0.64
+        }
+      }
+    },
+    "misaligned_vol_index": {
+      "source": "public_replay:misaligned_vol_index",
+      "feeds": {
+        "vol_index": {
+          "index_name": "ETH DVOL",
+          "currency": "ETH",
+          "timestamp": "2026-07-07T00:00:45Z",
+          "volatility": 0.82
+        }
+      }
+    }
+  }
+}

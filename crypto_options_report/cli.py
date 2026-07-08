@@ -19,7 +19,11 @@ from .market_data import (
     fetch_deribit_option_chain_snapshot,
     load_snapshot_fixture,
 )
-from .path_risk import build_path_risk_report_from_fixture
+from .historical import build_historical_reconciliation_report, load_historical_fixture
+from .path_risk import (
+    build_path_risk_report_from_fixture,
+    build_path_risk_report_from_historical_report,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -97,10 +101,18 @@ def build_parser() -> argparse.ArgumentParser:
         "path-risk",
         help="run the ISSUE-009 path-risk distribution tracer",
     )
-    path_risk.add_argument(
+    path_source = path_risk.add_mutually_exclusive_group(required=True)
+    path_source.add_argument(
         "--fixture",
-        required=True,
         help="path to a path-risk fixture JSON file",
+    )
+    path_source.add_argument(
+        "--historical-fixture",
+        help="path to a historical vendor fixture JSON file",
+    )
+    path_risk.add_argument(
+        "--historical-scenario",
+        help="scenario name when the historical fixture file contains scenarios",
     )
     path_risk.add_argument(
         "--generated-at",
@@ -182,10 +194,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "path-risk":
-        report = build_path_risk_report_from_fixture(
-            args.fixture,
-            generated_at=args.generated_at,
-        )
+        if args.fixture:
+            report = build_path_risk_report_from_fixture(
+                args.fixture,
+                generated_at=args.generated_at,
+            )
+        else:
+            historical_payload = load_historical_fixture(
+                args.historical_fixture,
+                scenario=args.historical_scenario,
+            )
+            historical_report = build_historical_reconciliation_report(
+                historical_payload.get("rows", []),
+                generated_at=args.generated_at,
+            )
+            report = build_path_risk_report_from_historical_report(
+                historical_report,
+                historical_payload["path_risk_candidate"],
+                generated_at=args.generated_at,
+            )
         json.dump(
             report,
             sys.stdout,

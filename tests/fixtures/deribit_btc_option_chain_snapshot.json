@@ -2,6 +2,14 @@
   "captured_at": "2026-07-07T00:01:00Z",
   "currency": "BTC",
   "source": "fixture:deribit-btc-option-chain",
+  "feeds": {
+    "vol_index": {
+      "index_name": "BTC DVOL",
+      "currency": "BTC",
+      "timestamp": "2026-07-07T00:00:45Z",
+      "volatility": 0.64
+    }
+  },
   "rows": [
     {
       "instrument_name": "BTC-25JUL26-90000-C",

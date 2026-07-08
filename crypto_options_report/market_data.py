@@ -25,7 +25,7 @@ PUBLIC_FEED_CONTRACTS = {
     "option_chain": "required",
     "ticker": "required",
     "order_book": "not_implemented",
-    "vol_index": "not_implemented",
+    "vol_index": "required",
     "funding_basis": "not_implemented",
     "index_spot": "not_implemented",
     "events": "not_implemented",
@@ -105,6 +105,47 @@ def load_snapshot_fixture(path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def load_public_replay_fixture(
+    path: str | Path,
+    *,
+    scenario: str,
+) -> dict[str, Any]:
+    fixture_path = Path(path)
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    scenarios = payload.get("scenarios") or {}
+    if scenario not in scenarios:
+        raise ValueError(f"public replay scenario {scenario!r} not found in {fixture_path}")
+
+    scenario_payload = scenarios[scenario]
+    if "snapshot" in scenario_payload:
+        snapshot = json.loads(json.dumps(scenario_payload["snapshot"]))
+    else:
+        base_path = Path(payload["base_snapshot"])
+        if not base_path.is_absolute():
+            base_path = fixture_path.parent / base_path
+        snapshot = load_snapshot_fixture(base_path)
+
+    if "rows" in scenario_payload:
+        snapshot["rows"] = json.loads(json.dumps(scenario_payload["rows"]))
+    if "captured_at" in scenario_payload:
+        snapshot["captured_at"] = scenario_payload["captured_at"]
+    if "fetch_errors" in scenario_payload:
+        snapshot["fetch_errors"] = list(scenario_payload["fetch_errors"])
+    if "adapter_events" in scenario_payload:
+        snapshot["adapter_events"] = list(scenario_payload["adapter_events"])
+    if "feeds" in scenario_payload:
+        snapshot["feeds"] = json.loads(json.dumps(scenario_payload["feeds"]))
+    if "source" in scenario_payload:
+        snapshot["source"] = scenario_payload["source"]
+
+    for mutation in scenario_payload.get("mutations", []):
+        _apply_public_replay_mutation(snapshot, mutation)
+
+    snapshot.setdefault("source", f"public_replay:{scenario}")
+    snapshot["replay_scenario"] = scenario
+    return snapshot
+
+
 def fetch_deribit_option_chain_snapshot(
     *,
     currency: str = "BTC",
@@ -169,6 +210,8 @@ def build_market_data_status(
 ) -> dict[str, Any]:
     normalized = normalize_market_snapshot(snapshot, now_ms=now_ms, limits=limits)
     gate = evaluate_market_data_quality(normalized, limits=limits)
+    response_contract = _public_response_contract(normalized)
+    feed_coverage = _feed_coverage(normalized)
     return {
         "status": "validated" if gate["passed"] else "blocked",
         "validated": gate["passed"],
@@ -177,8 +220,8 @@ def build_market_data_status(
         "snapshot_captured_at": normalized["captured_at"],
         "market_data_age_sec": normalized["snapshot_age_sec"],
         "quality_gate": gate,
-        "public_response_contract": _public_response_contract(normalized),
-        "feed_coverage": _feed_coverage(normalized),
+        "public_response_contract": response_contract,
+        "feed_coverage": feed_coverage,
     }
 
 
@@ -208,6 +251,9 @@ def normalize_market_snapshot(
         "currency": snapshot.get("currency", "BTC"),
         "quotes": quotes,
         "fetch_errors": list(snapshot.get("fetch_errors", [])),
+        "adapter_events": list(snapshot.get("adapter_events", [])),
+        "feeds": dict(snapshot.get("feeds") or {}),
+        "replay_scenario": snapshot.get("replay_scenario"),
     }
 
 
@@ -229,6 +275,19 @@ def evaluate_market_data_quality(
     overall_reason_codes: list[str] = []
     if normalized_snapshot["snapshot_age_sec"] > normalized_limits["market_data_max_age_sec"]:
         overall_reason_codes.append("MARKET_DATA_AGE_EXCEEDED")
+    response_contract = _public_response_contract(normalized_snapshot)
+    if not quotes:
+        overall_reason_codes.append("EMPTY_PUBLIC_RESPONSE")
+    for event in normalized_snapshot.get("adapter_events", []):
+        event_class = str(event.get("class") or "")
+        if event_class == "rate_limit":
+            overall_reason_codes.append("PUBLIC_RATE_LIMIT_RETRYABLE")
+        elif event_class == "transient_network":
+            overall_reason_codes.append("PUBLIC_NETWORK_RETRYABLE")
+        elif event_class == "schema_drift":
+            overall_reason_codes.append("PUBLIC_SCHEMA_DRIFT_MALFORMED")
+    if response_contract["response_classes"]["schema_drift"]:
+        overall_reason_codes.append("PUBLIC_SCHEMA_DRIFT_MALFORMED")
 
     for expiry_date in sorted(quotes_by_expiry):
         expiry_quotes = quotes_by_expiry[expiry_date]
@@ -403,8 +462,38 @@ def _public_response_contract(normalized_snapshot: dict[str, Any]) -> dict[str, 
         (quote["expiry_date"], quote["strike"], quote["option_type"]) for quote in quotes
     )
     malformed_quotes = sum(quote["quality_status"] != "valid" for quote in quotes)
+    event_classes = {
+        str(event.get("class") or "")
+        for event in normalized_snapshot.get("adapter_events", [])
+    }
+    vol_index_status = _vol_index_status(normalized_snapshot)
+    response_classes = {
+        "empty": len(quotes) == 0,
+        "partial": bool(ticker_missing or normalized_snapshot.get("fetch_errors")),
+        "duplicate": bool(duplicate_instruments or duplicate_strikes),
+        "malformed": bool(malformed_quotes),
+        "stale": normalized_snapshot["snapshot_age_sec"]
+        > DEFAULT_QUALITY_LIMITS["market_data_max_age_sec"],
+        "rate_limited": "rate_limit" in event_classes,
+        "transient_network": "transient_network" in event_classes,
+        "schema_drift": "schema_drift" in event_classes,
+    }
+    if response_classes["rate_limited"] or response_classes["transient_network"]:
+        overall_status = "retryable"
+    elif response_classes["schema_drift"] or (
+        response_classes["malformed"] and not response_classes["partial"]
+    ):
+        overall_status = "malformed"
+    elif response_classes["stale"]:
+        overall_status = "stale"
+    elif response_classes["empty"] or response_classes["duplicate"] or response_classes["partial"]:
+        overall_status = "blocked"
+    else:
+        overall_status = "pass"
     return {
         "source": normalized_snapshot["source"],
+        "replay_scenario": normalized_snapshot.get("replay_scenario"),
+        "overall_status": overall_status,
         "credential_required": False,
         "network_required_for_tests": False,
         "endpoints": {
@@ -416,18 +505,13 @@ def _public_response_contract(normalized_snapshot: dict[str, Any]) -> dict[str, 
                 "status": "available" if ticker_missing == 0 else "partial",
                 "missing_rows": ticker_missing,
             },
+            "vol_index": vol_index_status,
         },
-        "response_classes": {
-            "empty": len(quotes) == 0,
-            "partial": bool(ticker_missing or normalized_snapshot.get("fetch_errors")),
-            "duplicate": bool(duplicate_instruments or duplicate_strikes),
-            "malformed": bool(malformed_quotes),
-            "stale": normalized_snapshot["snapshot_age_sec"]
-            > DEFAULT_QUALITY_LIMITS["market_data_max_age_sec"],
-        },
+        "response_classes": response_classes,
         "duplicate_instruments": duplicate_instruments,
         "duplicate_strikes": duplicate_strikes,
         "fetch_errors": list(normalized_snapshot.get("fetch_errors", [])),
+        "adapter_events": list(normalized_snapshot.get("adapter_events", [])),
     }
 
 
@@ -440,6 +524,8 @@ def _feed_coverage(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
             status = "available" if normalized_snapshot["quotes"] else "missing"
         elif name == "ticker":
             status = ticker_status
+        elif name == "vol_index":
+            status = response_contract["endpoints"]["vol_index"]["status"]
         else:
             status = "missing"
         feeds[name] = {
@@ -461,7 +547,86 @@ def _feed_coverage(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
                 and item["status"] != "available"
             )
         ],
+        "missing_required_feeds": [
+            name
+            for name, item in feeds.items()
+            if item["requirement"] == "required" and item["status"] != "available"
+        ],
+        "remaining_out_of_scope_feeds": [
+            name
+            for name, item in feeds.items()
+            if item["requirement"] == "not_implemented"
+        ],
         "readiness_contribution": "research_only_partial_public_graph",
+    }
+
+
+def _vol_index_status(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
+    payload = (
+        (normalized_snapshot.get("feeds") or {}).get("vol_index")
+        or normalized_snapshot.get("vol_index")
+        or {}
+    )
+    if not payload:
+        return {
+            "status": "missing",
+            "required_fields": ["index_name", "currency", "timestamp", "volatility"],
+            "reason_code": "VOL_INDEX_MISSING",
+        }
+
+    required_fields = ["index_name", "currency", "timestamp", "volatility"]
+    missing_fields = [field for field in required_fields if payload.get(field) in (None, "")]
+    if missing_fields:
+        return {
+            "status": "malformed",
+            "required_fields": required_fields,
+            "missing_fields": missing_fields,
+            "reason_code": "VOL_INDEX_MALFORMED",
+        }
+
+    currency = str(payload.get("currency")).upper()
+    if currency != str(normalized_snapshot.get("currency", "BTC")).upper():
+        return {
+            "status": "misaligned",
+            "required_fields": required_fields,
+            "reason_code": "VOL_INDEX_CURRENCY_MISALIGNED",
+            "currency": currency,
+        }
+
+    try:
+        timestamp_ms = parse_timestamp_ms(payload.get("timestamp"))
+    except (TypeError, ValueError):
+        return {
+            "status": "malformed",
+            "required_fields": required_fields,
+            "reason_code": "VOL_INDEX_TIMESTAMP_MALFORMED",
+        }
+
+    age_sec = round(
+        max(0, normalized_snapshot["captured_at_ms"] - timestamp_ms) / 1000,
+        3,
+    )
+    volatility = _to_number(payload.get("volatility"))
+    if volatility is None or volatility <= 0:
+        return {
+            "status": "malformed",
+            "required_fields": required_fields,
+            "reason_code": "VOL_INDEX_VALUE_MALFORMED",
+        }
+    if age_sec > DEFAULT_QUALITY_LIMITS["market_data_max_age_sec"]:
+        return {
+            "status": "stale",
+            "required_fields": required_fields,
+            "age_sec": age_sec,
+            "reason_code": "VOL_INDEX_STALE",
+        }
+    return {
+        "status": "available",
+        "required_fields": required_fields,
+        "age_sec": age_sec,
+        "index_name": str(payload.get("index_name")),
+        "currency": currency,
+        "volatility": volatility,
     }
 
 
@@ -611,6 +776,44 @@ def _duplicate_count(values: Iterable[Any]) -> int:
             duplicates.add(value)
         seen.add(value)
     return len(duplicates)
+
+
+def _apply_public_replay_mutation(snapshot: dict[str, Any], mutation: dict[str, Any]) -> None:
+    op = mutation.get("op")
+    if op == "duplicate_row":
+        rows = snapshot.setdefault("rows", [])
+        source_index = int(mutation.get("source_index", 0))
+        rows.append(json.loads(json.dumps(rows[source_index])))
+        return
+    if op == "set":
+        _set_nested(snapshot, list(mutation["path"]), mutation.get("value"))
+        return
+    if op == "delete":
+        _delete_nested(snapshot, list(mutation["path"]))
+        return
+    raise ValueError(f"unsupported public replay mutation op {op!r}")
+
+
+def _set_nested(payload: dict[str, Any] | list[Any], path: list[Any], value: Any) -> None:
+    target: Any = payload
+    for key in path[:-1]:
+        target = target[int(key)] if isinstance(target, list) else target[key]
+    last = path[-1]
+    if isinstance(target, list):
+        target[int(last)] = value
+    else:
+        target[last] = value
+
+
+def _delete_nested(payload: dict[str, Any] | list[Any], path: list[Any]) -> None:
+    target: Any = payload
+    for key in path[:-1]:
+        target = target[int(key)] if isinstance(target, list) else target[key]
+    last = path[-1]
+    if isinstance(target, list):
+        del target[int(last)]
+    else:
+        target.pop(last, None)
 
 
 def _to_number(value: Any) -> float | None:

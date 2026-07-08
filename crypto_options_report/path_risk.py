@@ -67,6 +67,80 @@ def build_path_risk_report_from_fixture(
     )
 
 
+def build_path_risk_report_from_historical_report(
+    historical_report: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    generated_at: str | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build path-risk evidence from eligible historical rows, never placeholders."""
+
+    candidate_spec = _candidate_spec(candidate)
+    eligible_quotes = list(
+        (historical_report.get("canonical_data") or {}).get("eligible_quotes") or []
+    )
+    eligibility = historical_report.get("aggregate_eligibility") or historical_report.get("eligibility") or {}
+    if eligibility.get("decision") != "ELIGIBLE":
+        return _blocked_historical_path_report(
+            candidate=candidate_spec,
+            historical_report=historical_report,
+            generated_at=generated_at,
+            reason_codes=["HISTORICAL_RECONCILIATION_NOT_ELIGIBLE"],
+        )
+
+    paths = _historical_paths_from_quotes(
+        eligible_quotes,
+        candidate=candidate_spec,
+    )
+    if len(paths) < 2:
+        return _blocked_historical_path_report(
+            candidate=candidate_spec,
+            historical_report=historical_report,
+            generated_at=generated_at,
+            reason_codes=["INSUFFICIENT_VALIDATED_HISTORICAL_PATHS"],
+        )
+
+    all_returns = [
+        value
+        for path in paths
+        for value in path["returns"]
+    ]
+    payload = {
+        "source": "validated_historical_reconciliation",
+        "input_evidence": {
+            "status": "validated_historical",
+            "placeholder_data": False,
+            "readiness_contribution": "validated_historical_path_risk",
+            "historical_report_schema_version": historical_report.get("schema_version"),
+            "historical_eligibility_decision": eligibility.get("decision"),
+            "eligible_quote_count": len(eligible_quotes),
+            "eligible_path_count": len(paths),
+            "stress_window_coverage": "deterministic_shock_overlay",
+            "sample_coverage": {
+                "eligible_quotes": len(eligible_quotes),
+                "eligible_paths": len(paths),
+                "horizon_days": candidate_spec.horizon_days,
+            },
+        },
+        "candidate": candidate,
+        "historical_paths": paths,
+        "fallback_pool": [],
+        "bootstrap_source_returns": all_returns,
+        "bootstrap_block_length": min(2, max(1, len(all_returns))),
+        "bootstrap_path_count": min(3, max(1, len(paths))),
+        "bootstrap_source_realized_vol": _realized_vol(all_returns),
+        "random_seed": 17,
+        "stress_mixture_min_weight": 0.10,
+        "stress_scenarios": _default_stress_scenarios(candidate_spec),
+    }
+    return build_path_risk_distribution_report(
+        payload,
+        generated_at=generated_at,
+        config=config,
+    )
+
+
 def build_path_risk_distribution_report(
     payload: dict[str, Any],
     *,
@@ -189,11 +263,16 @@ def build_path_risk_distribution_report(
         ),
     }
 
+    evidence_override = dict(payload.get("input_evidence") or {})
+    evidence_status = str(evidence_override.get("status") or "research_only_fixture")
+    placeholder_data = bool(
+        evidence_override.get("placeholder_data", evidence_status != "validated_historical")
+    )
     return {
         "schema_version": PATH_RISK_REPORT_SCHEMA_VERSION,
         "generated_at": report_generated_at,
         "input_evidence": {
-            "status": "research_only_fixture",
+            "status": evidence_status,
             "source": str(payload.get("source", "path_risk_fixture")),
             "eligible_path_count": len(applied_paths),
             "historical_path_count": len(base_paths),
@@ -201,8 +280,16 @@ def build_path_risk_distribution_report(
             "stress_scenario_count": len(stress_report["paths"]),
             "bootstrap_path_count": len(bootstrap_report["paths"]),
             "no_lookahead_declared": True,
-            "placeholder_data": True,
-            "readiness_contribution": "placeholder_research_only",
+            "placeholder_data": placeholder_data,
+            "readiness_contribution": evidence_override.get(
+                "readiness_contribution",
+                "placeholder_research_only",
+            ),
+            **{
+                key: value
+                for key, value in evidence_override.items()
+                if key not in {"status", "placeholder_data", "readiness_contribution"}
+            },
         },
         "candidate": {
             "instrument_name": candidate.instrument_name,
@@ -298,6 +385,155 @@ def _candidate_spec(payload: dict[str, Any]) -> CandidateSpec:
         regime_scores=dict(payload["regime_scores"]),
         feature_vector={key: float(value) for key, value in payload["feature_vector"].items()},
     )
+
+
+def _blocked_historical_path_report(
+    *,
+    candidate: CandidateSpec,
+    historical_report: dict[str, Any],
+    generated_at: str | None,
+    reason_codes: list[str],
+) -> dict[str, Any]:
+    return {
+        "schema_version": PATH_RISK_REPORT_SCHEMA_VERSION,
+        "generated_at": generated_at or utc_timestamp(),
+        "input_evidence": {
+            "status": "blocked",
+            "source": "validated_historical_reconciliation",
+            "placeholder_data": False,
+            "readiness_contribution": "blocked_insufficient_historical_path_risk",
+            "no_lookahead_declared": True,
+            "eligible_path_count": 0,
+            "historical_path_count": 0,
+            "fallback_path_count": 0,
+            "stress_scenario_count": 0,
+            "bootstrap_path_count": 0,
+            "historical_report_schema_version": historical_report.get("schema_version"),
+            "historical_eligibility_decision": (
+                (historical_report.get("aggregate_eligibility") or historical_report.get("eligibility") or {}).get("decision")
+            ),
+            "reason_codes": reason_codes,
+        },
+        "candidate": {
+            "instrument_name": candidate.instrument_name,
+            "structure": candidate.structure,
+            "current_spot": candidate.current_spot,
+            "strike": candidate.strike,
+            "long_strike": candidate.long_strike,
+            "horizon_days": candidate.horizon_days,
+        },
+        "historical_path_records": [],
+        "path_sampling": {
+            "method": "validated_historical_rows",
+            "similarity_weighted": {
+                "fallback_triggered": False,
+                "restrictions": {
+                    "naked_short_allowed": False,
+                    "spread_only_required": True,
+                    "confidence_penalty_applied": True,
+                    "reason_codes": reason_codes,
+                },
+            },
+        },
+        "stress_mixture": {
+            "configured_min_weight": 0.0,
+            "applied_weight": 0.0,
+            "group_weights": {"historical": 0.0, "bootstrap": 0.0, "stress": 0.0},
+            "scenarios": [],
+        },
+        "distributions": {
+            "p_touch": 0.0,
+            "p_itm": 0.0,
+            "adverse_excursion": {"mean": 0.0, "p95": 0.0, "max": 0.0},
+            "delta_cross_probability": 0.0,
+            "expected_payoff_usdc": 0.0,
+            "expected_loss_usdc": 0.0,
+            "cvar_95_usdc": 0.0,
+            "cvar_99_usdc": 0.0,
+            "stress_loss_usdc": 0.0,
+            "stress_loss_nav_pct": 0.0,
+        },
+        "diagnostics": {
+            "terminal_only_touch_proxy": 0.0,
+            "historical_touch_probability_before_bootstrap": 0.0,
+            "path_maximum_touch": True,
+        },
+        "report_flags": {
+            "path_maximum_touch": True,
+            "sparse_regime_confidence_penalty": True,
+            "naked_short_allowed": False,
+            "spread_only_required": True,
+        },
+    }
+
+
+def _historical_paths_from_quotes(
+    quotes: list[dict[str, Any]],
+    *,
+    candidate: CandidateSpec,
+) -> list[dict[str, Any]]:
+    sorted_quotes = sorted(quotes, key=lambda item: str(item.get("ts") or ""))
+    prices = [float(item["underlying_price"]) for item in sorted_quotes]
+    timestamps = [str(item.get("ts")) for item in sorted_quotes]
+    paths = []
+    for start in range(0, len(prices) - candidate.horizon_days):
+        window = prices[start : start + candidate.horizon_days + 1]
+        returns = [
+            round((right / left) - 1.0, 8)
+            for left, right in zip(window[:-1], window[1:], strict=True)
+            if left > 0
+        ]
+        if len(returns) != candidate.horizon_days:
+            continue
+        paths.append(
+            {
+                "path_id": f"validated-history-{start + 1}",
+                "start_time": timestamps[start],
+                "horizon_days": candidate.horizon_days,
+                "source_realized_vol": _realized_vol(returns),
+                "regime_scores": dict(candidate.regime_scores),
+                "feature_vector": {
+                    **candidate.feature_vector,
+                    "trend_7d": round((window[-1] / window[0]) - 1.0, 8),
+                },
+                "returns": returns,
+            }
+        )
+    return paths
+
+
+def _realized_vol(returns: list[float]) -> float:
+    if not returns:
+        return 0.01
+    mean = sum(returns) / len(returns)
+    variance = sum((value - mean) ** 2 for value in returns) / max(len(returns), 1)
+    return round(max(math.sqrt(variance) * math.sqrt(365), 0.01), 8)
+
+
+def _default_stress_scenarios(candidate: CandidateSpec) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "validated-history-spot-up-10-iv-jump",
+            "path_returns": [0.10] + [0.0] * max(candidate.horizon_days - 1, 0),
+            "iv_jump": 0.15,
+            "liquidity_exit_cost_usdc": 120.0,
+            "weight": 0.03,
+        },
+        {
+            "name": "validated-history-spot-up-20-iv-jump",
+            "path_returns": [0.12, 0.08] + [0.0] * max(candidate.horizon_days - 2, 0),
+            "iv_jump": 0.25,
+            "liquidity_exit_cost_usdc": 250.0,
+            "weight": 0.01,
+        },
+        {
+            "name": "validated-history-liquidity-gap",
+            "path_returns": [0.05, 0.03] + [0.0] * max(candidate.horizon_days - 2, 0),
+            "iv_jump": 0.10,
+            "liquidity_exit_cost_usdc": 400.0,
+            "weight": 0.01,
+        },
+    ]
 
 
 def _prepare_path_record(

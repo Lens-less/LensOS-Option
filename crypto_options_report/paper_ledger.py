@@ -164,6 +164,7 @@ def _proposal_from_candidate(candidate: dict[str, Any], *, index: int) -> dict[s
         "estimated_fees_usdc": round(fees, 6),
         "estimated_slippage_usdc": round(slippage, 6),
         "state": "proposed",
+        "proposed_at": None,
     }
 
 
@@ -196,6 +197,15 @@ def _ledger_entries(
             {
                 "proposal_id": proposal["proposal_id"],
                 "state": state,
+                "manual_review_state": str(decision.get("manual_review_state") or state),
+                "proposed_at": decision.get("proposed_at"),
+                "reviewed_at": decision.get("reviewed_at"),
+                "observed_at": decision.get("observed_at"),
+                "terminal_outcome": (
+                    state
+                    if state in {"rejected", "expired", "paper_filled"}
+                    else "pending"
+                ),
                 "expected_fill_usdc": expected_fill,
                 "proposed_credit_usdc": expected_fill,
                 "simulated_fill_usdc": round(simulated_fill, 6),
@@ -234,6 +244,7 @@ def _reconciliation_contract(
     return {
         "schema_version": "paper_reconciliation_contract.v1",
         "window": "30_to_60_days_required",
+        "runbook": build_paper_reconciliation_runbook(),
         "status": (
             "blocked"
             if blocked
@@ -251,6 +262,27 @@ def _reconciliation_contract(
             "latency",
             "rejected_or_expired_actions",
         ],
+    }
+
+
+def build_paper_reconciliation_runbook() -> dict[str, Any]:
+    return {
+        "schema_version": "paper_reconciliation_runbook.v1",
+        "window_days": {"minimum": 30, "target": 60},
+        "cadence": "daily_append_weekly_review",
+        "required_observations": [
+            "proposal",
+            "manual_review_state",
+            "simulated_fill",
+            "observed_fill_when_available",
+            "fees",
+            "slippage",
+            "latency",
+            "reject_or_expiry_reason",
+            "terminal_outcome",
+        ],
+        "unlock_policy": "paper_manual_remains_blocked_until_external_definition_of_done_is_recorded",
+        "automatic_live_submission_possible": False,
     }
 
 

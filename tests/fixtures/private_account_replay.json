@@ -1,0 +1,178 @@
+{
+  "fixture_name": "private_account_replay_suite_v1",
+  "replay_metadata": {
+    "source": "sanitized_deribit_private_replay",
+    "redaction_proof": "fixture_contains_no_api_keys_secrets_account_ids_or_raw_user_identifiers",
+    "captured_shape_only": true
+  },
+  "scenarios": {
+    "balance_margin_positions": {
+      "account": {
+        "status": "available",
+        "source": "deribit_replay",
+        "source_endpoint": "private/get_account_summary",
+        "observed_at": "2026-07-07T09:50:30Z",
+        "data_age_ms": 30000,
+        "currency": "USD",
+        "equity": 5000.0,
+        "balance": 4800.0,
+        "margin_balance": 5000.0,
+        "available_funds": 3600.0,
+        "initial_margin": 1200.0,
+        "maintenance_margin": 700.0,
+        "margin_model": "portfolio_margin"
+      },
+      "positions": [
+        {
+          "instrument_name": "BTC-14JUL26-90000-C",
+          "direction": "short",
+          "size": -1.0,
+          "mark_price": 0.031,
+          "index_price": 88250.0,
+          "floating_pnl": -120.0,
+          "initial_margin": 500.0,
+          "maintenance_margin": 280.0,
+          "delta": 0.11,
+          "gamma": 0.003,
+          "theta": 7.2,
+          "vega": 25.5,
+          "source_endpoint": "private/get_positions"
+        }
+      ],
+      "simulation": {
+        "status": "available",
+        "attempted": true,
+        "source_endpoint": "private/simulate_portfolio",
+        "projected_initial_margin": 1400.0,
+        "projected_maintenance_margin": 820.0,
+        "projected_nav_usd": 5000.0,
+        "projected_im_nav": 0.28,
+        "projected_nav_to_mm": 6.10,
+        "delta_initial_margin": 200.0,
+        "delta_maintenance_margin": 120.0
+      }
+    },
+    "stale_auth": {
+      "account": {
+        "status": "auth_failed",
+        "source": "deribit_replay",
+        "source_endpoint": "private/get_account_summary",
+        "reason_code": "AUTH_FAILED_ACCOUNT_API",
+        "margin_model": "portfolio_margin"
+      },
+      "positions": [],
+      "simulation": {
+        "status": "auth_failed",
+        "attempted": true,
+        "source_endpoint": "private/simulate_portfolio",
+        "reason_code": "AUTH_FAILED_SIMULATION_API"
+      }
+    },
+    "stale_data": {
+      "account": {
+        "status": "available",
+        "source": "deribit_replay",
+        "source_endpoint": "private/get_account_summary",
+        "observed_at": "2026-07-07T09:40:00Z",
+        "data_age_ms": 300000,
+        "currency": "USD",
+        "equity": 5000.0,
+        "balance": 4800.0,
+        "margin_balance": 5000.0,
+        "available_funds": 3600.0,
+        "initial_margin": 1200.0,
+        "maintenance_margin": 700.0,
+        "margin_model": "portfolio_margin"
+      },
+      "positions": [],
+      "simulation": {
+        "status": "available",
+        "attempted": true,
+        "source_endpoint": "private/simulate_portfolio",
+        "projected_initial_margin": 1400.0,
+        "projected_maintenance_margin": 820.0,
+        "projected_nav_usd": 5000.0,
+        "projected_im_nav": 0.28,
+        "projected_nav_to_mm": 6.10,
+        "delta_initial_margin": 200.0,
+        "delta_maintenance_margin": 120.0
+      }
+    },
+    "partial_positions": {
+      "account": {
+        "status": "partial",
+        "source": "deribit_replay",
+        "source_endpoint": "private/get_account_summary",
+        "observed_at": "2026-07-07T09:50:30Z",
+        "data_age_ms": 30000,
+        "currency": "USD",
+        "equity": 5000.0,
+        "balance": 4800.0,
+        "margin_balance": 5000.0,
+        "available_funds": 3600.0,
+        "initial_margin": 1200.0,
+        "maintenance_margin": 700.0,
+        "margin_model": "portfolio_margin"
+      },
+      "positions": [],
+      "simulation": {
+        "status": "available",
+        "attempted": true,
+        "source_endpoint": "private/simulate_portfolio",
+        "projected_initial_margin": 1400.0,
+        "projected_maintenance_margin": 820.0,
+        "projected_nav_usd": 5000.0,
+        "projected_im_nav": 0.28,
+        "projected_nav_to_mm": 6.10,
+        "delta_initial_margin": 200.0,
+        "delta_maintenance_margin": 120.0
+      }
+    },
+    "schema_drift": {
+      "account": {
+        "status": "schema_drift",
+        "source": "deribit_replay",
+        "source_endpoint": "private/get_account_summary",
+        "observed_at": "2026-07-07T09:50:30Z",
+        "data_age_ms": 30000,
+        "currency": "USD",
+        "equity": 5000.0,
+        "balance": 4800.0,
+        "margin_balance": 5000.0,
+        "available_funds": 3600.0,
+        "initial_margin": 1200.0,
+        "maintenance_margin": 700.0,
+        "margin_model": "portfolio_margin"
+      },
+      "positions": [],
+      "simulation": {
+        "status": "not_requested",
+        "attempted": false,
+        "source_endpoint": "private/simulate_portfolio"
+      }
+    },
+    "malformed": {
+      "account": {
+        "status": "malformed",
+        "source": "deribit_replay",
+        "source_endpoint": "private/get_account_summary",
+        "observed_at": "2026-07-07T09:50:30Z",
+        "data_age_ms": 30000,
+        "currency": "USD",
+        "equity": 0.0,
+        "balance": 0.0,
+        "margin_balance": 0.0,
+        "available_funds": 0.0,
+        "initial_margin": 0.0,
+        "maintenance_margin": 0.0,
+        "margin_model": "portfolio_margin"
+      },
+      "positions": [],
+      "simulation": {
+        "status": "not_requested",
+        "attempted": false,
+        "source_endpoint": "private/simulate_portfolio"
+      }
+    }
+  }
+}
