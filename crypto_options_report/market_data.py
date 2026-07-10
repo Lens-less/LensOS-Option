@@ -153,6 +153,7 @@ def fetch_deribit_option_chain_snapshot(
     instrument_limit: int | None = None,
     timeout: int = 20,
 ) -> dict[str, Any]:
+    captured_at = utc_timestamp()
     summaries = _get_json(
         f"{base_url.rstrip('/')}/api/v2/public/get_book_summary_by_currency",
         {"currency": currency, "kind": "option"},
@@ -167,6 +168,7 @@ def fetch_deribit_option_chain_snapshot(
 
     tickers: dict[str, Any] = {}
     errors: list[str] = []
+    adapter_events: list[dict[str, str]] = []
     max_workers = max(1, min(8, len(summaries) or 1))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
@@ -193,12 +195,32 @@ def fetch_deribit_option_chain_snapshot(
         }
         for row in summaries
     ]
+    feeds: dict[str, Any] = {}
+    try:
+        feeds["vol_index"] = _fetch_vol_index_feed(
+            base_url.rstrip("/"),
+            currency=currency,
+            timeout=timeout,
+            captured_at=captured_at,
+        )
+    except (ValueError, TypeError, KeyError, OSError, OverflowError) as exc:
+        message = f"vol_index: {exc}"
+        errors.append(message)
+        adapter_events.append(
+            {
+                "class": "schema_drift",
+                "message": message,
+                "source": "live_public_deribit",
+            }
+        )
     return {
-        "captured_at": utc_timestamp(),
+        "captured_at": captured_at,
         "currency": currency,
         "source": f"deribit_live:{base_url.rstrip('/')}",
         "rows": rows,
         "fetch_errors": errors,
+        "adapter_events": adapter_events,
+        "feeds": feeds,
     }
 
 
@@ -288,6 +310,12 @@ def evaluate_market_data_quality(
             overall_reason_codes.append("PUBLIC_SCHEMA_DRIFT_MALFORMED")
     if response_contract["response_classes"]["schema_drift"]:
         overall_reason_codes.append("PUBLIC_SCHEMA_DRIFT_MALFORMED")
+        vol_index_status = response_contract["endpoints"]["vol_index"]
+        if vol_index_status["status"] != "available":
+            overall_reason_codes.append("REQUIRED_FEED_MISSING")
+            overall_reason_codes.append(vol_index_status["reason_code"])
+    if normalized_snapshot.get("fetch_errors"):
+        overall_reason_codes.append("PUBLIC_FETCH_ERRORS_PRESENT")
 
     for expiry_date in sorted(quotes_by_expiry):
         expiry_quotes = quotes_by_expiry[expiry_date]
@@ -721,6 +749,83 @@ def _quality_flags(quote: dict[str, Any], limits: dict[str, float]) -> list[str]
         flags.append("MISSING_SETTLEMENT_CURRENCY")
 
     return sorted(set(flag for flag in flags if flag in BLOCKING_QUALITY_FLAGS))
+
+
+def _coerce_vol_index_timestamp_ms(value: Any) -> int:
+    if isinstance(value, bool) or (
+        isinstance(value, float) and (not isfinite(value) or not value.is_integer())
+    ):
+        raise ValueError("volatility index timestamp is not integer-like")
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("volatility index timestamp is not integer-like") from exc
+
+
+def _fetch_vol_index_feed(
+    base_url: str,
+    *,
+    currency: str,
+    timeout: int,
+    captured_at: str,
+) -> dict[str, Any]:
+    captured_ms = parse_timestamp_ms(captured_at)
+    payload = _get_json(
+        f"{base_url}/api/v2/public/get_volatility_index_data",
+        {
+            "currency": currency,
+            "resolution": 3600,
+            "start_timestamp": max(0, captured_ms - 2 * 60 * 60 * 1000),
+            "end_timestamp": captured_ms,
+        },
+        timeout=timeout,
+    )
+    result = payload["result"]
+    data_rows = result.get("data") if isinstance(result, dict) else result
+    if not isinstance(data_rows, list) or not data_rows:
+        raise ValueError("empty volatility index data")
+
+    last = data_rows[-1]
+    if isinstance(last, (list, tuple)) and len(last) >= 5:
+        if last[0] is None:
+            raise ValueError("volatility index row missing timestamp")
+        timestamp_ms = _coerce_vol_index_timestamp_ms(last[0])
+        volatility = _to_number(last[4])
+    elif isinstance(last, dict):
+        raw_timestamp = last.get("timestamp")
+        if raw_timestamp is None:
+            raw_timestamp = last.get("t")
+        if raw_timestamp is None:
+            raise ValueError("volatility index dict row missing timestamp")
+        timestamp_ms = _coerce_vol_index_timestamp_ms(raw_timestamp)
+        volatility = _first_number(
+            last.get("close"),
+            last.get("volatility"),
+            last.get("value"),
+        )
+    else:
+        raise ValueError("unrecognized volatility index row shape")
+
+    if volatility is None or volatility <= 0:
+        raise ValueError("invalid volatility index value")
+    try:
+        timestamp = (
+            datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("volatility index timestamp is out of range") from exc
+
+    return {
+        "index_name": f"{currency} DVOL",
+        "currency": currency,
+        "timestamp": timestamp,
+        "volatility": volatility / 100.0 if volatility > 5.0 else volatility,
+        "source_endpoint": "public/get_volatility_index_data",
+        "raw_close": volatility,
+    }
 
 
 def _get_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
