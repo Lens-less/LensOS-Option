@@ -62,6 +62,7 @@ REQUIRED_REPORT_KEYS = {
     "risk_state",
     "permission_state",
     "reason_codes",
+    "data_trust",
     "data_status",
     "account_status",
     "calibration_status",
@@ -169,6 +170,8 @@ def generate_research_report(
     reason_codes.extend(account_reason_codes(account_status))
     reason_codes.extend(["MISSING_CALIBRATED_MODEL", "MISSING_BACKTEST_ALIGNMENT"])
 
+    data_trust = _build_data_trust_summary(data_status)
+
     action = "RESEARCH_ONLY"
     if mode != "research_only":
         action = "NO_TRADE"
@@ -247,6 +250,7 @@ def generate_research_report(
             "account_trade_gate": account_status["trade_gate"],
         },
         "reason_codes": _unique_codes(reason_codes),
+        "data_trust": data_trust,
         "data_status": data_status,
         "account_status": account_status,
         "calibration_status": calibration_status,
@@ -328,6 +332,7 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
         errors.append("risk_state must be GREEN, YELLOW, RED, or HALT")
 
     data_status = report.get("data_status", {})
+    errors.extend(_validate_data_trust(report.get("data_trust"), data_status))
     if data_status.get("status") == "missing":
         if "MISSING_VALIDATED_MARKET_DATA" not in report.get("reason_codes", []):
             errors.append("missing reason code: MISSING_VALIDATED_MARKET_DATA")
@@ -910,6 +915,118 @@ def _validate_ev_candidate_scanner(ev_candidate_scanner: Any) -> list[str]:
     if not isinstance(ev_candidate_scanner.get("summary"), dict):
         errors.append("ev_candidate_scanner.summary must be a dict")
     return errors
+
+
+def _validate_data_trust(
+    data_trust: Any,
+    data_status: dict[str, Any],
+) -> list[str]:
+    if not isinstance(data_trust, dict):
+        return ["data_trust must be a dict"]
+
+    errors: list[str] = []
+    verdict = data_trust.get("verdict")
+    if verdict not in {"trusted", "degraded", "untrusted"}:
+        errors.append("data_trust.verdict must be trusted, degraded, or untrusted")
+
+    reason_codes = data_trust.get("reason_codes")
+    if not isinstance(reason_codes, list) or any(
+        not isinstance(code, str) or not code for code in reason_codes
+    ):
+        errors.append("data_trust.reason_codes must be a list of strings")
+    elif verdict in {"degraded", "untrusted"} and not reason_codes:
+        errors.append(f"{verdict} data_trust.reason_codes must not be empty")
+
+    source_class = data_trust.get("source_class")
+    if source_class not in {"live", "fixture", "replay", "missing"}:
+        errors.append(
+            "data_trust.source_class must be live, fixture, replay, or missing"
+        )
+
+    status = data_status.get("status")
+    if status in {"missing", "blocked", "validated"}:
+        expected_data_trust = _build_data_trust_summary(data_status)
+        if data_trust != expected_data_trust:
+            errors.append(
+                "data_trust must exactly match canonical projection from data_status "
+                f"(expected {expected_data_trust!r})"
+            )
+
+    if status == "missing":
+        if verdict != "untrusted":
+            errors.append(
+                "missing market data must have untrusted data_trust.verdict"
+            )
+        if source_class != "missing":
+            errors.append(
+                "missing market data must have missing data_trust.source_class"
+            )
+        if not isinstance(reason_codes, list) or (
+            "MISSING_VALIDATED_MARKET_DATA" not in reason_codes
+        ):
+            errors.append(
+                "missing market data trust must include MISSING_VALIDATED_MARKET_DATA"
+            )
+    elif status in {"blocked", "validated"}:
+        if verdict != "untrusted":
+            if status == "validated":
+                errors.append(
+                    "validated market data must remain untrusted until promotion policy exists"
+                )
+            else:
+                errors.append(
+                    "blocked market data must have untrusted data_trust.verdict"
+                )
+
+        expected_source_class = _data_trust_source_class(data_status)
+        if source_class != expected_source_class:
+            errors.append(
+                f"{status} market data must have {expected_source_class} "
+                "data_trust.source_class"
+            )
+
+        if status == "validated":
+            if not isinstance(reason_codes, list) or (
+                "DATA_TRUST_PROMOTION_PENDING" not in reason_codes
+            ):
+                errors.append(
+                    "validated market data trust must include "
+                    "DATA_TRUST_PROMOTION_PENDING"
+                )
+    return errors
+
+
+def _build_data_trust_summary(data_status: dict[str, Any]) -> dict[str, Any]:
+    status = data_status.get("status")
+    if status == "missing":
+        reason_codes = ["MISSING_VALIDATED_MARKET_DATA"]
+    else:
+        reason_codes = list(
+            (data_status.get("quality_gate") or {}).get("reason_codes") or []
+        )
+        if status == "validated":
+            reason_codes = ["DATA_TRUST_PROMOTION_PENDING"]
+        elif not reason_codes:
+            reason_codes = [str(data_status.get("reason_code") or "MARKET_DATA_QUALITY_FAIL")]
+
+    # ISSUE-DT-002 owns any promotion of present market data to trusted/degraded.
+    return {
+        "verdict": "untrusted",
+        "reason_codes": _unique_codes(reason_codes),
+        "source_class": _data_trust_source_class(data_status),
+    }
+
+
+def _data_trust_source_class(data_status: dict[str, Any]) -> str:
+    if data_status.get("status") == "missing":
+        return "missing"
+
+    source = str(data_status.get("source") or "").lower()
+    if "replay" in source:
+        return "replay"
+    if source.startswith("deribit_live:"):
+        return "live"
+    return "fixture"
 
 
 def _find_forbidden_keys(value: Any) -> set[str]:
