@@ -279,6 +279,7 @@ def _surface_payload(command: str, report: dict) -> dict:
         return {
             "schema_version": "ingestion_status.v1",
             "status": report["data_status"]["status"],
+            "data_trust": report["data_trust"],
             "data_status": report["data_status"],
         }
     if command in {"fit-surface", "surface-status"}:

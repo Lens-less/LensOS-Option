@@ -97,6 +97,82 @@
           "volatility": 0.82
         }
       }
+    },
+    "malformed_dvol_null_timestamp": {
+      "source": "public_replay:malformed_dvol_null_timestamp",
+      "fetch_errors": [
+        "vol_index: volatility index row missing timestamp"
+      ],
+      "adapter_events": [
+        {
+          "class": "schema_drift",
+          "message": "vol_index: volatility index row missing timestamp",
+          "source": "live_public_deribit"
+        }
+      ],
+      "mutations": [
+        {
+          "op": "delete",
+          "path": ["feeds", "vol_index"]
+        }
+      ]
+    },
+    "malformed_dvol_non_integer_timestamp": {
+      "source": "public_replay:malformed_dvol_non_integer_timestamp",
+      "fetch_errors": [
+        "vol_index: volatility index timestamp is not integer-like"
+      ],
+      "adapter_events": [
+        {
+          "class": "schema_drift",
+          "message": "vol_index: volatility index timestamp is not integer-like",
+          "source": "live_public_deribit"
+        }
+      ],
+      "mutations": [
+        {
+          "op": "delete",
+          "path": ["feeds", "vol_index"]
+        }
+      ]
+    },
+    "malformed_dvol_timestamp_out_of_range": {
+      "source": "public_replay:malformed_dvol_timestamp_out_of_range",
+      "fetch_errors": [
+        "vol_index: volatility index timestamp is out of range"
+      ],
+      "adapter_events": [
+        {
+          "class": "schema_drift",
+          "message": "vol_index: volatility index timestamp is out of range",
+          "source": "live_public_deribit"
+        }
+      ],
+      "mutations": [
+        {
+          "op": "delete",
+          "path": ["feeds", "vol_index"]
+        }
+      ]
+    },
+    "empty_dvol_data": {
+      "source": "public_replay:empty_dvol_data",
+      "fetch_errors": [
+        "vol_index: empty volatility index data"
+      ],
+      "adapter_events": [
+        {
+          "class": "schema_drift",
+          "message": "vol_index: empty volatility index data",
+          "source": "live_public_deribit"
+        }
+      ],
+      "mutations": [
+        {
+          "op": "delete",
+          "path": ["feeds", "vol_index"]
+        }
+      ]
     }
   }
 }
