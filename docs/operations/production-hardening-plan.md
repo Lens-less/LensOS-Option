@@ -1,6 +1,6 @@
 # Production Hardening Plan
 
-Status: in progress
+Status: complete (2026-07-12)
 Scope: deploy the research console safely without enabling paper, manual, or live trading.
 
 ## Invariants
@@ -42,3 +42,7 @@ Scope: deploy the research console safely without enabling paper, manual, or liv
 - All tests and browser checks pass on the final integrated tree.
 - Only publishable project material is committed; machine state and generated caches remain local.
 - GitHub contains the clean production-readiness branch and a draft PR against the current default branch.
+
+All completion criteria are satisfied. The implementation evidence and the
+remaining deployment boundary are recorded in
+`docs/operations/production-verification-report.md`.
