@@ -152,9 +152,15 @@ def build_ev_candidate_scanner(
         item["rank"] = index
 
     return {
+        # Pipeline structure is complete, but path risk remains a research placeholder.
         "status": "validated",
         "reason_code": None,
         "score_status": "UNCALIBRATED_RESEARCH_ONLY",
+        "path_risk_evidence": {
+            "status": "research_placeholder",
+            "placeholder_data": True,
+            "source": "hardcoded_7d_return_templates",
+        },
         "recommended_size_allowed": False,
         "trade_instruction_allowed": False,
         "paper_manual_candidates_allowed": False,
@@ -175,6 +181,11 @@ def _blocked_scanner(reason_code: str) -> dict[str, Any]:
         "status": "blocked",
         "reason_code": reason_code,
         "score_status": "UNCALIBRATED_RESEARCH_ONLY",
+        "path_risk_evidence": {
+            "status": "unavailable",
+            "placeholder_data": True,
+            "source": None,
+        },
         "recommended_size_allowed": False,
         "trade_instruction_allowed": False,
         "paper_manual_candidates_allowed": False,
@@ -473,6 +484,8 @@ def _kill_conditions(
         kills.append("SPREAD_PERMISSION_BLOCKED")
     if calibration_status.get("calibrated") is False:
         kills.append("UNCALIBRATED_SCORE_MODEL")
+    # Default EV path library is hardcoded research placeholders, not validated history.
+    kills.append("PLACEHOLDER_PATH_RISK")
     return _unique_codes(kills)
 
 

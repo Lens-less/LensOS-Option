@@ -1759,7 +1759,7 @@
       grid-column: auto;
     }
 
-    #readiness {
+    #readiness-section {
       grid-column: 2;
       grid-row: 1 / span 2;
       display: flex;
@@ -1872,12 +1872,12 @@
 
       #evidence,
       .workbench > .stack:nth-child(2),
-      #readiness {
+      #readiness-section {
         grid-column: auto;
         grid-row: auto;
       }
 
-      #readiness {
+      #readiness-section {
         position: static;
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1901,7 +1901,7 @@
       }
 
       .command-band,
-      #readiness {
+      #readiness-section {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
@@ -1939,7 +1939,7 @@
       .reason-band,
       .matrix-grid,
       .split,
-      #readiness {
+      #readiness-section {
         grid-template-columns: 1fr;
       }
 
@@ -1984,7 +1984,7 @@
         <a class="nav-item" href="#evidence" title="证据链">证据链</a>
         <a class="nav-item" href="#risk" title="风险">风险矩阵</a>
         <a class="nav-item" href="#candidates" title="候选">候选排序</a>
-        <a class="nav-item" href="#readiness" title="就绪">发布就绪</a>
+        <a class="nav-item" href="#readiness-section" title="就绪">发布就绪</a>
       </nav>
       <div class="sidebar-foot">研究</div>
     </aside>
@@ -2019,7 +2019,7 @@
         </article>
         <article class="verdict-card">
           <div class="verdict-label">发布就绪</div>
-          <div class="verdict-value" id="readiness">暂无</div>
+          <div class="verdict-value" id="readiness-status">暂无</div>
           <div class="verdict-meta" id="paper-state">paper mode 已阻断</div>
         </article>
         <article class="verdict-card">
@@ -2165,7 +2165,7 @@
           </article>
         </div>
 
-        <div class="stack" id="readiness">
+        <div class="stack" id="readiness-section">
           <article class="panel">
             <header class="panel-header">
               <div>
@@ -2529,49 +2529,35 @@
       return cell;
     }
 
-    function normalizedBaseUrl(value) {
-      const url = new URL(value, window.location.href);
-      return url.href.endsWith("/") ? url.href : `${url.href}/`;
-    }
-
     function reportBaseUrl() {
-      const current = new URL(window.location.href);
-      const configured = current.searchParams.get("api_base");
-      if (configured) {
-        try {
-          return normalizedBaseUrl(configured);
-        } catch {
-          return window.location.protocol === "file:"
-            ? "http://127.0.0.1:8765/"
-            : `${window.location.origin}/`;
-        }
-      }
       if (window.location.protocol === "file:") {
-        return "http://127.0.0.1:8765/";
+        return "http://127.0.0.1:8000/";
       }
       return `${window.location.origin}/`;
     }
 
     function loadReportUrl() {
-      const reportUrl = new URL("research/report", reportBaseUrl());
-      const current = new URL(window.location.href);
-      for (const [key, value] of current.searchParams.entries()) {
-        if (key === "api_base") {
-          continue;
-        }
-        reportUrl.searchParams.set(key, value);
-      }
-      if (!reportUrl.searchParams.has("mode")) {
-        reportUrl.searchParams.set("mode", "research_only");
-      }
-      return reportUrl;
+      return new URL("research/report", reportBaseUrl());
     }
 
+    let reportRequestInFlight = false;
+
     async function loadReport() {
+      if (reportRequestInFlight) {
+        return;
+      }
+      reportRequestInFlight = true;
       app.classList.add("loading");
-      const url = loadReportUrl();
+      const refreshButton = document.getElementById("refresh");
+      refreshButton.disabled = true;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 10000);
       try {
-        const response = await fetch(url, { headers: { "Accept": "application/json" } });
+        const url = loadReportUrl();
+        const response = await fetch(url, {
+          headers: { "Accept": "application/json" },
+          signal: controller.signal
+        });
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
@@ -2583,6 +2569,9 @@
           error: error.message
         });
       } finally {
+        window.clearTimeout(timeout);
+        refreshButton.disabled = false;
+        reportRequestInFlight = false;
         app.classList.remove("loading");
       }
     }
@@ -2605,7 +2594,7 @@
       setText("effective-mode", `mode: ${valueText(report.effective_mode)}`);
       setText("risk-state", report.risk_state);
       setText("portfolio-action", portfolio.final_action);
-      setText("readiness", readiness.status);
+      setText("readiness-status", readiness.status);
       setText("paper-state", readiness.paper_mode_allowed ? "paper mode 允许" : "paper mode 已阻断");
       setText("candidate-count", (scanner.ranked_candidates || []).length);
       setText("candidate-meta", scanner.status);

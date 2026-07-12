@@ -63,49 +63,51 @@ def build_regime_permission_state(
         )
 
     raw_inputs = market_snapshot.get("regime_inputs") or {}
-    percentiles = _resolve_volatility_percentiles(raw_inputs, vol_surface_status)
-    scores = {
-        "bear_trend": _score_value(
-            raw_inputs,
-            "bear_trend_score",
-            aliases=("bear_score",),
-            default=DEFAULT_REGIME_INPUTS["bear_trend_score"],
-        ),
-        "range": _score_value(
-            raw_inputs,
-            "range_score",
-            aliases=("range_bound_score",),
-            default=DEFAULT_REGIME_INPUTS["range_score"],
-        ),
-        "squeeze": _score_value(
-            raw_inputs,
-            "squeeze_score",
-            aliases=("squeeze_risk_score",),
-            default=DEFAULT_REGIME_INPUTS["squeeze_score"],
-        ),
-        "slow_bull": _score_value(
-            raw_inputs,
+    percentiles, percentile_provenance = _resolve_volatility_percentiles(
+        raw_inputs,
+        vol_surface_status,
+    )
+    score_fields = (
+        ("bear_trend", "bear_trend_score", ("bear_score",), DEFAULT_REGIME_INPUTS["bear_trend_score"]),
+        ("range", "range_score", ("range_bound_score",), DEFAULT_REGIME_INPUTS["range_score"]),
+        ("squeeze", "squeeze_score", ("squeeze_risk_score",), DEFAULT_REGIME_INPUTS["squeeze_score"]),
+        (
+            "slow_bull",
             "slow_bull_score",
-            aliases=("bull_trend_score",),
-            default=DEFAULT_REGIME_INPUTS["slow_bull_score"],
+            ("bull_trend_score",),
+            DEFAULT_REGIME_INPUTS["slow_bull_score"],
         ),
-        "fast_bull_breakout": _score_value(
-            raw_inputs,
+        (
+            "fast_bull_breakout",
             "fast_bull_breakout_score",
-            aliases=("breakout_score",),
-            default=DEFAULT_REGIME_INPUTS["fast_bull_breakout_score"],
+            ("breakout_score",),
+            DEFAULT_REGIME_INPUTS["fast_bull_breakout_score"],
         ),
-        "event": _score_value(
+        ("event", "event_score", ("event_risk_score",), DEFAULT_REGIME_INPUTS["event_score"]),
+    )
+    scores: dict[str, float] = {}
+    defaults_applied: list[str] = []
+    for score_name, primary, aliases, default in score_fields:
+        value, used_default = _score_value_with_provenance(
             raw_inputs,
-            "event_score",
-            aliases=("event_risk_score",),
-            default=DEFAULT_REGIME_INPUTS["event_score"],
-        ),
-        "volatility_stress": max(
-            percentiles["dvol_percentile"],
-            percentiles["atm_iv_percentile"],
-        ),
-        "data_quality": 0.0 if data_status.get("status") == "validated" else 1.0,
+            primary,
+            aliases=aliases,
+            default=default,
+        )
+        scores[score_name] = value
+        if used_default:
+            defaults_applied.append(primary)
+    scores["volatility_stress"] = max(
+        percentiles["dvol_percentile"],
+        percentiles["atm_iv_percentile"],
+    )
+    scores["data_quality"] = 0.0 if data_status.get("status") == "validated" else 1.0
+    input_provenance = {
+        "regime_inputs_present": bool(raw_inputs),
+        "defaults_applied": defaults_applied,
+        "percentile_source": percentile_provenance,
+        "synthetic_inputs": bool(defaults_applied)
+        or percentile_provenance == "surface_iv_fallback",
     }
 
     ignored_inputs = sorted(
@@ -140,6 +142,9 @@ def build_regime_permission_state(
         and sell_permission >= DEFAULT_REGIME_THRESHOLDS["naked_permission_min"]
     )
 
+    if input_provenance["synthetic_inputs"]:
+        reason_codes = _unique_codes(reason_codes + ["REGIME_DEFAULTS_OR_FALLBACK_APPLIED"])
+
     return {
         "status": "validated",
         "sell_permission": sell_permission,
@@ -156,6 +161,7 @@ def build_regime_permission_state(
         "reason_codes": reason_codes,
         "regime_scores": scores,
         "volatility_inputs": percentiles,
+        "input_provenance": input_provenance,
         "ignored_inputs": ignored_inputs,
         "cap_details": cap_details,
     }
@@ -195,6 +201,12 @@ def _blocked_permission_state(
             "dvol_percentile": 0.0,
             "atm_iv_percentile": 0.0,
         },
+        "input_provenance": {
+            "regime_inputs_present": False,
+            "defaults_applied": [],
+            "percentile_source": "unavailable",
+            "synthetic_inputs": True,
+        },
         "ignored_inputs": [],
         "cap_details": [
             {
@@ -213,7 +225,7 @@ def _blocked_permission_state(
 def _resolve_volatility_percentiles(
     raw_inputs: dict[str, Any],
     vol_surface_status: dict[str, Any],
-) -> dict[str, float]:
+) -> tuple[dict[str, float], str]:
     atm_iv_percentile = _percentile_value(
         raw_inputs,
         "atm_iv_percentile",
@@ -224,16 +236,21 @@ def _resolve_volatility_percentiles(
         "dvol_percentile",
         aliases=("dvol_pct",),
     )
+    provenance = "measured"
     if atm_iv_percentile is None or dvol_percentile is None:
         fallback = _fallback_iv_percentile(vol_surface_status)
+        provenance = "surface_iv_fallback"
         if atm_iv_percentile is None:
             atm_iv_percentile = fallback
         if dvol_percentile is None:
             dvol_percentile = fallback
-    return {
-        "dvol_percentile": _clamp01(dvol_percentile),
-        "atm_iv_percentile": _clamp01(atm_iv_percentile),
-    }
+    return (
+        {
+            "dvol_percentile": _clamp01(dvol_percentile),
+            "atm_iv_percentile": _clamp01(atm_iv_percentile),
+        },
+        provenance,
+    )
 
 
 def _fallback_iv_percentile(vol_surface_status: dict[str, Any]) -> float:
@@ -248,6 +265,24 @@ def _fallback_iv_percentile(vol_surface_status: dict[str, Any]) -> float:
     return _clamp01(sum(values) / len(values) / 100.0)
 
 
+def _score_value_with_provenance(
+    raw_inputs: dict[str, Any],
+    primary: str,
+    *,
+    aliases: tuple[str, ...],
+    default: float,
+) -> tuple[float, bool]:
+    for key in (primary, *aliases):
+        value = raw_inputs.get(key)
+        if value is None:
+            continue
+        try:
+            return _clamp01(float(value)), False
+        except (TypeError, ValueError):
+            continue
+    return _clamp01(default), True
+
+
 def _score_value(
     raw_inputs: dict[str, Any],
     primary: str,
@@ -255,13 +290,13 @@ def _score_value(
     aliases: tuple[str, ...],
     default: float,
 ) -> float:
-    for key in (primary, *aliases):
-        value = raw_inputs.get(key)
-        if isinstance(value, bool):
-            return 1.0 if value else 0.0
-        if isinstance(value, (int, float)):
-            return _clamp01(float(value))
-    return _clamp01(default)
+    value, _used_default = _score_value_with_provenance(
+        raw_inputs,
+        primary,
+        aliases=aliases,
+        default=default,
+    )
+    return value
 
 
 def _percentile_value(

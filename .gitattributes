@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.patch -whitespace
+
+# Cutover and evidence hashes bind exact historical bytes, including mixed EOLs.
+docs/automation/archive/options-platform-v1/** -text -eol -whitespace
+docs/automation/evidence-store/** -text -eol -whitespace

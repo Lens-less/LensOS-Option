@@ -1,19 +1,26 @@
 import json
 import http.client
+import re
+import socket
 import subprocess
 import sys
 import threading
 import unittest
-from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 
 from crypto_options_report.api import (
     DASHBOARD_PAGE_PATH,
     GET_SURFACE_PATHS,
     POST_SURFACE_PATHS,
     REPORT_PATH,
+    ResearchHTTPServer,
     ResearchReportHandler,
+    RuntimeConfig,
     _payload_for_path,
+    build_parser as build_api_parser,
     dashboard_page_html,
+    readiness_payload,
+    serve,
 )
 from crypto_options_report.cli import build_parser
 from crypto_options_report.contract import generate_research_report, report_shape
@@ -54,6 +61,8 @@ class FullSystemSurfaceTests(unittest.TestCase):
         declared_routes = set(API_ROUTES)
         expected_get_routes = {
             "GET /health",
+            "GET /livez",
+            "GET /readyz",
             f"GET {REPORT_PATH}",
             f"GET {DASHBOARD_PAGE_PATH}",
         }
@@ -76,14 +85,20 @@ class FullSystemSurfaceTests(unittest.TestCase):
         self.assertIn("Crypto Options 研究控制台", html)
         self.assertIn("/research/report", html)
         self.assertIn("/dashboard", html)
-        self.assertIn("api_base", html)
+        self.assertNotIn("api_base", html)
         self.assertIn("连接失败，显示离线预览", html)
         self.assertIn("paper mode 已阻断", html)
         self.assertIn("证据链", html)
         self.assertNotIn("order_template", html)
+        ids = re.findall(r'\bid="([^"]+)"', html)
+        self.assertEqual(len(ids), len(set(ids)))
 
     def test_http_dashboard_page_route_returns_html(self):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), ResearchReportHandler)
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=RuntimeConfig(profile="production"),
+        )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         connection = http.client.HTTPConnection(
@@ -103,7 +118,199 @@ class FullSystemSurfaceTests(unittest.TestCase):
 
         self.assertEqual(200, response.status)
         self.assertEqual("text/html; charset=utf-8", response.getheader("Content-Type"))
+        self.assertEqual("no-store, max-age=0", response.getheader("Cache-Control"))
+        self.assertEqual("same-origin", response.getheader("Cross-Origin-Resource-Policy"))
+        self.assertNotIn("Python", response.getheader("Server"))
+        self.assertIn("connect-src 'self'", response.getheader("Content-Security-Policy"))
         self.assertIn("Crypto Options 研究控制台", body)
+
+    def test_liveness_and_readiness_are_distinct_fail_closed_contracts(self):
+        live_status, _, live_body = self._request("GET", "/livez")
+        ready_status, _, ready_body = self._request("GET", "/readyz")
+
+        self.assertEqual(200, live_status)
+        self.assertEqual({"status": "alive"}, json.loads(live_body))
+        self.assertEqual(200, ready_status)
+        readiness = json.loads(ready_body)
+        self.assertTrue(readiness["service_ready"])
+        self.assertTrue(readiness["research_only"])
+        self.assertEqual("NO-GO", readiness["product_release"])
+        self.assertFalse(readiness["live_order_adapter_available"])
+
+    def test_production_profile_rejects_browser_controlled_replay_inputs(self):
+        status, _, body = self._request(
+            "GET",
+            "/research/report?account_scenario=green&generated_at=2099-01-01T00:00:00Z",
+            runtime=RuntimeConfig(profile="production"),
+        )
+
+        self.assertEqual(400, status)
+        self.assertIn("production", json.loads(body)["error"])
+
+    def test_unsupported_http_methods_return_json_405(self):
+        status, headers, body = self._request("PUT", "/research/report")
+
+        self.assertEqual(405, status)
+        self.assertEqual("application/json; charset=utf-8", headers["content-type"])
+        self.assertEqual({"error": "method_not_allowed"}, json.loads(body))
+
+    def test_api_parser_exposes_validated_production_runtime_controls(self):
+        args = build_api_parser().parse_args(
+            [
+                "--runtime-profile",
+                "production",
+                "--max-workers",
+                "4",
+                "--request-timeout",
+                "7.5",
+            ]
+        )
+
+        self.assertEqual("production", args.runtime_profile)
+        self.assertEqual(4, args.max_workers)
+        self.assertEqual(7.5, args.request_timeout)
+        with self.assertRaisesRegex(ValueError, "max_workers"):
+            RuntimeConfig(profile="production", max_workers=0).validate()
+
+    def test_production_startup_preflights_before_binding(self):
+        runtime = RuntimeConfig(profile="production")
+        with (
+            patch(
+                "crypto_options_report.api.readiness_payload",
+                return_value={"service_ready": False},
+            ),
+            patch("crypto_options_report.api.ResearchHTTPServer") as server_class,
+            self.assertRaisesRegex(SystemExit, "preflight failed"),
+        ):
+            serve("127.0.0.1", 8000, runtime=runtime)
+        server_class.assert_not_called()
+
+    def test_readiness_maps_unexpected_validation_failure_to_unavailable(self):
+        runtime = RuntimeConfig(profile="production")
+        with patch(
+            "crypto_options_report.api.dashboard_page_html",
+            side_effect=RuntimeError("asset changed after startup"),
+        ):
+            payload = readiness_payload(runtime)
+        self.assertFalse(payload["service_ready"])
+        self.assertTrue(payload["research_only"])
+        self.assertEqual("NO-GO", payload["product_release"])
+
+    def test_expected_socket_abort_is_logged_as_client_disconnect(self):
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=RuntimeConfig(),
+        )
+        try:
+            with patch("crypto_options_report.api._log_json") as log_json:
+                try:
+                    raise ConnectionResetError("client closed")
+                except ConnectionResetError:
+                    server.handle_error(None, ("127.0.0.1", 12345))
+            log_json.assert_called_once_with(
+                "client_disconnected",
+                client="127.0.0.1",
+                error="ConnectionResetError",
+            )
+        finally:
+            server.server_close()
+
+    def test_overload_returns_bounded_503_instead_of_spawning_more_work(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_payload(path, query, *, runtime):
+            entered.set()
+            release.wait(timeout=5)
+            return {"schema_version": "research_report.v1"}
+
+        runtime = RuntimeConfig(profile="development", max_workers=1)
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=runtime,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        first_result = {}
+
+        def first_request():
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", server.server_port, timeout=5
+            )
+            try:
+                connection.request("GET", "/research/report")
+                response = connection.getresponse()
+                first_result["status"] = response.status
+                response.read()
+            finally:
+                connection.close()
+
+        request_thread = threading.Thread(target=first_request, daemon=True)
+        with patch("crypto_options_report.api._payload_for_path", side_effect=slow_payload):
+            request_thread.start()
+            self.assertTrue(entered.wait(timeout=2))
+            try:
+                overload_responses = []
+                for _ in range(20):
+                    connection = http.client.HTTPConnection(
+                        "127.0.0.1", server.server_port, timeout=2
+                    )
+                    try:
+                        connection.request("GET", "/health")
+                        response = connection.getresponse()
+                        payload = json.loads(response.read().decode("utf-8"))
+                        overload_responses.append(
+                            (
+                                response.status,
+                                payload,
+                                response.getheader("Retry-After"),
+                                response.getheader("X-Frame-Options"),
+                                response.getheader("Cross-Origin-Resource-Policy"),
+                            )
+                        )
+                    finally:
+                        connection.close()
+            finally:
+                release.set()
+                request_thread.join(timeout=5)
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(20, len(overload_responses))
+        for (
+            status,
+            payload,
+            retry_after,
+            frame_policy,
+            resource_policy,
+        ) in overload_responses:
+            self.assertEqual(503, status)
+            self.assertEqual("overloaded", payload["error"])
+            self.assertEqual("1", retry_after)
+            self.assertEqual("DENY", frame_policy)
+            self.assertEqual("same-origin", resource_policy)
+        self.assertEqual(200, first_result["status"])
+
+    def test_overload_log_correlates_client_request_and_status(self):
+        first, second = socket.socketpair()
+        try:
+            with patch("crypto_options_report.api._log_json") as log_json:
+                ResearchHTTPServer._reject_overloaded(
+                    first,
+                    ("127.0.0.1", 12345),
+                )
+            event, = log_json.call_args.args
+            fields = log_json.call_args.kwargs
+            self.assertEqual("overload_rejected", event)
+            self.assertEqual("127.0.0.1", fields["client"])
+            self.assertEqual(503, fields["status"])
+            self.assertRegex(fields["request_id"], r"^[0-9a-f]{32}$")
+        finally:
+            first.close()
+            second.close()
 
     def test_http_backtest_run_route_returns_schema(self):
         status, headers, body = self._request(
@@ -170,8 +377,12 @@ class FullSystemSurfaceTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertIn(expected_key, payload)
 
-    def _request(self, method, path):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), ResearchReportHandler)
+    def _request(self, method, path, *, runtime=None):
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=runtime or RuntimeConfig(profile="development"),
+        )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         connection = http.client.HTTPConnection(

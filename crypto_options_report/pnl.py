@@ -220,9 +220,10 @@ def trace_inverse_short_call(
         delivery_price,
         contract_count,
     )
+    unit_settlement_coin = settlement_value_coin / max(contract_count, 1e-12)
     trade_fee_coin = option_fee_inverse(entry_option_value_coin, contract_count)
     delivery_fee_coin = delivery_fee_inverse(
-        settlement_value_coin,
+        unit_settlement_coin,
         contract_count,
         delivery_fee_applies=delivery_fee_applies,
     )
@@ -284,12 +285,12 @@ def trace_inverse_call_credit_spread(
         combo_discount_verified=combo_discount_verified,
     )
     sell_delivery_fee = delivery_fee_inverse(
-        short_leg_settlement,
+        short_leg_settlement / max(contract_count, 1e-12),
         contract_count,
         delivery_fee_applies=delivery_fee_applies,
     )
     buy_delivery_fee = delivery_fee_inverse(
-        long_leg_settlement,
+        long_leg_settlement / max(contract_count, 1e-12),
         contract_count,
         delivery_fee_applies=delivery_fee_applies,
     )

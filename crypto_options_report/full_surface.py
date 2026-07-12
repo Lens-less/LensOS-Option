@@ -17,10 +17,23 @@ CLI_COMMANDS = [
     "calibrate",
     "scan",
     "recommend",
+    "pull-snapshot",
+    "alert-eval",
 ]
+
+# Trading remains a first-class product spine but lower priority and fail-closed.
+TRADING_SPINE_STATUS = {
+    "paper_mode": "NO-GO",
+    "manual_execution": "NO-GO",
+    "live_order_adapter": "not_implemented",
+    "priority": "lower_than_analysis_and_alerts",
+    "unlock_policy": "external_definition_of_done_required",
+}
 
 API_ROUTES = [
     "GET /health",
+    "GET /livez",
+    "GET /readyz",
     "GET /research/report",
     "GET /dashboard.html",
     "GET /dashboard",
@@ -63,6 +76,14 @@ def build_full_system_surface_report(
             "routes": [{"route": route, "status": "available"} for route in API_ROUTES],
             "paper_manual_actions_visible": False,
         },
+        "alerts": {
+            "status": "available",
+            "surface": "cli alert-eval",
+            "default_policy": "risk_degradation_only",
+            "opportunity_alerts_default": False,
+            "automatic_live_submission_possible": False,
+        },
+        "trading_spine": dict(TRADING_SPINE_STATUS),
         "dashboard": {
             "views": [
                 {
@@ -164,7 +185,11 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
         ),
         _gate("portfolio_risk", (report.get("portfolio_risk") or {}).get("schema_version") is not None),
         _gate("position_management", (report.get("position_management") or {}).get("schema_version") is not None),
-        _gate("walk_forward_calibration", calibration.get("status") == "validated"),
+        _gate(
+            "walk_forward_calibration",
+            calibration.get("status") == "validated"
+            and (calibration.get("model_registry") or {}).get("promoted_for_sizing") is True,
+        ),
         _gate("calibration_model_promoted", model_registry.get("promoted_for_sizing") is True),
         _gate("paper_ledger_persistence", persistence.get("mode") == "persistent_json"),
         _gate("paper_ledger_reconciliation", False),

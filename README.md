@@ -20,12 +20,21 @@ python -m crypto_options_report.api --host 127.0.0.1 --port 8000
 - `http://127.0.0.1:8000/dashboard`
 - `http://127.0.0.1:8000/research/report`
 - `http://127.0.0.1:8000/health`
+- `http://127.0.0.1:8000/livez`
+- `http://127.0.0.1:8000/readyz`
 
-静态 dashboard 也支持显式 API 地址：
+Dashboard 与 API 固定同源，避免跨源配置和浏览器参数改变生产报告语义。
 
-```text
-http://127.0.0.1:8000/dashboard.html?api_base=http://127.0.0.1:8000
+## Production Runtime
+
+生产运行配置与业务 `mode` 分离；即使 HTTP runtime 使用 production profile，报告仍严格保持 `research_only`：
+
+```powershell
+$env:CRYPTO_OPTIONS_RUNTIME_PROFILE = "production"
+python -m crypto_options_report.api --runtime-profile production --host 127.0.0.1 --port 8000 --max-workers 8 --request-timeout 15
 ```
+
+生产 HTTP 禁止浏览器指定 fixture、账户场景、评估时间或 live Deribit 抓取。服务应放在认证/TLS 反向代理之后，不能直接暴露到公网。完整容器、健康检查、日志、回滚与验证说明见 [Production Runbook](docs/operations/production-runbook.md)。
 
 ## Common Checks
 
@@ -35,6 +44,36 @@ python -m pytest -q
 python -m crypto_options_report.cli ingestion-status --live-deribit --instrument-limit 5 --compact
 python -m crypto_options_report.cli ingestion-status --live-deribit --instrument-limit 40 --compact
 ```
+
+## Analysis Ops And Alerts
+
+Capture a live snapshot for offline analysis:
+
+```powershell
+python -m crypto_options_report.cli pull-snapshot --instrument-limit 40 --output artifacts/snapshots/btc-chain.json --compact
+python -m crypto_options_report.cli report --snapshot-fixture artifacts/snapshots/btc-chain.json --output artifacts/reports/latest.json --fail-on-blocked --compact
+```
+
+Evaluate research-only risk alerts (no order paths; opportunity alerts default off):
+
+```powershell
+# Preview only (no state write, no webhook delivery):
+python -m crypto_options_report.cli alert-eval --snapshot-fixture artifacts/snapshots/btc-chain.json --dry-run --compact
+
+# Scheduler / ops path: persist cooldown state (do not combine with --dry-run):
+python -m crypto_options_report.cli alert-eval --snapshot-fixture artifacts/snapshots/btc-chain.json --state-file artifacts/alerts/state.json --fail-on-alert --compact
+# optional webhook (HMAC). Failed delivery does NOT advance cooldown state:
+#   --webhook-url https://example/hooks/alerts --webhook-secret-env ALERT_WEBHOOK_SECRET
+```
+
+Exit codes for schedulers:
+
+- `0` success
+- `10` market data blocked/missing (`--fail-on-blocked`)
+- `11` one or more alerts fired (`--fail-on-alert`)
+- `1` hard error (including webhook delivery failure)
+
+Trading spine (paper/manual/live orders) remains **NO-GO** until external Definition of Done evidence exists. Alerts are risk-degradation first; candidate opportunity alerts stay gated by path-risk and calibration evidence.
 
 Dashboard visual smoke:
 

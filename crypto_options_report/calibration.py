@@ -28,7 +28,9 @@ def build_walk_forward_calibration_report(
     return {
         "schema_version": WALK_FORWARD_CALIBRATION_SCHEMA_VERSION,
         "generated_at": generated_at,
-        "status": "validated",
+        # Deterministic tracer only — not out-of-sample production calibration.
+        "status": "research_fixture",
+        "evidence_class": "deterministic_research_fixture",
         "split_policy": {
             "training_window_months": 24,
             "test_window_months": 3,
@@ -54,7 +56,7 @@ def build_walk_forward_calibration_report(
             "vrp_role": "diagnostic_tiebreaker",
         },
         "score": {
-            "status": "calibrated",
+            "status": "research_fixture_uncalibrated",
             "model_version": "walk_forward_fixture_v1",
             "expected_utility": 0.42,
             "adverse_probability": 0.18,

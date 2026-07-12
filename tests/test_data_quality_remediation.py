@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from crypto_options_report.account_risk import (
     build_account_status,
@@ -14,7 +15,13 @@ from crypto_options_report.historical import (
     build_historical_reconciliation_report,
     load_historical_fixture,
 )
-from crypto_options_report.market_data import build_market_data_status
+from crypto_options_report.api import RuntimeConfig, build_api_report, _report_from_query
+from crypto_options_report.market_data import (
+    build_market_data_status,
+    normalize_market_snapshot,
+    parse_timestamp_ms,
+    validate_deribit_base_url,
+)
 from crypto_options_report.paper_ledger import build_paper_proposal_ledger
 from crypto_options_report.path_risk import build_path_risk_report_from_fixture
 
@@ -235,8 +242,80 @@ class DataQualityRemediationTests(unittest.TestCase):
             "calibration_model_promoted",
             "paper_ledger_persistence",
             "paper_ledger_reconciliation",
+            "walk_forward_calibration",
         ):
             self.assertIn(gate_name, readiness["missing_prerequisites"])
+
+    def test_single_digit_expiry_parses_without_crash(self):
+        snapshot = self._base_snapshot()
+        row = copy.deepcopy(snapshot["rows"][0])
+        row["instrument_name"] = "BTC-9JUL26-90000-C"
+        row["summary"]["instrument_name"] = "BTC-9JUL26-90000-C"
+        row["ticker"]["instrument_name"] = "BTC-9JUL26-90000-C"
+        snapshot["rows"] = [row]
+
+        normalized = normalize_market_snapshot(
+            snapshot,
+            now_ms=parse_timestamp_ms(snapshot["captured_at"]),
+        )
+        quote = normalized["quotes"][0]
+        self.assertEqual("2026-07-09", quote["expiry_date"])
+        self.assertEqual(90000.0, quote["strike"])
+        self.assertNotIn("INSTRUMENT_PARSE_FAILED", quote["quality_flags"])
+
+    def test_malformed_instrument_is_quarantined_not_crashed(self):
+        snapshot = self._base_snapshot()
+        row = copy.deepcopy(snapshot["rows"][0])
+        row["instrument_name"] = "BTC-BADTOKEN-90000-C"
+        row["summary"]["instrument_name"] = "BTC-BADTOKEN-90000-C"
+        row["ticker"]["instrument_name"] = "BTC-BADTOKEN-90000-C"
+        snapshot["rows"] = [row]
+
+        normalized = normalize_market_snapshot(
+            snapshot,
+            now_ms=parse_timestamp_ms(snapshot["captured_at"]),
+        )
+        quote = normalized["quotes"][0]
+        self.assertEqual("invalid", quote["quality_status"])
+        self.assertIn("INSTRUMENT_PARSE_FAILED", quote["quality_flags"])
+
+    def test_missing_vol_index_blocks_market_validation(self):
+        snapshot = self._base_snapshot()
+        snapshot.pop("feeds", None)
+
+        status = build_market_data_status(
+            snapshot,
+            now_ms=parse_timestamp_ms(snapshot["captured_at"]),
+        )
+        self.assertEqual("blocked", status["status"])
+        self.assertIn("REQUIRED_FEED_MISSING", status["quality_gate"]["reason_codes"])
+        self.assertIn("VOL_INDEX_MISSING", status["quality_gate"]["reason_codes"])
+
+    def test_http_query_rejects_ssrf_base_url_and_path_escape(self):
+        with self.assertRaisesRegex(ValueError, "deribit_base_url"):
+            _report_from_query("live_deribit=1&deribit_base_url=http://127.0.0.1:9")
+        with self.assertRaisesRegex(ValueError, "snapshot_fixture"):
+            _report_from_query("snapshot_fixture=C:/Windows/win.ini")
+        with self.assertRaisesRegex(ValueError, "allowlist"):
+            validate_deribit_base_url("https://evil.example")
+        # Local fixture inside repo remains loadable without HTTP sandbox.
+        report = build_api_report(
+            snapshot_fixture=str(FIXTURES / "deribit_btc_option_chain_snapshot.json"),
+            generated_at="2026-07-07T00:01:30Z",
+        )
+        self.assertEqual("research_report.v1", report["schema_version"])
+
+    def test_http_live_limit_is_validated_before_any_network_call(self):
+        with patch("crypto_options_report.api.fetch_deribit_option_chain_snapshot") as fetch:
+            with self.assertRaisesRegex(ValueError, ">= 1"):
+                _report_from_query(
+                    "live_deribit=1&instrument_limit=-1",
+                    runtime=RuntimeConfig(
+                        profile="development",
+                        allow_live_fetch=True,
+                    ),
+                )
+        fetch.assert_not_called()
 
     def _base_snapshot(self):
         return json.loads((FIXTURES / "deribit_btc_option_chain_snapshot.json").read_text())

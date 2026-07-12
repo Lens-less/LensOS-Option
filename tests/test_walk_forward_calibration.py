@@ -43,7 +43,8 @@ class WalkForwardCalibrationTests(unittest.TestCase):
         self.assertGreater(report["collinearity"]["ev_vrp_correlation"], 0.8)
         self.assertGreater(report["collinearity"]["ev_vrp_vif"], 1.0)
         self.assertIn(report["collinearity"]["action"], {"residualize_vrp", "drop_vrp"})
-        self.assertEqual("calibrated", report["score"]["status"])
+        self.assertEqual("research_fixture_uncalibrated", report["score"]["status"])
+        self.assertEqual("research_fixture", report["status"])
         self.assertEqual(
             report["score"]["train_distribution_percentile"],
             report["score"]["score"],

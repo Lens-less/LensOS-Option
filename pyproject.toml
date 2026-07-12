@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-options-research-console"
+version = "0.1.0"
+description = "Fail-closed crypto options research console"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+[project.scripts]
+crypto-options-report = "crypto_options_report.cli:main"
+crypto-options-report-api = "crypto_options_report.api:main"
+
+[tool.setuptools.packages.find]
+include = ["crypto_options_report*"]
+
+[tool.setuptools.package-data]
+crypto_options_report = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

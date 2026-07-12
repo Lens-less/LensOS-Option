@@ -1,0 +1,17 @@
+.git
+.github
+.codex
+.omx
+.pytest_cache
+.workflow
+artifacts
+build
+dist
+docs
+issues
+tests
+tools
+**/__pycache__
+*.py[cod]
+*.log
+.env*

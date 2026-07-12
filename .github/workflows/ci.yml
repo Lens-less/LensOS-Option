@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      - run: python -m compileall -q crypto_options_report tools
+      - run: python -m pytest -q
+      - run: python -m crypto_options_report.api --smoke
+      - run: python -m pip wheel --no-deps . -w dist
+      - name: Verify built wheel on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python -m venv wheel-venv
+          wheel-venv/bin/python -m pip install --no-deps dist/*.whl
+          wheel-venv/bin/python -m pip check
+          wheel-venv/bin/crypto-options-report --help >/dev/null
+          wheel-venv/bin/crypto-options-report-api --smoke >/dev/null
+      - name: Verify built wheel on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv wheel-venv
+          $wheel = (Get-ChildItem -LiteralPath dist -Filter *.whl -File -ErrorAction Stop).FullName
+          wheel-venv\Scripts\python.exe -m pip install --no-deps $wheel
+          wheel-venv\Scripts\python.exe -m pip check
+          wheel-venv\Scripts\crypto-options-report.exe --help | Out-Null
+          wheel-venv\Scripts\crypto-options-report-api.exe --smoke | Out-Null
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux' && matrix.python-version == '3.13'
+        with:
+          name: python-wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --tag crypto-options-research-console:ci .
+      - name: Verify production container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --name crypto-options-research-console-ci \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --publish 127.0.0.1:18000:8000 \
+            crypto-options-research-console:ci
+          trap 'docker logs crypto-options-research-console-ci; docker rm --force crypto-options-research-console-ci' EXIT
+
+          ready=false
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:18000/readyz >ready.json; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+          python - <<'PY'
+          import json
+
+          with open("ready.json", encoding="utf-8") as handle:
+              ready = json.load(handle)
+          assert ready == {
+              "live_order_adapter_available": False,
+              "product_release": "NO-GO",
+              "research_only": True,
+              "runtime_profile": "production",
+              "service_ready": True,
+          }
+          PY
+          curl --fail --silent --show-error http://127.0.0.1:18000/dashboard.html >/dev/null
+          healthy=false
+          for attempt in {1..45}; do
+            health="$(docker inspect --format='{{.State.Health.Status}}' crypto-options-research-console-ci)"
+            if test "$health" = healthy; then
+              healthy=true
+              break
+            fi
+            test "$health" != unhealthy
+            sleep 1
+          done
+          test "$healthy" = true

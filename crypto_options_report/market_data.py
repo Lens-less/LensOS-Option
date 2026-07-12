@@ -7,12 +7,21 @@ from datetime import datetime, timezone
 import json
 from math import isfinite
 from pathlib import Path
+import re
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from .storage import atomic_write_json
+
 DEFAULT_DERIBIT_BASE_URL = "https://www.deribit.com"
+ALLOWED_DERIBIT_BASE_URLS = frozenset(
+    {
+        "https://www.deribit.com",
+        "https://test.deribit.com",
+    }
+)
 DEFAULT_QUALITY_LIMITS = {
     "market_data_max_age_sec": 60,
     "stale_quote_max_sec": 120,
@@ -20,6 +29,11 @@ DEFAULT_QUALITY_LIMITS = {
     "max_bad_quote_ratio_per_expiry": 0.25,
     "max_spread_ratio": 0.50,
 }
+HTTP_MAX_INSTRUMENT_LIMIT = 50
+INSTRUMENT_RE = re.compile(
+    r"^(?P<base>[A-Z0-9]+)-(?P<day>\d{1,2})(?P<month>[A-Z]{3})(?P<year>\d{2})-"
+    r"(?P<strike>\d+(?:\.\d+)?)-(?P<option>[CP])$"
+)
 
 PUBLIC_FEED_CONTRACTS = {
     "option_chain": "required",
@@ -93,16 +107,60 @@ def parse_timestamp_ms(value: str | int | float | None) -> int:
     )
 
 
-def load_snapshot_fixture(path: str | Path) -> dict[str, Any]:
-    fixture_path = Path(path)
+def resolve_snapshot_fixture_path(
+    path: str | Path,
+    *,
+    allowed_roots: Iterable[str | Path] | None = None,
+) -> Path:
+    """Resolve a snapshot fixture path, optionally confining it to allowed roots."""
+    fixture_path = Path(path).expanduser()
+    if not fixture_path.is_absolute():
+        fixture_path = (Path.cwd() / fixture_path).resolve()
+    else:
+        fixture_path = fixture_path.resolve()
+
+    if allowed_roots is not None:
+        roots = [Path(root).expanduser().resolve() for root in allowed_roots]
+        if not any(_is_relative_to(fixture_path, root) for root in roots):
+            raise ValueError("snapshot_fixture path escapes allowed fixture roots")
+    return fixture_path
+
+
+def default_http_fixture_roots() -> list[Path]:
+    """Default roots for HTTP-served snapshot fixtures (repo-local only)."""
+    package_root = Path(__file__).resolve().parents[1]
+    return [
+        package_root / "tests" / "fixtures",
+        package_root / "crypto_options_report",
+    ]
+
+
+def load_snapshot_fixture(
+    path: str | Path,
+    *,
+    allowed_roots: Iterable[str | Path] | None = None,
+) -> dict[str, Any]:
+    fixture_path = resolve_snapshot_fixture_path(path, allowed_roots=allowed_roots)
     payload = json.loads(fixture_path.read_text(encoding="utf-8"))
     if "rows" not in payload:
-        raise ValueError(f"snapshot fixture {fixture_path} is missing rows")
+        raise ValueError("snapshot fixture is missing rows")
     payload.setdefault("source", f"fixture:{fixture_path.name}")
     payload.setdefault("currency", "BTC")
     if "captured_at" not in payload:
-        raise ValueError(f"snapshot fixture {fixture_path} is missing captured_at")
+        raise ValueError("snapshot fixture is missing captured_at")
     return payload
+
+
+def validate_deribit_base_url(base_url: str) -> str:
+    """Allow only known Deribit public HTTPS endpoints (anti-SSRF)."""
+    normalized = (base_url or "").strip().rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("deribit_base_url must be an https URL from the allowlist")
+    candidate = f"{parsed.scheme}://{parsed.netloc}"
+    if candidate not in ALLOWED_DERIBIT_BASE_URLS:
+        raise ValueError("deribit_base_url is not in the allowlist")
+    return candidate
 
 
 def load_public_replay_fixture(
@@ -153,75 +211,145 @@ def fetch_deribit_option_chain_snapshot(
     instrument_limit: int | None = None,
     timeout: int = 20,
 ) -> dict[str, Any]:
+    """Fetch a live public option-chain snapshot, always returning a structured payload.
+
+    Network, JSON-RPC envelope, schema, and ticker failures are mapped into
+    ``fetch_errors`` / ``adapter_events`` instead of raising, so research reports
+    stay fail-closed rather than crashing mid-pipeline.
+    """
+    safe_base = validate_deribit_base_url(base_url)
     captured_at = utc_timestamp()
-    summaries = _get_json(
-        f"{base_url.rstrip('/')}/api/v2/public/get_book_summary_by_currency",
-        {"currency": currency, "kind": "option"},
-        timeout=timeout,
-    )["result"]
-    summaries = sorted(
-        (row for row in summaries if _looks_like_option(row.get("instrument_name"))),
-        key=lambda row: row["instrument_name"],
-    )
+    errors: list[str] = []
+    adapter_events: list[dict[str, Any]] = []
+    summaries: list[dict[str, Any]] = []
+
+    try:
+        payload = _get_json(
+            f"{safe_base}/api/v2/public/get_book_summary_by_currency",
+            {"currency": currency, "kind": "option"},
+            timeout=timeout,
+        )
+        result = _jsonrpc_result(payload, endpoint="get_book_summary_by_currency")
+        if not isinstance(result, list):
+            raise ValueError("book summary result must be a list")
+        summaries = sorted(
+            (
+                row
+                for row in result
+                if isinstance(row, dict) and _looks_like_option(row.get("instrument_name"))
+            ),
+            key=lambda row: str(row.get("instrument_name") or ""),
+        )
+    except ValueError as exc:
+        message = str(exc)
+        errors.append(f"book_summary: {message}")
+        adapter_events.append(_adapter_event_from_error(message))
+    summaries = []
+
     if instrument_limit is not None:
-        summaries = summaries[: max(0, instrument_limit)]
+        summaries = summaries[: max(0, int(instrument_limit))]
 
     tickers: dict[str, Any] = {}
-    errors: list[str] = []
-    adapter_events: list[dict[str, str]] = []
     max_workers = max(1, min(8, len(summaries) or 1))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(
-                _get_json,
-                f"{base_url.rstrip('/')}/api/v2/public/ticker",
-                {"instrument_name": row["instrument_name"]},
-                timeout,
-            ): row["instrument_name"]
-            for row in summaries
-        }
-        for future in as_completed(futures):
-            instrument_name = futures[future]
-            try:
-                tickers[instrument_name] = future.result()["result"]
-            except ValueError as exc:
-                errors.append(f"{instrument_name}: {exc}")
+    if summaries:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(
+                    _get_json,
+                    f"{safe_base}/api/v2/public/ticker",
+                    {"instrument_name": row["instrument_name"]},
+                    timeout,
+                ): row["instrument_name"]
+                for row in summaries
+            }
+            for future in as_completed(futures):
+                instrument_name = futures[future]
+                try:
+                    ticker_payload = future.result()
+                    tickers[instrument_name] = _jsonrpc_result(
+                        ticker_payload,
+                        endpoint=f"ticker:{instrument_name}",
+                    )
+                except (ValueError, TypeError, KeyError) as exc:
+                    errors.append(f"{instrument_name}: {exc}")
 
-    rows = [
-        {
-            "summary": row,
-            "ticker": tickers.get(row["instrument_name"]),
-            "instrument_name": row["instrument_name"],
-        }
-        for row in summaries
-    ]
+    instrument_meta: dict[str, dict[str, Any]] = {}
+    if summaries:
+        try:
+            instrument_meta = _fetch_option_instrument_metadata(
+                safe_base,
+                currency=currency,
+                timeout=timeout,
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            message = f"instruments: {exc}"
+            errors.append(message)
+            adapter_events.append(_adapter_event_from_error(message))
+
+    rows = []
+    for row in summaries:
+        instrument_name = row.get("instrument_name")
+        summary = dict(row)
+        meta = instrument_meta.get(str(instrument_name) if instrument_name else "")
+        if meta:
+            # Only apply explicit settlement_currency from the venue instrument
+            # registry. Never infer from quote_currency (would fake product units).
+            if summary.get("settlement_currency") in (None, ""):
+                if meta.get("settlement_currency"):
+                    summary["settlement_currency"] = meta["settlement_currency"]
+                    summary["settlement_currency_source"] = "explicit_settlement_currency"
+            if summary.get("quote_currency") in (None, ""):
+                if meta.get("quote_currency"):
+                    summary["quote_currency"] = meta["quote_currency"]
+            if summary.get("base_currency") in (None, ""):
+                if meta.get("base_currency"):
+                    summary["base_currency"] = meta["base_currency"]
+            summary.setdefault("instrument_metadata_source", "public/get_instruments")
+        rows.append(
+            {
+                "summary": summary,
+                "ticker": tickers.get(row["instrument_name"]),
+                "instrument_name": row["instrument_name"],
+            }
+        )
+
     feeds: dict[str, Any] = {}
     try:
-        feeds["vol_index"] = _fetch_vol_index_feed(
-            base_url.rstrip("/"),
+        vol_index = _fetch_vol_index_feed(
+            safe_base,
             currency=currency,
             timeout=timeout,
             captured_at=captured_at,
         )
+        feeds["vol_index"] = vol_index
     except (ValueError, TypeError, KeyError, OSError, OverflowError) as exc:
         message = f"vol_index: {exc}"
         errors.append(message)
-        adapter_events.append(
-            {
-                "class": "schema_drift",
-                "message": message,
-                "source": "live_public_deribit",
-            }
-        )
+        adapter_events.append(_adapter_event_from_error(message))
+
     return {
         "captured_at": captured_at,
         "currency": currency,
-        "source": f"deribit_live:{base_url.rstrip('/')}",
+        "source": f"deribit_live:{safe_base}",
         "rows": rows,
         "fetch_errors": errors,
         "adapter_events": adapter_events,
         "feeds": feeds,
+        "instrument_metadata_count": len(instrument_meta),
     }
+
+
+def write_snapshot_fixture(path: str | Path, snapshot: dict[str, Any]) -> Path:
+    """Persist a market snapshot JSON for reproducible offline analysis."""
+    target = Path(path).expanduser()
+    if not target.is_absolute():
+        target = (Path.cwd() / target).resolve()
+    else:
+        target = target.resolve()
+    payload = dict(snapshot)
+    payload.setdefault("captured_at", utc_timestamp())
+    payload.setdefault("source", payload.get("source") or "snapshot_write")
+    return atomic_write_json(target, payload)
 
 
 def build_market_data_status(
@@ -317,6 +445,19 @@ def evaluate_market_data_quality(
     if normalized_snapshot.get("fetch_errors"):
         overall_reason_codes.append("PUBLIC_FETCH_ERRORS_PRESENT")
 
+    feed_coverage = _feed_coverage(normalized_snapshot)
+    missing_required = list(feed_coverage.get("missing_required_feeds") or [])
+    if missing_required:
+        overall_reason_codes.append("REQUIRED_FEED_MISSING")
+        vol_status = (response_contract.get("endpoints") or {}).get("vol_index") or {}
+        vol_reason = vol_status.get("reason_code")
+        if vol_reason and vol_reason not in overall_reason_codes:
+            overall_reason_codes.append(vol_reason)
+
+    fetch_errors = list(normalized_snapshot.get("fetch_errors") or [])
+    if fetch_errors:
+        overall_reason_codes.append("PUBLIC_FETCH_ERRORS_PRESENT")
+
     for expiry_date in sorted(quotes_by_expiry):
         expiry_quotes = quotes_by_expiry[expiry_date]
         invalid_quotes = [q for q in expiry_quotes if q["quality_status"] != "valid"]
@@ -410,7 +551,17 @@ def _normalize_quote_row(
         or ticker.get("instrument_name")
         or summary.get("instrument_name")
     )
-    metadata = _parse_option_metadata(instrument_name)
+    parse_error: str | None = None
+    try:
+        metadata = _parse_option_metadata(instrument_name)
+    except ValueError as exc:
+        parse_error = str(exc)
+        metadata = {
+            "base_currency": summary.get("base_currency") or "BTC",
+            "expiry_date": "1970-01-01",
+            "strike": None,
+            "option_type": "unknown",
+        }
     bid = _first_number(ticker.get("best_bid_price"), summary.get("bid_price"))
     ask = _first_number(ticker.get("best_ask_price"), summary.get("ask_price"))
     mid = _first_number(
@@ -477,8 +628,12 @@ def _normalize_quote_row(
         metadata=metadata,
     )
     flags = _quality_flags(quote, limits)
+    if parse_error:
+        flags = sorted(set(flags).union({"MISSING_CANONICAL_METADATA", "INSTRUMENT_PARSE_FAILED"}))
     quote["quality_flags"] = flags
     quote["quality_status"] = "valid" if not flags else "invalid"
+    if parse_error:
+        quote["parse_error"] = parse_error
     return quote
 
 
@@ -751,83 +906,6 @@ def _quality_flags(quote: dict[str, Any], limits: dict[str, float]) -> list[str]
     return sorted(set(flag for flag in flags if flag in BLOCKING_QUALITY_FLAGS))
 
 
-def _coerce_vol_index_timestamp_ms(value: Any) -> int:
-    if isinstance(value, bool) or (
-        isinstance(value, float) and (not isfinite(value) or not value.is_integer())
-    ):
-        raise ValueError("volatility index timestamp is not integer-like")
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("volatility index timestamp is not integer-like") from exc
-
-
-def _fetch_vol_index_feed(
-    base_url: str,
-    *,
-    currency: str,
-    timeout: int,
-    captured_at: str,
-) -> dict[str, Any]:
-    captured_ms = parse_timestamp_ms(captured_at)
-    payload = _get_json(
-        f"{base_url}/api/v2/public/get_volatility_index_data",
-        {
-            "currency": currency,
-            "resolution": 3600,
-            "start_timestamp": max(0, captured_ms - 2 * 60 * 60 * 1000),
-            "end_timestamp": captured_ms,
-        },
-        timeout=timeout,
-    )
-    result = payload["result"]
-    data_rows = result.get("data") if isinstance(result, dict) else result
-    if not isinstance(data_rows, list) or not data_rows:
-        raise ValueError("empty volatility index data")
-
-    last = data_rows[-1]
-    if isinstance(last, (list, tuple)) and len(last) >= 5:
-        if last[0] is None:
-            raise ValueError("volatility index row missing timestamp")
-        timestamp_ms = _coerce_vol_index_timestamp_ms(last[0])
-        volatility = _to_number(last[4])
-    elif isinstance(last, dict):
-        raw_timestamp = last.get("timestamp")
-        if raw_timestamp is None:
-            raw_timestamp = last.get("t")
-        if raw_timestamp is None:
-            raise ValueError("volatility index dict row missing timestamp")
-        timestamp_ms = _coerce_vol_index_timestamp_ms(raw_timestamp)
-        volatility = _first_number(
-            last.get("close"),
-            last.get("volatility"),
-            last.get("value"),
-        )
-    else:
-        raise ValueError("unrecognized volatility index row shape")
-
-    if volatility is None or volatility <= 0:
-        raise ValueError("invalid volatility index value")
-    try:
-        timestamp = (
-            datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
-    except (OverflowError, OSError, ValueError) as exc:
-        raise ValueError("volatility index timestamp is out of range") from exc
-
-    return {
-        "index_name": f"{currency} DVOL",
-        "currency": currency,
-        "timestamp": timestamp,
-        "volatility": volatility / 100.0 if volatility > 5.0 else volatility,
-        "source_endpoint": "public/get_volatility_index_data",
-        "raw_close": volatility,
-    }
-
-
 def _get_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
     request = Request(
         f"{url}?{urlencode(params)}",
@@ -848,22 +926,188 @@ def _get_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
 def _parse_option_metadata(instrument_name: str | None) -> dict[str, Any]:
     if not instrument_name:
         raise ValueError("missing instrument_name")
-    parts = instrument_name.split("-")
-    if len(parts) < 4:
+    match = INSTRUMENT_RE.match(str(instrument_name).upper())
+    if match is None:
         raise ValueError(f"unexpected option instrument format: {instrument_name}")
-    expiry_token = parts[1].upper()
-    day = int(expiry_token[:2])
-    month = _MONTHS[expiry_token[2:5]]
-    year = 2000 + int(expiry_token[5:])
-    option_type = {"C": "call", "P": "put"}.get(parts[3].upper(), "unknown")
+    month_token = match.group("month")
+    if month_token not in _MONTHS:
+        raise ValueError(f"unexpected option instrument month: {instrument_name}")
+    day = int(match.group("day"))
+    month = _MONTHS[month_token]
+    year = 2000 + int(match.group("year"))
+    option_type = {"C": "call", "P": "put"}.get(match.group("option"), "unknown")
+    try:
+        expiry_date = datetime(year, month, day, tzinfo=timezone.utc).date().isoformat()
+    except ValueError as exc:
+        raise ValueError(f"invalid option instrument expiry: {instrument_name}") from exc
     return {
-        "base_currency": parts[0],
-        "expiry_date": datetime(year, month, day, tzinfo=timezone.utc)
-        .date()
-        .isoformat(),
-        "strike": _to_number(parts[2]),
+        "base_currency": match.group("base"),
+        "expiry_date": expiry_date,
+        "strike": _to_number(match.group("strike")),
         "option_type": option_type,
     }
+
+
+def _fetch_option_instrument_metadata(
+    base_url: str,
+    *,
+    currency: str,
+    timeout: int,
+) -> dict[str, dict[str, Any]]:
+    payload = _get_json(
+        f"{base_url}/api/v2/public/get_instruments",
+        {"currency": currency, "kind": "option", "expired": "false"},
+        timeout=timeout,
+    )
+    result = _jsonrpc_result(payload, endpoint="get_instruments")
+    if not isinstance(result, list):
+        raise ValueError("get_instruments result must be a list")
+    metadata: dict[str, dict[str, Any]] = {}
+    for item in result:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("instrument_name")
+        if not name or not _looks_like_option(str(name)):
+            continue
+        # Explicit venue settlement only — never quote_currency substitution.
+        settlement_currency = item.get("settlement_currency")
+        if settlement_currency in (None, ""):
+            settlement_currency = None
+        metadata[str(name)] = {
+            "settlement_currency": settlement_currency,
+            "quote_currency": item.get("quote_currency"),
+            "base_currency": item.get("base_currency") or currency,
+            "instrument_type": item.get("instrument_type") or item.get("kind"),
+            "settlement_currency_source": (
+                "explicit_settlement_currency"
+                if settlement_currency is not None
+                else "missing"
+            ),
+            "raw_settlement_period": item.get("settlement_period"),
+        }
+    return metadata
+
+
+def _coerce_vol_index_timestamp_ms(value: Any) -> int:
+    """Return an integer DVOL timestamp without truncating malformed JSON numbers."""
+    if isinstance(value, bool) or (
+        isinstance(value, float) and (not isfinite(value) or not value.is_integer())
+    ):
+        raise ValueError("volatility index timestamp is not integer-like")
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("volatility index timestamp is not integer-like") from exc
+
+
+def _fetch_vol_index_feed(
+    base_url: str,
+    *,
+    currency: str,
+    timeout: int,
+    captured_at: str,
+) -> dict[str, Any]:
+    """Fetch latest DVOL-like volatility index point for required feed coverage."""
+    captured_ms = parse_timestamp_ms(captured_at)
+    # Prefer recent 2h window at 1h resolution; Deribit returns OHLC rows.
+    start_ms = max(0, captured_ms - 2 * 60 * 60 * 1000)
+    payload = _get_json(
+        f"{base_url}/api/v2/public/get_volatility_index_data",
+        {
+            "currency": currency,
+            "resolution": 3600,
+            "start_timestamp": start_ms,
+            "end_timestamp": captured_ms,
+        },
+        timeout=timeout,
+    )
+    result = _jsonrpc_result(payload, endpoint="get_volatility_index_data")
+    data_rows = result.get("data") if isinstance(result, dict) else result
+    if not isinstance(data_rows, list) or not data_rows:
+        raise ValueError("empty volatility index data")
+    last = data_rows[-1]
+    timestamp_ms: int
+    volatility: float | None
+    # Typical row: [timestamp_ms, open, high, low, close]
+    if isinstance(last, (list, tuple)) and len(last) >= 5:
+        if last[0] is None:
+            raise ValueError("volatility index row missing timestamp")
+        timestamp_ms = _coerce_vol_index_timestamp_ms(last[0])
+        volatility = _to_number(last[4])
+    elif isinstance(last, dict):
+        raw_ts = last.get("timestamp")
+        if raw_ts is None:
+            raw_ts = last.get("t")
+        if raw_ts is None:
+            raise ValueError("volatility index dict row missing timestamp")
+        timestamp_ms = _coerce_vol_index_timestamp_ms(raw_ts)
+        volatility = _to_number(
+            last.get("close")
+            or last.get("volatility")
+            or last.get("value")
+        )
+    else:
+        raise ValueError("unrecognized volatility index row shape")
+    if volatility is None or volatility <= 0:
+        raise ValueError("invalid volatility index value")
+    # Deribit DVOL is often percent points (e.g. 55.2); fixtures use 0-1 fractions.
+    normalized = volatility / 100.0 if volatility > 5.0 else float(volatility)
+    index_name = f"{currency} DVOL"
+    try:
+        timestamp = (
+            datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("volatility index timestamp is out of range") from exc
+    return {
+        "index_name": index_name,
+        "currency": currency,
+        "timestamp": timestamp,
+        "volatility": normalized,
+        "source_endpoint": "public/get_volatility_index_data",
+        "raw_close": volatility,
+    }
+
+
+def _jsonrpc_result(payload: Any, *, endpoint: str) -> Any:
+    if not isinstance(payload, dict):
+        raise ValueError(f"{endpoint}: response is not a JSON object")
+    if payload.get("error"):
+        error = payload["error"]
+        if isinstance(error, dict):
+            code = error.get("code")
+            message = error.get("message") or error.get("data") or "rpc error"
+            raise ValueError(f"{endpoint}: rpc error {code}: {message}")
+        raise ValueError(f"{endpoint}: rpc error {error}")
+    if "result" not in payload:
+        raise ValueError(f"{endpoint}: missing result field")
+    return payload["result"]
+
+
+def _adapter_event_from_error(message: str) -> dict[str, Any]:
+    lowered = message.lower()
+    if "429" in lowered or "rate" in lowered:
+        event_class = "rate_limit"
+    elif "network" in lowered or "timed out" in lowered or "timeout" in lowered:
+        event_class = "transient_network"
+    else:
+        event_class = "schema_drift"
+    return {
+        "class": event_class,
+        "message": message,
+        "source": "live_public_deribit",
+    }
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _looks_like_option(instrument_name: str | None) -> bool:

@@ -75,6 +75,38 @@ class PnlEvidenceReportTests(unittest.TestCase):
         self.assertAlmostEqual(-2436.0, trace["unrealized_pnl_usd_shadow"], places=8)
         self.assertEqual("UNBOUNDED", trace["max_loss_state"])
 
+    def test_inverse_delivery_fee_uses_unit_settlement_for_multi_contract(self):
+        # Cap binds on unit settlement (~0.004), not total (0.008).
+        # Correct: min(0.00015, 0.125*0.004) * 2 = 0.0003
+        # Buggy total-as-unit path: min(0.00015, 0.125*0.008) * 2 = 0.0003 same when rate binds.
+        # Use a deep ITM where rate always binds to lock linear scaling, plus a shallow
+        # ITM multi-contract case where the 12.5% cap binds.
+        deep = trace_inverse_short_call(
+            contract_count=2.0,
+            strike_price=100000.0,
+            delivery_price=125000.0,
+            mark_underlying_price=120000.0,
+            entry_option_value_coin=0.05,
+            mark_option_value_coin=0.07,
+        )
+        self.assertAlmostEqual(0.4, deep["settlement_value_coin"], places=8)
+        self.assertAlmostEqual(0.0003, deep["delivery_fee_coin"], places=8)
+
+        shallow = trace_inverse_short_call(
+            contract_count=2.0,
+            strike_price=100000.0,
+            delivery_price=100100.0,
+            mark_underlying_price=100050.0,
+            entry_option_value_coin=0.01,
+            mark_option_value_coin=0.012,
+        )
+        unit_settlement = shallow["settlement_value_coin"] / 2.0
+        expected_delivery = min(0.00015, 0.125 * unit_settlement) * 2.0
+        self.assertAlmostEqual(expected_delivery, shallow["delivery_fee_coin"], places=12)
+        # Guard against the old double-count when the fee cap binds.
+        buggy = min(0.00015, 0.125 * shallow["settlement_value_coin"]) * 2.0
+        self.assertGreater(buggy, shallow["delivery_fee_coin"])
+
     def test_inverse_call_credit_spread_trace_reports_scenario_losses(self):
         trace = trace_inverse_call_credit_spread(
             contract_count=1.0,

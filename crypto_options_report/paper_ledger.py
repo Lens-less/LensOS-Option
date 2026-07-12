@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .storage import atomic_write_json
+
 PAPER_LEDGER_SCHEMA_VERSION = "paper_proposal_ledger_report.v1"
 LEDGER_STATES = ["proposed", "reviewed", "rejected", "expired", "paper_filled"]
 
@@ -318,10 +320,7 @@ def _persist_if_requested(
     ledger["persistence"]["prior_entry_count"] = len(prior_entries)
     ledger["persistence"]["saved_entry_count"] = len(ledger.get("ledger_entries") or [])
     ledger["persistence"]["history_preserved"] = bool(prior_entries)
-    path.write_text(
-        json.dumps(ledger, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    atomic_write_json(path, ledger, trailing_newline=False)
 
 
 def _legs(candidate: dict[str, Any]) -> list[dict[str, Any]]:

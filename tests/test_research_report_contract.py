@@ -438,6 +438,11 @@ class ResearchReportContractTests(unittest.TestCase):
     def test_ev_candidate_scanner_kills_settlement_window_for_short_dated_candidates(self):
         snapshot = self._load_fixture()
         snapshot["captured_at"] = "2026-07-07T07:44:40Z"
+        # Keep required vol_index feed fresh relative to the mutated capture time.
+        feeds = snapshot.setdefault("feeds", {})
+        vol_index = dict(feeds.get("vol_index") or {})
+        vol_index["timestamp"] = "2026-07-07T07:44:30Z"
+        feeds["vol_index"] = vol_index
         for row in snapshot["rows"]:
             row["summary"]["creation_timestamp"] = 1783410280000
             row["ticker"]["timestamp"] = 1783410280000
@@ -448,8 +453,11 @@ class ResearchReportContractTests(unittest.TestCase):
             account_scenario="green",
         )
 
+        self.assertEqual("validated", report["data_status"]["status"])
+        self.assertTrue(report["ev_candidate_scanner"]["ranked_candidates"])
         candidate = report["ev_candidate_scanner"]["ranked_candidates"][0]
         self.assertIn("SETTLEMENT_WINDOW_ACTIVE", candidate["kill_conditions"])
+        self.assertIn("PLACEHOLDER_PATH_RISK", candidate["kill_conditions"])
 
     def test_regime_scores_include_all_issue_008_dimensions(self):
         report = self._report_with_regime_inputs(
