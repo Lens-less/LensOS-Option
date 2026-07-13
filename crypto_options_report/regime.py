@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import isfinite, log
 from typing import Any
 
 
@@ -33,6 +34,8 @@ DEFAULT_REGIME_THRESHOLDS = {
     "naked_permission_min": 0.60,
 }
 
+MIN_ROLLING_REGIME_OBSERVATIONS = 20
+
 _PRIMARY_LABELS = {
     "bear_trend": "Bear Trend",
     "range": "Range",
@@ -62,7 +65,39 @@ def build_regime_permission_state(
             account_trade_gate="NO_TRADE",
         )
 
+    current_measurements = _current_market_measurements(
+        market_snapshot,
+        vol_surface_status,
+    )
     raw_inputs = market_snapshot.get("regime_inputs") or {}
+    explicit_regime_inputs_present = bool(raw_inputs)
+    score_source = "explicit_regime_inputs"
+    observation_count = 0
+    percentile_source_override: str | None = None
+    if not raw_inputs and not _is_fixture_snapshot(market_snapshot):
+        rolling_observations = _rolling_market_observations(market_snapshot)
+        observation_count = len(rolling_observations)
+        derived_inputs, missing_reasons = _derive_rolling_regime_inputs(
+            observations=rolling_observations,
+            current=current_measurements,
+            trust_status=str(
+                (market_snapshot.get("trust_evidence") or {}).get("status") or ""
+            ),
+        )
+        if derived_inputs is None:
+            return _collecting_permission_state(
+                reason_codes=missing_reasons,
+                current_measurements=current_measurements,
+                observation_count=observation_count,
+            )
+        raw_inputs = derived_inputs
+        score_source = "rolling_evidence"
+        percentile_source_override = "rolling_evidence"
+    elif not raw_inputs:
+        # Historical unit fixtures predate rolling evidence. Keep them useful for
+        # deterministic contract tests, but label the synthetic compatibility
+        # path so it can never be mistaken for live regime evidence.
+        score_source = "fixture_compatibility"
     percentiles, percentile_provenance = _resolve_volatility_percentiles(
         raw_inputs,
         vol_surface_status,
@@ -103,9 +138,11 @@ def build_regime_permission_state(
     )
     scores["data_quality"] = 0.0 if data_status.get("status") == "validated" else 1.0
     input_provenance = {
-        "regime_inputs_present": bool(raw_inputs),
+        "regime_inputs_present": explicit_regime_inputs_present,
         "defaults_applied": defaults_applied,
-        "percentile_source": percentile_provenance,
+        "percentile_source": percentile_source_override or percentile_provenance,
+        "score_source": score_source,
+        "observation_count": observation_count,
         "synthetic_inputs": bool(defaults_applied)
         or percentile_provenance == "surface_iv_fallback",
     }
@@ -147,6 +184,7 @@ def build_regime_permission_state(
 
     return {
         "status": "validated",
+        "collection_status": "ready",
         "sell_permission": sell_permission,
         "naked_permission": naked_permission,
         "spread_permission": spread_permission,
@@ -161,6 +199,7 @@ def build_regime_permission_state(
         "reason_codes": reason_codes,
         "regime_scores": scores,
         "volatility_inputs": percentiles,
+        "current_measurements": current_measurements,
         "input_provenance": input_provenance,
         "ignored_inputs": ignored_inputs,
         "cap_details": cap_details,
@@ -175,6 +214,7 @@ def _blocked_permission_state(
 ) -> dict[str, Any]:
     return {
         "status": "blocked",
+        "collection_status": "unavailable",
         "sell_permission": 0.0,
         "naked_permission": False,
         "spread_permission": False,
@@ -201,10 +241,20 @@ def _blocked_permission_state(
             "dvol_percentile": 0.0,
             "atm_iv_percentile": 0.0,
         },
+        "current_measurements": {
+            "index_price": None,
+            "funding_rate": None,
+            "basis_rate": None,
+            "dvol": None,
+            "atm_iv": None,
+            "event_score": None,
+        },
         "input_provenance": {
             "regime_inputs_present": False,
             "defaults_applied": [],
             "percentile_source": "unavailable",
+            "score_source": "unavailable",
+            "observation_count": 0,
             "synthetic_inputs": True,
         },
         "ignored_inputs": [],
@@ -220,6 +270,302 @@ def _blocked_permission_state(
             }
         ],
     }
+
+
+def _collecting_permission_state(
+    *,
+    reason_codes: list[str],
+    current_measurements: dict[str, float | None],
+    observation_count: int,
+) -> dict[str, Any]:
+    codes = _unique_codes(
+        ["REGIME_ROLLING_HISTORY_INSUFFICIENT", *reason_codes]
+    )
+    state = _blocked_permission_state(
+        reason_codes=codes,
+        account_margin_light="HALT",
+        account_trade_gate="NO_TRADE",
+    )
+    state["collection_status"] = "collecting"
+    state["primary_regime_label"] = "Collecting"
+    state["current_measurements"] = current_measurements
+    state["volatility_inputs"] = {
+        # Numeric sentinels preserve the downstream research-report schema; the
+        # explicit measurement_status prevents them being presented as ranks.
+        "dvol_percentile": 0.0,
+        "atm_iv_percentile": 0.0,
+        "measurement_status": "collecting",
+    }
+    state["input_provenance"] = {
+        "regime_inputs_present": False,
+        "defaults_applied": [],
+        "percentile_source": "collecting",
+        "score_source": "collecting",
+        "observation_count": observation_count,
+        "required_observation_count": MIN_ROLLING_REGIME_OBSERVATIONS,
+        "synthetic_inputs": False,
+    }
+    return state
+
+
+def _is_fixture_snapshot(market_snapshot: dict[str, Any]) -> bool:
+    return str(market_snapshot.get("source") or "").lower().startswith("fixture:")
+
+
+def _current_market_measurements(
+    market_snapshot: dict[str, Any],
+    vol_surface_status: dict[str, Any],
+) -> dict[str, float | None]:
+    feeds = market_snapshot.get("feeds") or {}
+    index_spot = feeds.get("index_spot") or {}
+    funding_basis = feeds.get("funding_basis") or {}
+    vol_index = feeds.get("vol_index") or {}
+    events = feeds.get("events")
+    return {
+        "index_price": _numeric_value(
+            index_spot,
+            "index_price",
+            aliases=("price",),
+        ),
+        "funding_rate": _numeric_value(
+            funding_basis,
+            "funding_rate",
+            aliases=("current_funding_rate",),
+        ),
+        "basis_rate": _numeric_value(
+            funding_basis,
+            "basis_rate",
+            aliases=("basis",),
+        ),
+        "dvol": _fraction_value(
+            vol_index,
+            "volatility",
+            aliases=("dvol", "value"),
+        ),
+        "atm_iv": _current_atm_iv(vol_surface_status),
+        "event_score": _exchange_event_score(events),
+    }
+
+
+def _rolling_market_observations(
+    market_snapshot: dict[str, Any],
+) -> list[dict[str, float | None]]:
+    evidence = market_snapshot.get("trust_evidence") or {}
+    candidates: Any = evidence.get("rolling_observations")
+    if candidates is None:
+        rolling = evidence.get("rolling")
+        if isinstance(rolling, list):
+            candidates = rolling
+        elif isinstance(rolling, dict):
+            candidates = (
+                rolling.get("observations")
+                or rolling.get("samples")
+                or rolling.get("history")
+            )
+    if candidates is None:
+        candidates = evidence.get("observations") or evidence.get("history")
+    if not isinstance(candidates, list):
+        return []
+
+    normalized: list[dict[str, float | None]] = []
+    for observation in candidates:
+        if not isinstance(observation, dict):
+            continue
+        normalized.append(
+            {
+                "index_price": _numeric_value(
+                    observation,
+                    "index_price",
+                    aliases=("price", "spot"),
+                ),
+                "dvol": _fraction_value(
+                    observation,
+                    "dvol",
+                    aliases=("volatility", "dvol_value"),
+                ),
+                "atm_iv": _fraction_value(
+                    observation,
+                    "atm_iv",
+                    aliases=("atm_iv_percent", "surface_atm_iv"),
+                ),
+                "funding_rate": _numeric_value(
+                    observation,
+                    "funding_rate",
+                    aliases=("current_funding_rate",),
+                ),
+                "basis_rate": _numeric_value(
+                    observation,
+                    "basis_rate",
+                    aliases=("basis",),
+                ),
+            }
+        )
+    return normalized
+
+
+def _derive_rolling_regime_inputs(
+    *,
+    observations: list[dict[str, float | None]],
+    current: dict[str, float | None],
+    trust_status: str,
+) -> tuple[dict[str, float] | None, list[str]]:
+    reasons: list[str] = []
+    if trust_status.lower() not in {"promoted", "trusted", "pass"}:
+        reasons.append("REGIME_TRUST_EVIDENCE_NOT_PROMOTED")
+    if len(observations) < MIN_ROLLING_REGIME_OBSERVATIONS:
+        reasons.append("REGIME_MIN_OBSERVATIONS_NOT_MET")
+
+    required_current = (
+        "index_price",
+        "funding_rate",
+        "basis_rate",
+        "dvol",
+        "atm_iv",
+        "event_score",
+    )
+    missing_current = [key for key in required_current if current.get(key) is None]
+    if missing_current:
+        reasons.append("REGIME_CURRENT_FEEDS_INCOMPLETE")
+
+    history_fields = ("index_price", "dvol", "atm_iv")
+    if any(
+        sum(observation.get(field) is not None for observation in observations)
+        < MIN_ROLLING_REGIME_OBSERVATIONS
+        for field in history_fields
+    ):
+        reasons.append("REGIME_ROLLING_FIELDS_INCOMPLETE")
+    positive_history_fields = ("index_price", "dvol", "atm_iv")
+    if any(
+        observation.get(field) is not None
+        and float(observation[field]) <= 0.0
+        for observation in observations
+        for field in positive_history_fields
+    ) or any(
+        current.get(field) is not None and float(current[field]) <= 0.0
+        for field in positive_history_fields
+    ):
+        reasons.append("REGIME_ROLLING_VALUES_INVALID")
+    if reasons:
+        return None, reasons
+
+    prices = [
+        float(observation["index_price"])
+        for observation in observations
+        if observation.get("index_price") is not None
+    ]
+    dvol_history = [
+        float(observation["dvol"])
+        for observation in observations
+        if observation.get("dvol") is not None
+    ]
+    atm_iv_history = [
+        float(observation["atm_iv"])
+        for observation in observations
+        if observation.get("atm_iv") is not None
+    ]
+    current_price = float(current["index_price"])
+    current_dvol = float(current["dvol"])
+    current_atm_iv = float(current["atm_iv"])
+    funding_rate = float(current["funding_rate"])
+    basis_rate = float(current["basis_rate"])
+
+    full_return = log(current_price / prices[0])
+    recent_anchor = prices[max(0, len(prices) - 5)]
+    recent_return = log(current_price / recent_anchor)
+    observed_range = (max(prices + [current_price]) - min(prices + [current_price])) / current_price
+    dvol_percentile = _empirical_percentile(current_dvol, dvol_history)
+    atm_iv_percentile = _empirical_percentile(current_atm_iv, atm_iv_history)
+    dvol_change = current_dvol - dvol_history[-1]
+
+    positive_carry = max(basis_rate, 0.0) * 20.0 + max(funding_rate, 0.0) * 200.0
+    negative_carry = max(-basis_rate, 0.0) * 20.0 + max(-funding_rate, 0.0) * 200.0
+    return (
+        {
+            "bear_trend_score": _clamp01(max(-full_return, 0.0) * 12.0 + negative_carry),
+            "range_score": _clamp01(1.0 - min(abs(full_return) * 8.0 + observed_range * 4.0, 1.0)),
+            "squeeze_score": _clamp01(
+                (1.0 - dvol_percentile) * 0.55
+                + (1.0 - atm_iv_percentile) * 0.45
+            ),
+            "slow_bull_score": _clamp01(max(full_return, 0.0) * 12.0 + positive_carry),
+            "fast_bull_breakout_score": _clamp01(
+                max(recent_return, 0.0) * 20.0 + max(dvol_change, 0.0) * 4.0
+            ),
+            "event_score": _clamp01(float(current["event_score"])),
+            "dvol_percentile": dvol_percentile,
+            "atm_iv_percentile": atm_iv_percentile,
+        },
+        [],
+    )
+
+
+def _current_atm_iv(vol_surface_status: dict[str, Any]) -> float | None:
+    points = [
+        point
+        for expiry in vol_surface_status.get("expiries", [])
+        for point in expiry.get("surface_points", [])
+        if isinstance(point.get("surface_fitted_iv"), (int, float))
+        and isinstance(point.get("strike_price"), (int, float))
+        and isinstance(point.get("underlying_price"), (int, float))
+    ]
+    if not points:
+        return None
+    nearest = min(
+        points,
+        key=lambda point: abs(float(point["strike_price"]) - float(point["underlying_price"])),
+    )
+    value = float(nearest["surface_fitted_iv"])
+    return value / 100.0 if value > 5.0 else value
+
+
+def _exchange_event_score(events: Any) -> float | None:
+    if not isinstance(events, dict):
+        return None
+    if events.get("exchange_locked") is True:
+        return 1.0
+    if events.get("locked_currencies") or events.get("locked_indices"):
+        return 0.8
+    macro_events = events.get("macro_events")
+    if isinstance(macro_events, list) and macro_events:
+        severities = [
+            _numeric_value(event, "severity", aliases=("score",))
+            for event in macro_events
+            if isinstance(event, dict)
+        ]
+        measured = [value for value in severities if value is not None]
+        return _clamp01(max(measured)) if measured else None
+    return 0.0
+
+
+def _empirical_percentile(current: float, history: list[float]) -> float:
+    return _clamp01(sum(value <= current for value in history) / len(history))
+
+
+def _numeric_value(
+    payload: dict[str, Any],
+    primary: str,
+    *,
+    aliases: tuple[str, ...],
+) -> float | None:
+    for key in (primary, *aliases):
+        value = payload.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+            if isfinite(numeric):
+                return numeric
+    return None
+
+
+def _fraction_value(
+    payload: dict[str, Any],
+    primary: str,
+    *,
+    aliases: tuple[str, ...],
+) -> float | None:
+    value = _numeric_value(payload, primary, aliases=aliases)
+    if value is None:
+        return None
+    return value / 100.0 if value > 5.0 else value
 
 
 def _resolve_volatility_percentiles(

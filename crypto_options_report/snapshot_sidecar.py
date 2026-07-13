@@ -13,6 +13,7 @@ from typing import Any, Sequence
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     DEFAULT_TICKER_REQUEST_BUDGET,
+    advance_trust_evidence,
     fetch_deribit_option_chain_snapshot,
     utc_timestamp,
     validate_deribit_base_url,
@@ -40,6 +41,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_REFRESH_INTERVAL_SECONDS,
         help="seconds between completed refresh attempts (default: 10)",
+    )
+    parser.add_argument(
+        "--complete-feed-graph",
+        action="store_true",
+        help=(
+            "collect the bounded order-book, index, funding/basis, and "
+            "exchange-health feeds and persist rolling trust evidence"
+        ),
     )
     parser.add_argument(
         "--instrument-limit",
@@ -79,6 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     currency=currency,
                     base_url=base_url,
                     instrument_limit=instrument_limit,
+                    complete_feed_graph=bool(args.complete_feed_graph),
                 )
             except Exception as exc:  # noqa: BLE001 - fail closed and retry
                 _log_json(
@@ -113,12 +123,22 @@ def _refresh_once(
     currency: str,
     base_url: str,
     instrument_limit: int,
+    complete_feed_graph: bool = False,
 ) -> None:
-    snapshot = fetch_deribit_option_chain_snapshot(
-        currency=currency,
-        base_url=base_url,
-        instrument_limit=instrument_limit,
-    )
+    fetch_kwargs = {
+        "currency": currency,
+        "base_url": base_url,
+        "instrument_limit": instrument_limit,
+    }
+    if complete_feed_graph:
+        fetch_kwargs["include_feed_graph"] = True
+    snapshot = fetch_deribit_option_chain_snapshot(**fetch_kwargs)
+    if complete_feed_graph:
+        previous_snapshot = _read_previous_snapshot(output)
+        snapshot["trust_evidence"] = advance_trust_evidence(
+            snapshot,
+            previous_snapshot=previous_snapshot,
+        )
     written = write_snapshot_fixture(output, snapshot)
     _log_json(
         "market_snapshot_written",
@@ -132,7 +152,24 @@ def _refresh_once(
         row_count=len(snapshot.get("rows") or []),
         fetch_error_count=len(snapshot.get("fetch_errors") or []),
         adapter_event_count=len(snapshot.get("adapter_events") or []),
+        feed_graph_complete=(snapshot.get("trust_evidence") or {}).get(
+            "feed_graph_complete"
+        ),
+        trust_evidence_status=(snapshot.get("trust_evidence") or {}).get("status"),
+        rolling_observation_count=(snapshot.get("trust_evidence") or {}).get(
+            "rolling_observation_count"
+        ),
     )
+
+
+def _read_previous_snapshot(output: Path) -> dict[str, Any] | None:
+    if not output.exists():
+        return None
+    try:
+        payload = json.loads(output.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _validated_base_url(

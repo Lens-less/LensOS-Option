@@ -46,6 +46,7 @@ API_ROUTES = [
     "GET /recommendation",
     "POST /backtest/run",
     "GET /backtest/report/default",
+    "GET /backtest/report/{id}",
 ]
 
 DASHBOARD_VIEWS = [
@@ -76,11 +77,7 @@ def build_full_system_surface_report(
             "routes": [
                 {
                     "route": route,
-                    "status": (
-                        "not_implemented"
-                        if route == "POST /backtest/run"
-                        else "available"
-                    ),
+                    "status": "available",
                 }
                 for route in API_ROUTES
             ],
@@ -174,6 +171,9 @@ def validate_full_system_surface_report(report: Any) -> list[str]:
             "evidence_class",
             "release_blocking",
             "reason_codes",
+            "owner",
+            "action",
+            "root_cause",
         }
         if not required.issubset(item):
             errors.append("release readiness gate is missing evidence-state fields")
@@ -202,6 +202,13 @@ def validate_full_system_surface_report(report: Any) -> list[str]:
         reason_codes = item.get("reason_codes")
         if not isinstance(reason_codes, list):
             errors.append("release readiness gate reason_codes must be a list")
+        if not isinstance(item.get("owner"), str) or not item.get("owner"):
+            errors.append("release readiness gate owner must be a non-empty string")
+        if not isinstance(item.get("action"), str) or not item.get("action"):
+            errors.append("release readiness gate action must be a non-empty string")
+        root_cause = item.get("root_cause")
+        if root_cause is not None and not isinstance(root_cause, str):
+            errors.append("release readiness gate root_cause must be a string or null")
         if satisfied is True:
             if item.get("release_state") != "ready":
                 errors.append("satisfied release readiness gate must be ready")
@@ -245,9 +252,17 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
     private_contract = account_status.get("private_adapter_contract") or {}
     model_registry = calibration.get("model_registry") or {}
     persistence = paper_ledger.get("persistence") or {}
+    reconciliation = paper_ledger.get("reconciliation") or {}
+    manual_runbook = paper_ledger.get("manual_approval_runbook") or {}
+    backtest_status = report.get("backtest_status") or {}
     source_class = str(data_trust.get("source_class") or "missing")
     data_present = data_status.get("status") == "validated"
-    data_release_ready = data_present and data_trust.get("verdict") == "trusted"
+    analysis_data_ready = data_present and data_trust.get("verdict") == "trusted"
+    production_trust = (data_status.get("trust_evidence") or {}).get(
+        "production_gate"
+    ) or {}
+    production_trust_ready = production_trust.get("ready") is True
+    data_release_ready = analysis_data_ready and production_trust_ready
     data_evidence_state = (
         "not_configured"
         if data_status.get("status") == "missing"
@@ -256,6 +271,11 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
         else "verified_local"
     )
     data_reason_codes = list(data_trust.get("reason_codes") or [])
+    if analysis_data_ready and not production_trust_ready:
+        data_reason_codes = list(
+            production_trust.get("reason_codes")
+            or ["PRODUCTION_MARKET_TRUST_EVIDENCE_PENDING"]
+        )
 
     response_contract = data_status.get("public_response_contract") or {}
     response_present = bool(response_contract)
@@ -272,6 +292,23 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
         private_contract.get("auth_safe") is True
         and private_contract.get("replay_fixture") is True
         and private_contract.get("live_order_submission_possible") is False
+    )
+    account_data_age_ms = account_status.get("data_age_ms")
+    account_freshness_limit_ms = account_status.get("freshness_limit_ms")
+    private_live_read_only_evidence = (
+        private_contract.get("schema_version")
+        == "private_account_adapter_contract.v1"
+        and private_contract.get("auth_safe") is True
+        and private_contract.get("replay_fixture") is False
+        and private_contract.get("live_order_submission_possible") is False
+        and account_status.get("status") == "available"
+        and account_status.get("source") == "deribit_live_private_read_only"
+        and private_contract.get("source") == account_status.get("source")
+        and isinstance(account_data_age_ms, (int, float))
+        and not isinstance(account_data_age_ms, bool)
+        and isinstance(account_freshness_limit_ms, (int, float))
+        and not isinstance(account_freshness_limit_ms, bool)
+        and 0 <= account_data_age_ms <= account_freshness_limit_ms
     )
     private_live = (
         private_contract.get("auth_safe") is True
@@ -302,7 +339,7 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
             release_state=(
                 "ready"
                 if data_release_ready
-                else "awaiting_external"
+                else "not_ready"
                 if data_present
                 else "not_ready"
             ),
@@ -316,7 +353,7 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
             release_state=(
                 "ready"
                 if response_release_ready
-                else "awaiting_external"
+                else "not_ready"
                 if response_present
                 else "not_ready"
             ),
@@ -324,7 +361,10 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
             reason_codes=(
                 []
                 if response_release_ready
-                else ["PUBLIC_RESPONSE_PRODUCTION_EVIDENCE_PENDING"]
+                else list(
+                    production_trust.get("reason_codes")
+                    or ["PUBLIC_RESPONSE_PRODUCTION_EVIDENCE_PENDING"]
+                )
                 if response_present
                 else ["MISSING_PUBLIC_RESPONSE_CONTRACT"]
             ),
@@ -335,12 +375,16 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
             evidence_state=(
                 "verified_local" if feed_complete else "blocked" if feed_coverage else "not_configured"
             ),
-            release_state="ready" if feed_release_ready else "awaiting_external" if feed_coverage else "not_ready",
+            release_state="ready" if feed_release_ready else "not_ready",
             evidence_class=source_class if feed_coverage else None,
             reason_codes=(
                 []
                 if feed_release_ready
-                else list(feed_coverage.get("missing_feeds") or ["PUBLIC_FEED_TRUST_PENDING"])
+                else list(
+                    feed_coverage.get("missing_feeds")
+                    or production_trust.get("reason_codes")
+                    or ["PUBLIC_FEED_TRUST_PENDING"]
+                )
             ),
         ),
         _gate(
@@ -364,7 +408,7 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
                 "ready"
                 if (report.get("vol_surface_status") or {}).get("status") == "validated"
                 and data_release_ready
-                else "awaiting_external"
+                else "not_ready"
                 if (report.get("vol_surface_status") or {}).get("status") == "validated"
                 else "not_ready"
             ),
@@ -373,6 +417,11 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
                 []
                 if (report.get("vol_surface_status") or {}).get("status") == "validated"
                 and data_release_ready
+                else list(
+                    production_trust.get("reason_codes")
+                    or ["VOL_SURFACE_PRODUCTION_TRUST_PENDING"]
+                )
+                if (report.get("vol_surface_status") or {}).get("status") == "validated"
                 else [
                     str(
                         (report.get("vol_surface_status") or {}).get("reason_code")
@@ -383,13 +432,31 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
         ),
         _gate(
             "private_account_replay_contract",
-            private_live,
+            private_live_read_only_evidence,
             evidence_state=(
-                "verified_local" if private_replay else "verified_local" if private_live else "not_configured"
+                "verified_local"
+                if private_replay or private_live_read_only_evidence
+                else "not_configured"
             ),
-            release_state="ready" if private_live else "awaiting_external" if private_replay else "not_ready",
-            evidence_class="live_read_only" if private_live else "sanitized_replay" if private_replay else None,
-            reason_codes=[] if private_live else ["MISSING_LIVE_PRIVATE_ACCOUNT_EVIDENCE"],
+            release_state=(
+                "ready"
+                if private_live_read_only_evidence
+                else "awaiting_external"
+                if private_replay
+                else "not_ready"
+            ),
+            evidence_class=(
+                "live_read_only"
+                if private_live_read_only_evidence
+                else "sanitized_replay"
+                if private_replay
+                else None
+            ),
+            reason_codes=(
+                []
+                if private_live_read_only_evidence
+                else ["MISSING_LIVE_PRIVATE_ACCOUNT_EVIDENCE"]
+            ),
         ),
         _gate(
             "portfolio_risk",
@@ -424,6 +491,29 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
             reason_codes=[] if model_promoted else list(model_registry.get("blocking_reasons") or ["MISSING_PROMOTED_MODEL"]),
         ),
         _gate(
+            "backtest_alignment",
+            backtest_status.get("status") == "completed"
+            and backtest_status.get("aligned") is True,
+            evidence_state=(
+                "verified_local"
+                if backtest_status.get("status") == "completed"
+                else "not_run"
+            ),
+            release_state=(
+                "ready"
+                if backtest_status.get("status") == "completed"
+                and backtest_status.get("aligned") is True
+                else "not_ready"
+            ),
+            evidence_class="content_addressed_backtest_artifact",
+            reason_codes=(
+                []
+                if backtest_status.get("status") == "completed"
+                and backtest_status.get("aligned") is True
+                else [str(backtest_status.get("reason_code") or "BACKTEST_NOT_RUN")]
+            ),
+        ),
+        _gate(
             "paper_ledger_persistence",
             persistence_ready,
             evidence_state="verified_local" if persistence_ready else "not_configured",
@@ -433,19 +523,45 @@ def _release_readiness(report: dict[str, Any]) -> dict[str, Any]:
         ),
         _gate(
             "paper_ledger_reconciliation",
-            False,
-            evidence_state="not_run",
-            release_state="awaiting_calendar",
+            reconciliation.get("ready") is True,
+            evidence_state=str(reconciliation.get("evidence_state") or "not_run"),
+            release_state=(
+                "ready" if reconciliation.get("ready") is True else "awaiting_calendar"
+            ),
             evidence_class="30_to_60_day_observation",
-            reason_codes=["MISSING_30_60_DAY_RECONCILIATION"],
+            reason_codes=(
+                []
+                if reconciliation.get("ready") is True
+                else list(
+                    reconciliation.get("reason_codes")
+                    or ["MISSING_30_60_DAY_RECONCILIATION"]
+                )
+            ),
         ),
         _gate(
             "manual_approval_runbook",
             False,
-            evidence_state="not_configured",
-            release_state="not_ready",
-            evidence_class=None,
-            reason_codes=["MISSING_MANUAL_APPROVAL_RUNBOOK"],
+            evidence_state=(
+                "verified_local"
+                if manual_runbook.get("status") == "verified_local"
+                else "invalid"
+                if manual_runbook.get("status") == "invalid"
+                else "not_configured"
+            ),
+            release_state=(
+                "awaiting_external"
+                if manual_runbook.get("status") == "verified_local"
+                else "not_ready"
+            ),
+            evidence_class=(
+                "versioned_operator_runbook"
+                if manual_runbook.get("status") == "verified_local"
+                else None
+            ),
+            reason_codes=list(
+                manual_runbook.get("reason_codes")
+                or ["MISSING_MANUAL_APPROVAL_RUNBOOK"]
+            ),
         ),
     ]
     missing = [item["name"] for item in prerequisites if not item["satisfied"]]
@@ -478,6 +594,14 @@ def _gate(
     evidence_class: str | None,
     reason_codes: list[str],
 ) -> dict[str, Any]:
+    guidance = _GATE_GUIDANCE.get(
+        name,
+        {
+            "owner": "system",
+            "action": "Collect and validate the required evidence.",
+        },
+    )
+    normalized_reasons = [str(code) for code in reason_codes]
     return {
         "name": name,
         "satisfied": bool(satisfied),
@@ -485,5 +609,68 @@ def _gate(
         "release_state": release_state,
         "evidence_class": evidence_class,
         "release_blocking": not bool(satisfied),
-        "reason_codes": [str(code) for code in reason_codes],
+        "reason_codes": normalized_reasons,
+        "owner": guidance["owner"],
+        "action": guidance["action"],
+        "root_cause": None if satisfied else (normalized_reasons[0] if normalized_reasons else "EVIDENCE_PENDING"),
     }
+
+
+_GATE_GUIDANCE: dict[str, dict[str, str]] = {
+    "data_quality": {
+        "owner": "system_observation",
+        "action": "补齐 WebSocket 断档/重同步证据，并持续运行采集器直至通过 24 小时与连续 7 天观察窗。",
+    },
+    "public_response_contract": {
+        "owner": "system_observation",
+        "action": "在生产观察窗内持续保持 schema、时效性和响应语义校验通过。",
+    },
+    "public_feed_graph_complete": {
+        "owner": "system_observation",
+        "action": "持续保持所有公共 feed 完整，并补齐 WebSocket 断档/重同步证明。",
+    },
+    "pnl_evidence": {
+        "owner": "system",
+        "action": "Keep deterministic PnL evidence green.",
+    },
+    "vol_surface": {
+        "owner": "system_observation",
+        "action": "当前曲面研究校验已通过；系统将随生产级市场证据持续复核。",
+    },
+    "private_account_replay_contract": {
+        "owner": "operator",
+        "action": "Inject read-only account credentials locally and capture a sanitized snapshot.",
+    },
+    "portfolio_risk": {
+        "owner": "shared",
+        "action": "Provide private account evidence; the system will recompute portfolio risk.",
+    },
+    "position_management": {
+        "owner": "shared",
+        "action": "Provide private account evidence; the system will recompute position state.",
+    },
+    "walk_forward_calibration": {
+        "owner": "shared",
+        "action": "Configure validated history, run walk-forward calibration, and review evidence.",
+    },
+    "calibration_model_promoted": {
+        "owner": "operator",
+        "action": "Review calibration evidence and record an explicit model-promotion decision.",
+    },
+    "backtest_alignment": {
+        "owner": "shared",
+        "action": "Configure an operator-owned historical fixture and run the bounded backtest job.",
+    },
+    "paper_ledger_persistence": {
+        "owner": "system",
+        "action": "Configure a durable ledger path and verify atomic persistence.",
+    },
+    "paper_ledger_reconciliation": {
+        "owner": "system_observation",
+        "action": "Accumulate and reconcile at least 30 days of paper observations.",
+    },
+    "manual_approval_runbook": {
+        "owner": "operator",
+        "action": "Review the versioned runbook and record external manual approval.",
+    },
+}

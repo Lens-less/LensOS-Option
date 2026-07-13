@@ -18,7 +18,7 @@ ACCOUNT_GATE_NO_NEW_TRADES = "NO_NEW_TRADES"
 ACCOUNT_GATE_REDUCE_EXISTING = "REDUCE_EXISTING"
 ACCOUNT_GATE_NO_TRADE = "NO_TRADE"
 
-FRESHNESS_LIMIT_MS = 120_000
+FRESHNESS_LIMIT_MS = 30_000
 EPSILON = 1e-12
 
 AVAILABLE_ACCOUNT_SCENARIOS = (
@@ -83,7 +83,7 @@ ACCOUNT_SCENARIOS: dict[str, dict[str, Any]] = {
             "source": "deribit_replay",
             "source_endpoint": "private/get_account_summary",
             "observed_at": "2026-07-07T09:50:20Z",
-            "data_age_ms": 40000,
+            "data_age_ms": 20000,
             "currency": "USD",
             "equity": 5000.0,
             "balance": 5000.0,
@@ -129,7 +129,7 @@ ACCOUNT_SCENARIOS: dict[str, dict[str, Any]] = {
             "source": "deribit_replay",
             "source_endpoint": "private/get_account_summary",
             "observed_at": "2026-07-07T09:50:10Z",
-            "data_age_ms": 50000,
+            "data_age_ms": 25000,
             "currency": "USD",
             "equity": 5000.0,
             "balance": 5000.0,
@@ -318,9 +318,16 @@ def build_account_status(
     margin_model = str(account.get("margin_model") or "unknown")
     currency = str(account.get("currency") or "USD")
     observed_at = account.get("observed_at")
-    data_age_ms = account.get("data_age_ms")
-    if data_age_ms is None:
-        data_age_ms = compute_data_age_ms(observed_at=observed_at, generated_at=generated_at)
+    computed_data_age_ms = compute_data_age_ms(
+        observed_at=observed_at,
+        generated_at=generated_at,
+    )
+    declared_data_age_ms = maybe_float(account.get("data_age_ms"))
+    data_age_ms = (
+        None
+        if computed_data_age_ms is None
+        else max(computed_data_age_ms, int(declared_data_age_ms or 0))
+    )
 
     snapshot = normalize_account_snapshot(
         account=account,
@@ -393,13 +400,20 @@ def build_account_status(
             ),
         }
 
-    if data_age_ms is not None and data_age_ms > freshness_limit_ms:
+    stale_reason = (
+        "MISSING_ACCOUNT_OBSERVED_AT"
+        if computed_data_age_ms is None
+        else "STALE_ACCOUNT_DATA"
+        if data_age_ms is not None and data_age_ms > freshness_limit_ms
+        else None
+    )
+    if stale_reason is not None:
         return {
             "status": "stale",
             "live_snapshot": False,
             "source": source,
             "source_endpoint": source_endpoint,
-            "reason_code": "STALE_ACCOUNT_DATA",
+            "reason_code": stale_reason,
             "margin_light": ACCOUNT_MARGIN_HALT,
             "trade_gate": ACCOUNT_GATE_NO_TRADE,
             "freshness_limit_ms": freshness_limit_ms,
@@ -433,7 +447,7 @@ def build_account_status(
 
     return {
         "status": "available",
-        "live_snapshot": True,
+        "live_snapshot": not simulation_status["blocks_new_trades"],
         "source": source,
         "source_endpoint": source_endpoint,
         "reason_code": reason_code,
@@ -453,7 +467,11 @@ def build_account_status(
             simulation_status=simulation_status,
             data_age_ms=data_age_ms,
             replay_metadata=replay_metadata,
-            failure_class=None,
+            failure_class=(
+                simulation_status["reason_code"]
+                if simulation_status["blocks_new_trades"]
+                else None
+            ),
         ),
     }
 
@@ -463,7 +481,7 @@ def account_reason_codes(account_status: dict[str, Any]) -> list[str]:
     simulation_reason = str(
         (account_status.get("simulation_status") or {}).get("reason_code") or ""
     )
-    if simulation_reason and simulation_reason not in {"SIMULATION_AVAILABLE", "SIMULATION_NOT_REQUESTED"}:
+    if simulation_reason and simulation_reason != "SIMULATION_AVAILABLE":
         codes.append(simulation_reason)
     return _unique_codes(codes)
 
@@ -557,7 +575,7 @@ def normalize_simulation_status(*, simulation: dict[str, Any]) -> dict[str, Any]
     elif status == "unavailable":
         reason_code = reason_code or "SIMULATION_UNAVAILABLE"
 
-    blocks_new_trades = status in {"auth_failed", "unavailable"}
+    blocks_new_trades = status != "available"
 
     return {
         "status": status,

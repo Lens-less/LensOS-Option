@@ -282,6 +282,7 @@ def _cmd_pull_snapshot(args: argparse.Namespace) -> int:
         currency=args.currency,
         base_url=args.deribit_base_url,
         instrument_limit=args.instrument_limit,
+        include_feed_graph=True,
     )
     path = write_snapshot_fixture(args.output, snapshot)
     payload = {
@@ -389,6 +390,7 @@ def _build_report_from_args(args: argparse.Namespace) -> dict:
             currency=args.currency,
             base_url=args.deribit_base_url,
             instrument_limit=args.instrument_limit,
+            include_feed_graph=True,
         )
 
     return generate_research_report(

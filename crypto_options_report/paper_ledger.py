@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +14,12 @@ from .storage import atomic_write_json
 
 PAPER_LEDGER_SCHEMA_VERSION = "paper_proposal_ledger_report.v1"
 LEDGER_STATES = ["proposed", "reviewed", "rejected", "expired", "paper_filled"]
+DEFAULT_MANUAL_APPROVAL_RUNBOOK_PATH = (
+    Path(__file__).resolve().parent
+    / "resources"
+    / "manual-approval-runbook.md"
+)
+_PERSISTENCE_LOCK = threading.RLock()
 
 
 def build_paper_proposal_ledger(
@@ -19,6 +29,8 @@ def build_paper_proposal_ledger(
     allow_paper: bool = False,
     review_decisions: list[dict[str, Any]] | None = None,
     storage_path: str | Path | None = None,
+    manual_approval_runbook_path: str | Path | None = None,
+    persist: bool = True,
 ) -> dict[str, Any]:
     """Build proposal and ledger evidence without any live submission path."""
 
@@ -37,13 +49,16 @@ def build_paper_proposal_ledger(
             "automatic_live_submission_possible": False,
             "live_order_adapter": "not_implemented",
             "post_only_assumption": "recorded_without_maker_fee_exemption",
+            "manual_approval_runbook": manual_approval_runbook_evidence(
+                manual_approval_runbook_path
+            ),
             "persistence": _persistence_contract(storage_path=storage_path),
             "reconciliation": _reconciliation_contract(
                 ledger_entries=[],
                 blocked=True,
             ),
         }
-        _persist_if_requested(ledger, storage_path)
+        _merge_persisted_ledger(ledger, storage_path, persist=persist)
         return ledger
 
     ranked = [
@@ -69,13 +84,16 @@ def build_paper_proposal_ledger(
         "automatic_live_submission_possible": False,
         "live_order_adapter": "not_implemented",
         "post_only_assumption": "recorded_without_maker_fee_exemption",
+        "manual_approval_runbook": manual_approval_runbook_evidence(
+            manual_approval_runbook_path
+        ),
         "persistence": _persistence_contract(storage_path=storage_path),
         "reconciliation": _reconciliation_contract(
             ledger_entries=ledger_entries,
             blocked=False,
         ),
     }
-    _persist_if_requested(ledger, storage_path)
+    _merge_persisted_ledger(ledger, storage_path, persist=persist)
     return ledger
 
 
@@ -100,6 +118,11 @@ def validate_paper_proposal_ledger(report: Any) -> list[str]:
     reconciliation = report.get("reconciliation") or {}
     if reconciliation.get("window") != "30_to_60_days_required":
         errors.append("paper_proposal_ledger.reconciliation.window must be 30_to_60_days_required")
+    runbook = report.get("manual_approval_runbook") or {}
+    if runbook.get("schema_version") != "manual_approval_runbook_evidence.v1":
+        errors.append(
+            "paper_proposal_ledger.manual_approval_runbook must be versioned evidence"
+        )
     return errors
 
 
@@ -240,20 +263,76 @@ def _reconciliation_contract(
     blocked: bool,
 ) -> dict[str, Any]:
     observed_entries = [
-        entry for entry in ledger_entries if entry.get("observed_fill_usdc") is not None
+        entry
+        for entry in ledger_entries
+        if entry.get("observed_fill_usdc") is not None
+        or entry.get("terminal_outcome") in {"rejected", "expired"}
     ]
     reconciled_entries = [entry for entry in ledger_entries if entry.get("reconciled")]
+    timestamps = [
+        parsed
+        for entry in ledger_entries
+        for raw in (
+            entry.get("proposed_at"),
+            entry.get("reviewed_at"),
+            entry.get("observed_at"),
+        )
+        if (parsed := _parse_optional_timestamp(raw)) is not None
+    ]
+    observation_started_at = min(timestamps) if timestamps else None
+    observation_ended_at = max(timestamps) if timestamps else None
+    observation_days = (
+        (observation_ended_at - observation_started_at).total_seconds() / 86_400
+        if observation_started_at is not None and observation_ended_at is not None
+        else 0.0
+    )
+    complete = bool(
+        ledger_entries
+        and len(reconciled_entries) == len(ledger_entries)
+        and observed_entries
+        and observation_days >= 30.0
+    )
+    if complete:
+        evidence_state = "verified_local"
+        reason_codes: list[str] = []
+    elif ledger_entries:
+        evidence_state = "verified_local"
+        reason_codes = []
+        if len(reconciled_entries) != len(ledger_entries):
+            reason_codes.append("PAPER_RECONCILIATION_INCOMPLETE")
+        if not observed_entries:
+            reason_codes.append("MISSING_OBSERVED_PAPER_OUTCOMES")
+        if observation_days < 30.0:
+            reason_codes.append("MISSING_30_60_DAY_RECONCILIATION")
+    else:
+        evidence_state = "not_run"
+        reason_codes = ["MISSING_30_60_DAY_RECONCILIATION"]
     return {
         "schema_version": "paper_reconciliation_contract.v1",
         "window": "30_to_60_days_required",
         "runbook": build_paper_reconciliation_runbook(),
         "status": (
-            "blocked"
-            if blocked
-            else "reconciled"
-            if ledger_entries and len(reconciled_entries) == len(ledger_entries)
+            "reconciled"
+            if complete
+            else "blocked"
+            if blocked and not ledger_entries
             else "pending_observed_fills"
         ),
+        "evidence_state": evidence_state,
+        "ready": complete,
+        "reason_codes": reason_codes,
+        "observation_started_at": (
+            observation_started_at.isoformat().replace("+00:00", "Z")
+            if observation_started_at
+            else None
+        ),
+        "observation_ended_at": (
+            observation_ended_at.isoformat().replace("+00:00", "Z")
+            if observation_ended_at
+            else None
+        ),
+        "observation_days": round(observation_days, 6),
+        "minimum_observation_days": 30,
         "observed_entry_count": len(observed_entries),
         "expected_entry_count": len(ledger_entries),
         "reconciled_entry_count": len(reconciled_entries),
@@ -288,39 +367,111 @@ def build_paper_reconciliation_runbook() -> dict[str, Any]:
     }
 
 
-def _persist_if_requested(
+def manual_approval_runbook_evidence(
+    path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Validate the local runbook without treating it as external approval."""
+
+    candidate = Path(path) if path is not None else DEFAULT_MANUAL_APPROVAL_RUNBOOK_PATH
+    candidate = candidate.expanduser().resolve()
+    base = {
+        "schema_version": "manual_approval_runbook_evidence.v1",
+        "path": str(candidate),
+        "status": "missing",
+        "version": None,
+        "sha256": None,
+        "external_approval_recorded": False,
+        "reason_codes": ["MISSING_MANUAL_APPROVAL_RUNBOOK"],
+    }
+    if not candidate.is_file():
+        return base
+    try:
+        raw = candidate.read_bytes()
+        content = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {**base, "status": "invalid", "reason_codes": ["INVALID_MANUAL_APPROVAL_RUNBOOK"]}
+
+    version_match = re.search(
+        r"(?im)^\s*(?:version|版本)\s*[:：]\s*([^\s]+)", content
+    )
+    normalized = content.lower()
+    required_terms = (
+        "research_only" in normalized,
+        "manual approval" in normalized or "人工审批" in content or "手动审批" in content,
+    )
+    if version_match is None or not all(required_terms):
+        return {
+            **base,
+            "status": "invalid",
+            "version": version_match.group(1) if version_match else None,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "reason_codes": ["INVALID_MANUAL_APPROVAL_RUNBOOK"],
+        }
+    return {
+        **base,
+        "status": "verified_local",
+        "version": version_match.group(1),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "reason_codes": ["EXTERNAL_APPROVAL_PENDING"],
+    }
+
+
+def _merge_persisted_ledger(
     ledger: dict[str, Any],
     storage_path: str | Path | None,
+    *,
+    persist: bool,
 ) -> None:
+    """Project existing evidence and write only in an explicit writer context."""
+
     if storage_path is None:
         return
-    path = Path(storage_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    prior_entries: list[dict[str, Any]] = []
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            existing = {}
-        prior_entries = list(existing.get("ledger_entries") or [])
-        merged_entries = {
-            str(entry.get("proposal_id")): entry
-            for entry in prior_entries
-            if entry.get("proposal_id")
-        }
-        for entry in ledger.get("ledger_entries") or []:
-            proposal_id = str(entry.get("proposal_id"))
-            if proposal_id:
-                merged_entries[proposal_id] = entry
-        ledger["ledger_entries"] = list(merged_entries.values())
-        ledger["reconciliation"] = _reconciliation_contract(
-            ledger_entries=ledger["ledger_entries"],
-            blocked=ledger.get("status") == "blocked",
-        )
-    ledger["persistence"]["prior_entry_count"] = len(prior_entries)
-    ledger["persistence"]["saved_entry_count"] = len(ledger.get("ledger_entries") or [])
-    ledger["persistence"]["history_preserved"] = bool(prior_entries)
-    atomic_write_json(path, ledger, trailing_newline=False)
+    path = Path(storage_path).expanduser().resolve()
+    with _PERSISTENCE_LOCK:
+        if persist:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        prior_entries: list[dict[str, Any]] = []
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                # Never replace operator evidence after a corrupt/partial read.
+                raise ValueError("existing paper ledger is invalid JSON") from exc
+            if not isinstance(existing, dict):
+                raise ValueError("existing paper ledger must be a JSON object")
+            prior_entries = list(existing.get("ledger_entries") or [])
+            merged_entries = {
+                str(entry.get("proposal_id")): entry
+                for entry in prior_entries
+                if entry.get("proposal_id")
+            }
+            for entry in ledger.get("ledger_entries") or []:
+                proposal_id = str(entry.get("proposal_id"))
+                if proposal_id:
+                    merged_entries[proposal_id] = entry
+            ledger["ledger_entries"] = list(merged_entries.values())
+            ledger["reconciliation"] = _reconciliation_contract(
+                ledger_entries=ledger["ledger_entries"],
+                blocked=ledger.get("status") == "blocked",
+            )
+        ledger["persistence"]["prior_entry_count"] = len(prior_entries)
+        ledger["persistence"]["saved_entry_count"] = len(ledger.get("ledger_entries") or [])
+        ledger["persistence"]["history_preserved"] = bool(prior_entries)
+        ledger["persistence"]["write_performed"] = persist
+        if persist:
+            atomic_write_json(path, ledger, trailing_newline=False)
+
+
+def _parse_optional_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _legs(candidate: dict[str, Any]) -> list[dict[str, Any]]:

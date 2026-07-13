@@ -36,6 +36,34 @@ class DashboardTruthfulnessTests(unittest.TestCase):
         self.assertIn("scrollbar-width: none", html)
         self.assertIn(".nav::-webkit-scrollbar", html)
 
+    def test_operational_boundary_separates_service_market_release_and_policy(self):
+        report = self._report()
+        report["data_trust"] = {
+            "verdict": "degraded",
+            "source_class": "live",
+            "reason_codes": ["LIVE_TRUST_PROMOTION_PENDING"],
+        }
+
+        state = self._render_dashboard(mode="live", report=report)
+
+        self.assertEqual("服务正常", state["serviceAvailability"]["text"])
+        self.assertIn("报告 API", state["serviceAvailabilityNote"]["text"])
+        self.assertEqual("证据采集中", state["marketEvidenceState"]["text"])
+        self.assertIn("连续合格", state["marketEvidenceNote"]["text"])
+        self.assertEqual("NO-GO", state["productReleaseState"]["text"])
+        self.assertEqual("RESEARCH_ONLY", state["policyBoundaryState"]["text"])
+        self.assertIn("非系统故障", state["policyBoundaryNote"]["text"])
+        self.assertEqual([], state["consoleErrors"])
+
+    def test_offline_boundary_marks_service_unavailable_without_calling_policy_an_error(self):
+        state = self._render_dashboard(mode="offline")
+
+        self.assertEqual("服务不可用", state["serviceAvailability"]["text"])
+        self.assertEqual("市场证据不可用", state["marketEvidenceState"]["text"])
+        self.assertEqual("NO-GO", state["productReleaseState"]["text"])
+        self.assertEqual("RESEARCH_ONLY", state["policyBoundaryState"]["text"])
+        self.assertIn("非系统故障", state["policyBoundaryNote"]["text"])
+
     def test_offline_fallback_has_page_truth_state_without_plausible_metrics(self):
         html = dashboard_page_html()
 
@@ -207,6 +235,9 @@ class DashboardTruthfulnessTests(unittest.TestCase):
                     "evidence_state": "verified_local",
                     "release_state": "awaiting_external",
                     "reason": "等待外部生产证据",
+                    "owner": "operator",
+                    "next_action": "提供只读账户快照",
+                    "root_cause": "private_account_evidence",
                 },
                 {
                     "name": "paper_ledger_reconciliation",
@@ -214,6 +245,9 @@ class DashboardTruthfulnessTests(unittest.TestCase):
                     "evidence_state": "not_run",
                     "release_state": "awaiting_calendar",
                     "reason_codes": ["MISSING_30_60_DAY_RECONCILIATION"],
+                    "owner": "system_observation",
+                    "next_action": "继续累计观察窗口",
+                    "root_cause": "paper_observation_window",
                 },
             ],
         }
@@ -227,8 +261,80 @@ class DashboardTruthfulnessTests(unittest.TestCase):
         self.assertIn("本地已验证", self._all_text(rows[0]))
         self.assertIn("等待外部证据", self._all_text(rows[0]))
         self.assertIn("等待外部生产证据", self._all_text(rows[0]))
+        self.assertIn("需要你提供", self._all_text(rows[0]))
+        self.assertIn("提供只读账户快照", self._all_text(rows[0]))
+        self.assertIn("系统持续执行", self._all_text(rows[1]))
         self.assertNotIn("缺失", self._all_text(state["readinessList"]))
-        self.assertEqual("2 项发布阻断", state["missingCount"]["text"])
+        self.assertEqual("2 个根因 · 2 项门禁", state["missingCount"]["text"])
+        self.assertEqual([], state["consoleErrors"])
+
+    def test_current_limits_assign_rolling_history_to_system_not_operator(self):
+        report = self._report()
+        report["reason_codes"] = [
+            "MISSING_ACCOUNT_API_SNAPSHOT",
+            "PRIMARY_REGIME_RANGE",
+            "RANGE_PERMISSION_ACTIVE",
+            "VOLATILITY_CAP_0",
+            "REGIME_ROLLING_HISTORY_INSUFFICIENT",
+            "REGIME_MIN_OBSERVATIONS_NOT_MET",
+            "CALIBRATION_PROMOTION_PENDING",
+            "BACKTEST_NOT_RUN",
+        ]
+
+        state = self._render_dashboard(mode="live", report=report)
+
+        reasons = state["reasonCodes"]["children"]
+        self.assertNotIn("PRIMARY_REGIME_RANGE", self._all_text(state["reasonCodes"]))
+        self.assertNotIn("RANGE_PERMISSION_ACTIVE", self._all_text(state["reasonCodes"]))
+        self.assertEqual("operator", reasons[0]["dataset"]["owner"])
+        self.assertIn("需要你提供", reasons[0]["text"])
+        self.assertEqual("policy", reasons[1]["dataset"]["owner"])
+        self.assertIn("安全策略", reasons[1]["text"])
+        self.assertIn("波动率压力限制", reasons[1]["text"])
+        self.assertEqual("system_observation", reasons[2]["dataset"]["owner"])
+        self.assertIn("系统持续执行", reasons[2]["text"])
+        self.assertEqual("system_observation", reasons[3]["dataset"]["owner"])
+        self.assertIn("系统持续执行", reasons[3]["text"])
+        self.assertEqual("external", reasons[4]["dataset"]["owner"])
+        self.assertIn("需要你评审", reasons[4]["text"])
+        self.assertIn("校准模型尚待提升评审", reasons[4]["text"])
+        self.assertEqual("operator", reasons[5]["dataset"]["owner"])
+        self.assertIn("Backtest 尚未运行", reasons[5]["text"])
+        self.assertEqual([], state["consoleErrors"])
+
+    def test_current_limit_chips_wrap_instead_of_hiding_reasons_horizontally(self):
+        html = dashboard_page_html()
+
+        self.assertIsNotNone(re.search(
+            r"\.reason-band \.chip-row\s*\{[^}]*flex-wrap:\s*wrap;[^}]*overflow-x:\s*visible;",
+            html,
+            flags=re.DOTALL,
+        ))
+
+    def test_ready_gate_uses_maintenance_copy_instead_of_stale_repair_action(self):
+        report = self._report()
+        report["full_system_surface"]["release_readiness"] = {
+            "status": "NO-GO",
+            "paper_mode_allowed": False,
+            "prerequisites": [
+                {
+                    "name": "public_feed_graph_complete",
+                    "satisfied": True,
+                    "evidence_state": "verified_local",
+                    "release_state": "ready",
+                    "owner": "system",
+                    "action": "Restore every required public feed and repeat the observation window.",
+                    "reason_codes": [],
+                },
+            ],
+        }
+
+        state = self._render_dashboard(mode="live", report=report)
+
+        row_text = self._all_text(state["readinessList"]["children"][0])
+        self.assertIn("公开 feed 图完整性", row_text)
+        self.assertIn("无需操作；系统持续监测", row_text)
+        self.assertNotIn("Restore every required public feed", row_text)
         self.assertEqual([], state["consoleErrors"])
 
     def test_truth_metadata_stacks_on_mobile(self):
@@ -471,6 +577,14 @@ process.stdout.write(JSON.stringify({{
   marketTrust: snapshot("market-data-trust"),
   collectionCounts: snapshot("market-collection-counts"),
   collectionCoverage: snapshot("market-collection-coverage"),
+  serviceAvailability: snapshot("service-availability"),
+  serviceAvailabilityNote: snapshot("service-availability-note"),
+  marketEvidenceState: snapshot("market-evidence-state"),
+  marketEvidenceNote: snapshot("market-evidence-note"),
+  productReleaseState: snapshot("product-release-state"),
+  policyBoundaryState: snapshot("policy-boundary-state"),
+  policyBoundaryNote: snapshot("policy-boundary-note"),
+  reasonCodes: snapshot("reason-codes"),
   action: snapshot("action"),
   modeGateList: snapshot("mode-gate-list"),
   candidateCount: snapshot("candidate-count"),

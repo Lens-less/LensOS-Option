@@ -90,7 +90,8 @@ class ResearchReportContractTests(unittest.TestCase):
         self.assertIn("market data status must include snapshot_captured_at", errors)
         self.assertIn("available account_status.snapshot is required", errors)
         self.assertIn("calibration_status must match walk-forward model registry", errors)
-        self.assertIn("backtest_status.aligned must be false", errors)
+        self.assertIn("backtest_status.status must be not_run or completed", errors)
+        self.assertIn("completed backtest_status must name its artifact", errors)
 
     def test_validator_rejects_forbidden_actionable_aliases(self):
         report = generate_research_report(generated_at="2026-07-07T00:00:00Z")

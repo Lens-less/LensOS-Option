@@ -7,6 +7,7 @@ import json
 import math
 import statistics
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,17 +49,26 @@ def utc_timestamp() -> str:
     )
 
 
+def _check_deadline(deadline_monotonic: float | None) -> None:
+    if deadline_monotonic is not None and time.monotonic() > deadline_monotonic:
+        raise TimeoutError("backtest job deadline exceeded")
+
+
 def build_baseline_backtest_report_from_fixture(
     fixture_path: str | Path,
     *,
     generated_at: str | None = None,
     config: dict[str, Any] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
+    _check_deadline(deadline_monotonic)
     payload = load_backtest_fixture(fixture_path)
+    _check_deadline(deadline_monotonic)
     return build_fixed_baseline_backtest_report(
         payload,
         generated_at=generated_at,
         config=config,
+        deadline_monotonic=deadline_monotonic,
     )
 
 
@@ -73,6 +83,7 @@ def build_fixed_baseline_backtest_report(
     *,
     generated_at: str | None = None,
     config: dict[str, Any] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
     """Build the ISSUE-006 baseline report from any supported fixture shape."""
 
@@ -82,12 +93,14 @@ def build_fixed_baseline_backtest_report(
             generated_at=generated_at,
             config=config,
             fixture_name=payload.get("name", payload.get("fixture_name", "inline_rows")),
+            deadline_monotonic=deadline_monotonic,
         )
     if "windows" in payload:
         return _build_windowed_fixed_baseline_backtest_report(
             payload,
             generated_at=generated_at,
             config=config,
+            deadline_monotonic=deadline_monotonic,
         )
     raise ValueError("unsupported backtest fixture: expected rows or windows")
 
@@ -98,7 +111,9 @@ def build_baseline_backtest_report(
     generated_at: str | None = None,
     config: dict[str, Any] | None = None,
     fixture_name: str = "inline_rows",
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
+    _check_deadline(deadline_monotonic)
     merged_config = dict(DEFAULT_BASELINE_CONFIG)
     if config:
         merged_config.update(config)
@@ -108,6 +123,7 @@ def build_baseline_backtest_report(
         rows,
         generated_at=report_generated_at,
     )
+    _check_deadline(deadline_monotonic)
     eligible_quotes = query_eligible_canonical_quotes(historical_report)
     metadata_by_instrument = {
         item["instrument_name"]: item
@@ -119,6 +135,7 @@ def build_baseline_backtest_report(
     snapshot_ts: dict[str, str] = {}
     future_quote_count_by_instrument: dict[str, int] = defaultdict(int)
     for quote in eligible_quotes:
+        _check_deadline(deadline_monotonic)
         quotes_by_snapshot[quote["snapshot_key"]].append(quote)
         snapshot_ts.setdefault(quote["snapshot_key"], quote["ts"])
         future_quote_count_by_instrument[quote["instrument_name"]] += 1
@@ -144,6 +161,7 @@ def build_baseline_backtest_report(
     open_trade: dict[str, Any] | None = None
 
     for snapshot_index, snapshot_key in enumerate(ordered_snapshot_keys):
+        _check_deadline(deadline_monotonic)
         snapshot_quotes = sorted(
             quotes_by_snapshot[snapshot_key],
             key=lambda quote: quote["instrument_name"],
@@ -756,7 +774,9 @@ def _build_windowed_fixed_baseline_backtest_report(
     *,
     generated_at: str | None = None,
     config: dict[str, Any] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
+    _check_deadline(deadline_monotonic)
     merged_config = dict(DEFAULT_BASELINE_CONFIG)
     if config:
         merged_config.update(config)
@@ -771,6 +791,7 @@ def _build_windowed_fixed_baseline_backtest_report(
     touch_event_count = 0
 
     for window in payload.get("windows", []):
+        _check_deadline(deadline_monotonic)
         historical_report = build_historical_reconciliation_report(
             window["entry_rows"],
             generated_at=report_generated_at,
@@ -800,6 +821,7 @@ def _build_windowed_fixed_baseline_backtest_report(
         )
 
         for step in window.get("path", []):
+            _check_deadline(deadline_monotonic)
             ask_value = step["option_ask_by_instrument"][trade["instrument_name"]]
             path_quote = {
                 "ts": step["ts"],

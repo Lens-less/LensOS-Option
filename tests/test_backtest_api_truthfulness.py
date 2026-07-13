@@ -11,18 +11,24 @@ from crypto_options_report.api import (
 
 
 class BacktestApiTruthfulnessTests(unittest.TestCase):
-    def test_post_backtest_run_reports_unimplemented_without_performance(self):
+    def test_post_backtest_run_requires_operator_historical_fixture_without_performance(self):
         status, headers, payload = self._request(
             "POST",
-            "/backtest/run?generated_at=2026-07-07T00%3A01%3A30Z",
+            "/backtest/run",
+            body={
+                "schema_version": "backtest_run_request.v1",
+                "generated_at": "2026-07-07T00:01:30Z",
+            },
+            headers={"Idempotency-Key": "missing-history"},
         )
 
-        self.assertEqual(501, status)
+        self.assertEqual(409, status)
         self.assertEqual(
             {
                 "schema_version": "backtest_run_response.v1",
-                "status": "not_implemented",
-                "reason_code": "BOUNDED_BACKTEST_JOB_NOT_IMPLEMENTED",
+                "status": "historical_data_not_configured",
+                "reason_code": "MISSING_HISTORICAL_FIXTURE",
+                "action": "CONFIGURE_HISTORICAL_FIXTURE",
                 "report_id": None,
                 "backtest_comparison": [],
                 "research_only": True,
@@ -56,7 +62,7 @@ class BacktestApiTruthfulnessTests(unittest.TestCase):
             payload,
         )
 
-    def test_post_backtest_run_rejects_invalid_query_before_unimplemented_status(self):
+    def test_post_backtest_run_rejects_invalid_query_before_configuration_status(self):
         status, headers, payload = self._request(
             "POST",
             "/backtest/run?instrument_limit=not-an-int",
@@ -64,13 +70,51 @@ class BacktestApiTruthfulnessTests(unittest.TestCase):
 
         self.assertEqual(400, status)
         self.assertEqual(
-            {"error": "instrument_limit must be an integer"},
+            {"error": "backtest run accepts JSON body fields, not query parameters"},
             payload,
         )
         self.assertEqual("no-store, max-age=0", headers["cache-control"])
         self.assertNotIn("backtest_comparison", payload)
 
-    def _request(self, method: str, path: str):
+    def test_post_backtest_run_rejects_unknown_json_fields(self):
+        status, _, payload = self._request(
+            "POST",
+            "/backtest/run",
+            body={
+                "schema_version": "backtest_run_request.v1",
+                "fixture_path": "client-controlled.json",
+            },
+            headers={"Idempotency-Key": "unknown-field"},
+        )
+
+        self.assertEqual(422, status)
+        self.assertIn("unknown backtest request fields", payload["error"])
+
+    def test_post_backtest_run_requires_idempotency_key(self):
+        status, _, payload = self._request(
+            "POST",
+            "/backtest/run",
+            body={"schema_version": "backtest_run_request.v1"},
+        )
+
+        self.assertEqual(400, status)
+        self.assertIn("Idempotency-Key", payload["error"])
+
+    def test_post_backtest_run_rejects_non_rfc3339_timestamp(self):
+        status, _, payload = self._request(
+            "POST",
+            "/backtest/run",
+            body={
+                "schema_version": "backtest_run_request.v1",
+                "generated_at": "2026-07-14 00:00:00+00:00",
+            },
+            headers={"Idempotency-Key": "bad-timestamp"},
+        )
+
+        self.assertEqual(422, status)
+        self.assertIn("RFC3339", payload["error"])
+
+    def _request(self, method: str, path: str, *, body=None, headers=None):
         server = ResearchHTTPServer(
             ("127.0.0.1", 0),
             ResearchReportHandler,
@@ -84,7 +128,11 @@ class BacktestApiTruthfulnessTests(unittest.TestCase):
             timeout=2,
         )
         try:
-            connection.request(method, path)
+            encoded = None if body is None else json.dumps(body).encode("utf-8")
+            request_headers = dict(headers or {})
+            if encoded is not None:
+                request_headers["Content-Type"] = "application/json"
+            connection.request(method, path, body=encoded, headers=request_headers)
             response = connection.getresponse()
             body = response.read().decode("utf-8")
             headers = {key.lower(): value for key, value in response.getheaders()}

@@ -59,7 +59,8 @@ class FullSystemSurfaceTests(unittest.TestCase):
         route_status = {
             item["route"]: item["status"] for item in surface["api"]["routes"]
         }
-        self.assertEqual("not_implemented", route_status["POST /backtest/run"])
+        self.assertEqual("available", route_status["POST /backtest/run"])
+        self.assertEqual("available", route_status["GET /backtest/report/{id}"])
 
     def test_api_route_descriptors_match_runtime_routes(self):
         declared_routes = set(API_ROUTES)
@@ -71,6 +72,7 @@ class FullSystemSurfaceTests(unittest.TestCase):
             f"GET {DASHBOARD_PAGE_PATH}",
         }
         expected_get_routes.update(f"GET {path}" for path in GET_SURFACE_PATHS)
+        expected_get_routes.add("GET /backtest/report/{id}")
         expected_post_routes = {f"POST {path}" for path in POST_SURFACE_PATHS}
 
         self.assertEqual(expected_get_routes | expected_post_routes, declared_routes)
@@ -316,17 +318,23 @@ class FullSystemSurfaceTests(unittest.TestCase):
             first.close()
             second.close()
 
-    def test_http_backtest_run_route_refuses_to_invent_performance(self):
+    def test_http_backtest_run_route_requires_operator_history_without_inventing_performance(self):
         status, headers, body = self._request(
             "POST",
-            "/backtest/run?generated_at=2026-07-07T00%3A01%3A30Z",
+            "/backtest/run",
+            body={
+                "schema_version": "backtest_run_request.v1",
+                "generated_at": "2026-07-07T00:01:30Z",
+            },
+            request_headers={"Idempotency-Key": "missing-history"},
         )
         payload = json.loads(body)
 
-        self.assertEqual(501, status)
+        self.assertEqual(409, status)
         self.assertEqual("application/json; charset=utf-8", headers["content-type"])
         self.assertEqual("backtest_run_response.v1", payload["schema_version"])
-        self.assertEqual("not_implemented", payload["status"])
+        self.assertEqual("historical_data_not_configured", payload["status"])
+        self.assertEqual("CONFIGURE_HISTORICAL_FIXTURE", payload["action"])
         self.assertIsNone(payload["report_id"])
         self.assertTrue(payload["research_only"])
         self.assertEqual([], payload["backtest_comparison"])
@@ -340,7 +348,10 @@ class FullSystemSurfaceTests(unittest.TestCase):
 
         self.assertEqual(400, status)
         self.assertEqual("application/json; charset=utf-8", headers["content-type"])
-        self.assertEqual({"error": "instrument_limit must be an integer"}, payload)
+        self.assertEqual(
+            {"error": "backtest run accepts JSON body fields, not query parameters"},
+            payload,
+        )
 
     def test_cli_api_and_dashboard_use_same_projection_shape(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
@@ -381,7 +392,15 @@ class FullSystemSurfaceTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertIn(expected_key, payload)
 
-    def _request(self, method, path, *, runtime=None):
+    def _request(
+        self,
+        method,
+        path,
+        *,
+        runtime=None,
+        body=None,
+        request_headers=None,
+    ):
         server = ResearchHTTPServer(
             ("127.0.0.1", 0),
             ResearchReportHandler,
@@ -395,7 +414,11 @@ class FullSystemSurfaceTests(unittest.TestCase):
             timeout=2,
         )
         try:
-            connection.request(method, path)
+            encoded = None if body is None else json.dumps(body).encode("utf-8")
+            headers = dict(request_headers or {})
+            if encoded is not None:
+                headers["Content-Type"] = "application/json"
+            connection.request(method, path, body=encoded, headers=headers)
             response = connection.getresponse()
             body = response.read().decode("utf-8")
             headers = {key.lower(): value for key, value in response.getheaders()}

@@ -7,7 +7,7 @@ This project uses an institutional research-console style: calm, dense, and evid
 Design read: financial research and risk dashboard, for options researchers and risk operators, using restrained trust language, leaning on financial precision plus developer-tool discipline.
 
 Dial settings:
-- Variance: 4/10. Financial trust beats novelty.
+- Variance: 3/10. Financial trust beats novelty.
 - Motion: 2/10. Frequent-use controls need crisp feedback only.
 - Density: 7/10. The user should compare evidence, risk, readiness, and blockers in one scan.
 
@@ -40,8 +40,8 @@ Use a system UI stack with Chinese fallbacks for local robustness. Numbers and t
 The first viewport should show the command strip, reason tape, and top of the evidence/risk/readiness workbench. The left rail anchors navigation. At mobile widths, collapse to a single column while preserving the command strip before secondary panels.
 
 Functional contract:
-- The page exists to show evidence chain, risk state, readiness, and no-trade blockers quickly.
-- In three seconds, the user must know action, risk state, readiness, and why the system cannot trade.
+- The page exists to separate service availability, market evidence, product readiness, safety policy, risk, and no-trade blockers quickly.
+- In three seconds, the user must know whether the service is running, whether market evidence is trusted, whether the product is releasable, and which limitations need system work versus operator input.
 - The page must not expose trade, order, sizing, or manual candidate controls.
 
 ## 6. Depth And Elevation
@@ -49,6 +49,7 @@ Functional contract:
 Depth is built through luminance steps, borders, and tiny tinted shadows. Borrowed DNA:
 - From Kraken: muted crypto-finance semantic colors, 8-12px functional radius, whisper shadows.
 - From Linear: dark native sidebar, semi-transparent borders, 6-8px tool controls, luminance-based surface hierarchy.
+- From Coinbase: one functional blue accent, cool-gray secondary surfaces, 8px operational cards, and minimal shadows; blue is reserved for information and interaction rather than decoration.
 
 ## 7. Do's And Don'ts
 

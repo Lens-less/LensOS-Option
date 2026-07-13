@@ -46,12 +46,21 @@ INSTRUMENT_RE = re.compile(
 PUBLIC_FEED_CONTRACTS = {
     "option_chain": "required",
     "ticker": "required",
-    "order_book": "not_implemented",
+    # These feeds are mandatory for a live Deribit snapshot.  Older checked-in
+    # fixtures predate the graph and remain replayable, but cannot contribute a
+    # complete-feed or trust-promotion claim.
+    "order_book": "required_live",
     "vol_index": "required",
-    "funding_basis": "not_implemented",
-    "index_spot": "not_implemented",
-    "events": "not_implemented",
+    "funding_basis": "required_live",
+    "index_spot": "required_live",
+    "events": "required_live",
 }
+
+PUBLIC_FEED_MAX_AGE_SEC = 120
+PUBLIC_FEED_FUTURE_TOLERANCE_SEC = 5
+TRUST_MINIMUM_CONSECUTIVE_PASSES = 6
+TRUST_MINIMUM_OBSERVATION_SECONDS = 60
+TRUST_MAXIMUM_PASS_GAP_SECONDS = 60
 
 SPREAD_SANITY_FLAGS = {
     "MISSING_BID",
@@ -67,6 +76,7 @@ SPREAD_SANITY_FLAGS = {
 BLOCKING_QUALITY_FLAGS = SPREAD_SANITY_FLAGS.union(
     {
         "STALE_QUOTE",
+        "FUTURE_QUOTE_TIMESTAMP",
         "INVALID_UNDERLYING_PRICE",
         "MISSING_BID_IV",
         "MISSING_ASK_IV",
@@ -234,6 +244,7 @@ def fetch_deribit_option_chain_snapshot(
     base_url: str = DEFAULT_DERIBIT_BASE_URL,
     instrument_limit: int | None = None,
     timeout: int = 20,
+    include_feed_graph: bool = False,
 ) -> dict[str, Any]:
     """Fetch a live public option-chain snapshot, always returning a structured payload.
 
@@ -352,6 +363,18 @@ def fetch_deribit_option_chain_snapshot(
             message = f"vol_index: {exc}"
             errors.append(message)
             adapter_events.append(_adapter_event_from_error(message))
+
+    if include_feed_graph and summaries:
+        graph_feeds, graph_errors, graph_events = _fetch_public_feed_graph(
+            safe_base,
+            currency=currency,
+            selected_instrument_names=[str(row["instrument_name"]) for row in summaries],
+            timeout=timeout,
+            observed_at=collection_started_at,
+        )
+        feeds.update(graph_feeds)
+        errors.extend(graph_errors)
+        adapter_events.extend(graph_events)
 
     rows = []
     for row in summaries:
@@ -529,6 +552,319 @@ def _select_research_summaries(
     }
 
 
+def _fetch_public_feed_graph(
+    base_url: str,
+    *,
+    currency: str,
+    selected_instrument_names: list[str],
+    timeout: int,
+    observed_at: str,
+) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
+    """Collect independent live feed families with bounded HTTP requests.
+
+    ``events`` intentionally means exchange-native lock/health state.  This
+    collector does not invent or proxy a macro-economic calendar.
+    """
+    representative = selected_instrument_names[0]
+    collectors = {
+        "index_spot": lambda: _fetch_index_spot_feed(
+            base_url,
+            currency=currency,
+            timeout=timeout,
+            observed_at=observed_at,
+        ),
+        "funding_basis": lambda: _fetch_funding_basis_feed(
+            base_url,
+            currency=currency,
+            timeout=timeout,
+            observed_at=observed_at,
+        ),
+        "order_book": lambda: _fetch_order_book_feed(
+            base_url,
+            instrument_name=representative,
+            selected_instrument_count=len(selected_instrument_names),
+            timeout=timeout,
+            observed_at=observed_at,
+        ),
+        "events": lambda: _fetch_exchange_events_feed(
+            base_url,
+            currency=currency,
+            timeout=timeout,
+            observed_at=observed_at,
+        ),
+    }
+    feeds: dict[str, Any] = {}
+    errors: list[str] = []
+    adapter_events: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=len(collectors)) as pool:
+        futures = {pool.submit(collector): name for name, collector in collectors.items()}
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                feeds[name] = future.result()
+            except (ValueError, TypeError, KeyError, OSError, OverflowError) as exc:
+                message = f"{name}: {exc}"
+                errors.append(message)
+                event = _adapter_event_from_error(message)
+                event.update(
+                    {
+                        "endpoint": _feed_source_endpoint(name),
+                        "feed": name,
+                        "retryable": event["class"]
+                        in {"rate_limit", "transient_network"},
+                    }
+                )
+                adapter_events.append(event)
+    return feeds, errors, adapter_events
+
+
+def _fetch_index_spot_feed(
+    base_url: str,
+    *,
+    currency: str,
+    timeout: int,
+    observed_at: str,
+) -> dict[str, Any]:
+    index_name = f"{currency.lower()}_usd"
+    payload = _get_json(
+        f"{base_url}/api/v2/public/get_index_price",
+        {"index_name": index_name},
+        timeout=timeout,
+    )
+    result = _jsonrpc_result(payload, endpoint="get_index_price")
+    if not isinstance(result, dict):
+        raise ValueError("get_index_price result must be an object")
+    index_price = _to_number(result.get("index_price"))
+    if index_price is None or index_price <= 0:
+        raise ValueError("get_index_price returned invalid index_price")
+    estimated_delivery = _to_number(result.get("estimated_delivery_price"))
+    return {
+        "index_name": index_name,
+        "currency": currency,
+        "index_price": index_price,
+        "price": index_price,
+        "estimated_delivery_price": estimated_delivery,
+        "observed_at": observed_at,
+        "as_of": observed_at,
+        "source_endpoint": "public/get_index_price",
+        "scope": index_name,
+        "provenance": _feed_provenance(
+            endpoint="public/get_index_price",
+            observed_at=observed_at,
+        ),
+    }
+
+
+def _fetch_funding_basis_feed(
+    base_url: str,
+    *,
+    currency: str,
+    timeout: int,
+    observed_at: str,
+) -> dict[str, Any]:
+    instrument_name = f"{currency}-PERPETUAL"
+    end_ms = parse_timestamp_ms(observed_at)
+    start_ms = max(0, end_ms - 60 * 60 * 1000)
+    funding_payload = _get_json(
+        f"{base_url}/api/v2/public/get_funding_rate_value",
+        {
+            "instrument_name": instrument_name,
+            "start_timestamp": start_ms,
+            "end_timestamp": end_ms,
+        },
+        timeout=timeout,
+    )
+    funding_result = _jsonrpc_result(
+        funding_payload,
+        endpoint="get_funding_rate_value",
+    )
+    funding_rate = _to_number(funding_result)
+    if funding_rate is None:
+        raise ValueError("get_funding_rate_value returned a non-numeric result")
+
+    ticker_payload = _get_json(
+        f"{base_url}/api/v2/public/ticker",
+        {"instrument_name": instrument_name},
+        timeout=timeout,
+    )
+    ticker = _jsonrpc_result(ticker_payload, endpoint=f"ticker:{instrument_name}")
+    if not isinstance(ticker, dict):
+        raise ValueError("perpetual ticker result must be an object")
+    mark_price = _to_number(ticker.get("mark_price"))
+    index_price = _to_number(ticker.get("index_price"))
+    basis_rate = (
+        (mark_price - index_price) / index_price
+        if mark_price is not None and index_price is not None and index_price > 0
+        else None
+    )
+    return {
+        "instrument_name": instrument_name,
+        "currency": currency,
+        "funding_rate": funding_rate,
+        "basis_rate": round(basis_rate, 10) if basis_rate is not None else None,
+        "index_price": index_price,
+        "mark_price": mark_price,
+        "perpetual_mark_price": mark_price,
+        "current_funding": _to_number(ticker.get("current_funding")),
+        "funding_8h": _to_number(ticker.get("funding_8h")),
+        "window_start": _timestamp_from_ms(start_ms),
+        "window_end": _timestamp_from_ms(end_ms),
+        "observed_at": observed_at,
+        "as_of": observed_at,
+        "source_endpoint": "public/get_funding_rate_value+public/ticker",
+        "scope": "one_hour_realized_and_current_perpetual_basis",
+        "provenance": _feed_provenance(
+            endpoint="public/get_funding_rate_value+public/ticker",
+            observed_at=observed_at,
+        ),
+    }
+
+
+def _fetch_order_book_feed(
+    base_url: str,
+    *,
+    instrument_name: str,
+    selected_instrument_count: int,
+    timeout: int,
+    observed_at: str,
+) -> dict[str, Any]:
+    payload = _get_json(
+        f"{base_url}/api/v2/public/get_order_book",
+        {"instrument_name": instrument_name, "depth": 5},
+        timeout=timeout,
+    )
+    result = _jsonrpc_result(payload, endpoint=f"get_order_book:{instrument_name}")
+    if not isinstance(result, dict):
+        raise ValueError("get_order_book result must be an object")
+    if str(result.get("instrument_name") or "") != instrument_name:
+        raise ValueError("get_order_book instrument_name mismatch")
+    timestamp_ms = _coerce_exchange_timestamp_ms(result.get("timestamp"))
+    bids = _normalize_book_levels(result.get("bids"), side="bids")
+    asks = _normalize_book_levels(result.get("asks"), side="asks")
+    return {
+        "instrument_name": instrument_name,
+        "timestamp": _timestamp_from_ms(timestamp_ms),
+        "observed_at": observed_at,
+        "as_of": _timestamp_from_ms(timestamp_ms),
+        "state": str(result.get("state") or "unknown"),
+        "change_id": result.get("change_id"),
+        "index_price": _to_number(result.get("index_price")),
+        "mark_price": _to_number(result.get("mark_price")),
+        "best_bid_price": _to_number(result.get("best_bid_price")),
+        "best_bid_amount": _to_number(result.get("best_bid_amount")),
+        "best_ask_price": _to_number(result.get("best_ask_price")),
+        "best_ask_amount": _to_number(result.get("best_ask_amount")),
+        "bids": bids,
+        "asks": asks,
+        "source_endpoint": "public/get_order_book",
+        "scope": {
+            "kind": "research_sample",
+            "depth": 5,
+            "sampled_instrument_count": 1,
+            "selected_instrument_count": selected_instrument_count,
+            "instrument_names": [instrument_name],
+        },
+        "provenance": _feed_provenance(
+            endpoint="public/get_order_book",
+            observed_at=observed_at,
+        ),
+    }
+
+
+def _fetch_exchange_events_feed(
+    base_url: str,
+    *,
+    currency: str,
+    timeout: int,
+    observed_at: str,
+) -> dict[str, Any]:
+    payload = _get_json(
+        f"{base_url}/api/v2/public/status",
+        {},
+        timeout=timeout,
+    )
+    result = _jsonrpc_result(payload, endpoint="status")
+    if not isinstance(result, dict) or "locked" not in result:
+        raise ValueError("status result must contain locked")
+    locked_currencies = result.get("locked_currencies") or []
+    locked_indices = result.get("locked_indices") or []
+    if not isinstance(locked_currencies, list) or not isinstance(locked_indices, list):
+        raise ValueError("status lock collections must be lists")
+    return {
+        "currency": currency,
+        "observed_at": observed_at,
+        "as_of": observed_at,
+        "exchange_locked": result.get("locked"),
+        "locked_currencies": [str(item) for item in locked_currencies],
+        "locked_indices": [str(item) for item in locked_indices],
+        # Explicitly empty: public/status is exchange health, not a macro feed.
+        "macro_events": [],
+        "source_endpoint": "public/status",
+        "scope": "exchange_native_only",
+        "provenance": _feed_provenance(
+            endpoint="public/status",
+            observed_at=observed_at,
+        ),
+    }
+
+
+def _normalize_book_levels(value: Any, *, side: str) -> list[list[float]]:
+    if not isinstance(value, list):
+        raise ValueError(f"get_order_book {side} must be a list")
+    levels: list[list[float]] = []
+    for level in value[:5]:
+        if not isinstance(level, (list, tuple)) or len(level) < 2:
+            raise ValueError(f"get_order_book {side} contains malformed level")
+        price = _to_number(level[0])
+        amount = _to_number(level[1])
+        if price is None or amount is None or price < 0 or amount < 0:
+            raise ValueError(f"get_order_book {side} contains invalid level")
+        levels.append([price, amount])
+    return levels
+
+
+def _coerce_exchange_timestamp_ms(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError("exchange timestamp is not integer-like")
+    if isinstance(value, float) and (not isfinite(value) or not value.is_integer()):
+        raise ValueError("exchange timestamp is not integer-like")
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("exchange timestamp is not integer-like") from exc
+
+
+def _timestamp_from_ms(value: int) -> str:
+    try:
+        return (
+            datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("exchange timestamp is out of range") from exc
+
+
+def _feed_provenance(*, endpoint: str, observed_at: str) -> dict[str, Any]:
+    return {
+        "venue": "DERIBIT",
+        "transport": "HTTPS_JSON_RPC",
+        "source_endpoint": endpoint,
+        "observed_at": observed_at,
+        "schema_version": "deribit_public_feed.v1",
+    }
+
+
+def _feed_source_endpoint(name: str) -> str:
+    return {
+        "index_spot": "public/get_index_price",
+        "funding_basis": "public/get_funding_rate_value+public/ticker",
+        "order_book": "public/get_order_book",
+        "events": "public/status",
+    }.get(name, "public/unknown")
+
+
 def _summary_has_preferred_liquidity(summary: dict[str, Any]) -> bool:
     bid = _to_number(summary.get("bid_price"))
     ask = _to_number(summary.get("ask_price"))
@@ -627,6 +963,11 @@ def build_market_data_status(
     gate = evaluate_market_data_quality(normalized, limits=limits)
     response_contract = _public_response_contract(normalized)
     feed_coverage = _feed_coverage(normalized)
+    trust_evidence = _verified_trust_evidence(
+        normalized,
+        quality_gate=gate,
+        feed_coverage=feed_coverage,
+    )
     return {
         "status": "validated" if gate["passed"] else "blocked",
         "validated": gate["passed"],
@@ -637,6 +978,7 @@ def build_market_data_status(
         "quality_gate": gate,
         "public_response_contract": response_contract,
         "feed_coverage": feed_coverage,
+        "trust_evidence": trust_evidence,
         "collection_scope": dict(normalized["collection_scope"]),
     }
 
@@ -660,16 +1002,22 @@ def normalize_market_snapshot(
         _normalize_quote_row(row, snapshot, evaluation_now_ms, normalized_limits)
         for row in rows
     ]
+    snapshot_age_sec, snapshot_future_sec = _timestamp_age_seconds(
+        reference_ms=evaluation_now_ms,
+        observed_ms=captured_at_ms,
+    )
     return {
         "captured_at": snapshot["captured_at"],
         "captured_at_ms": captured_at_ms,
-        "snapshot_age_sec": round(max(0, evaluation_now_ms - captured_at_ms) / 1000, 3),
+        "snapshot_age_sec": snapshot_age_sec,
+        "snapshot_future_sec": snapshot_future_sec,
         "source": snapshot.get("source", "fixture"),
         "currency": snapshot.get("currency", "BTC"),
         "quotes": quotes,
         "fetch_errors": list(snapshot.get("fetch_errors", [])),
         "adapter_events": list(snapshot.get("adapter_events", [])),
         "feeds": dict(snapshot.get("feeds") or {}),
+        "trust_evidence": dict(snapshot.get("trust_evidence") or {}),
         "replay_scenario": snapshot.get("replay_scenario"),
         "collection_scope": _snapshot_collection_scope(snapshot, row_count=len(rows)),
     }
@@ -693,6 +1041,8 @@ def evaluate_market_data_quality(
     overall_reason_codes: list[str] = []
     if normalized_snapshot["snapshot_age_sec"] > normalized_limits["market_data_max_age_sec"]:
         overall_reason_codes.append("MARKET_DATA_AGE_EXCEEDED")
+    if normalized_snapshot.get("snapshot_future_sec", 0) > PUBLIC_FEED_FUTURE_TOLERANCE_SEC:
+        overall_reason_codes.append("FUTURE_SNAPSHOT_TIMESTAMP")
     response_contract = _public_response_contract(normalized_snapshot)
     if not quotes:
         overall_reason_codes.append("EMPTY_PUBLIC_RESPONSE")
@@ -863,7 +1213,10 @@ def _normalize_quote_row(
         summary.get("creation_timestamp"),
         parse_timestamp_ms(snapshot["captured_at"]),
     )
-    quote_age_sec = round(max(0, evaluation_now_ms - int(timestamp_ms)) / 1000, 3)
+    quote_age_sec, quote_future_sec = _timestamp_age_seconds(
+        reference_ms=evaluation_now_ms,
+        observed_ms=int(timestamp_ms),
+    )
     spread_ratio = None
     if bid is not None and ask is not None and mid not in (None, 0):
         spread_ratio = round((ask - bid) / mid, 6)
@@ -891,6 +1244,7 @@ def _normalize_quote_row(
         "best_ask_amount": best_ask_amount,
         "depth": depth,
         "quote_age_sec": quote_age_sec,
+        "quote_future_sec": quote_future_sec,
         "source": snapshot.get("source", "fixture"),
         "spread_ratio": spread_ratio,
         "exchange_greeks": _normalize_exchange_greeks(ticker.get("greeks")),
@@ -983,47 +1337,738 @@ def _public_response_contract(normalized_snapshot: dict[str, Any]) -> dict[str, 
 def _feed_coverage(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
     response_contract = _public_response_contract(normalized_snapshot)
     ticker_status = response_contract["endpoints"]["ticker"]["status"]
-    feeds = {}
-    for name, requirement in PUBLIC_FEED_CONTRACTS.items():
+    source_is_live = _is_live_deribit_source(normalized_snapshot.get("source"))
+    feeds: dict[str, Any] = {}
+    for name, contract_requirement in PUBLIC_FEED_CONTRACTS.items():
         if name == "option_chain":
             status = "available" if normalized_snapshot["quotes"] else "missing"
+            details: dict[str, Any] = {}
         elif name == "ticker":
             status = ticker_status
+            details = {}
         elif name == "vol_index":
-            status = response_contract["endpoints"]["vol_index"]["status"]
+            vol_status = response_contract["endpoints"]["vol_index"]
+            status = vol_status["status"]
+            details = dict(vol_status)
+            vol_payload = (normalized_snapshot.get("feeds") or {}).get("vol_index") or {}
+            if (
+                source_is_live
+                and status == "available"
+                and not _valid_live_provenance(vol_payload)
+            ):
+                status = "malformed"
+                details = _malformed_feed("VOL_INDEX_PROVENANCE_MISSING")
         else:
-            status = "missing"
+            details = _live_feed_status(normalized_snapshot, name)
+            status = str(details["status"])
+        required_now = contract_requirement == "required" or (
+            contract_requirement == "required_live" and source_is_live
+        )
+        if contract_requirement == "required_live" and not source_is_live:
+            requirement = "out_of_scope_for_fixture"
+        else:
+            requirement = "required" if required_now else contract_requirement
+        freshness_status = details.get("freshness_status")
+        if freshness_status is None:
+            if status == "stale":
+                freshness_status = "stale"
+            elif status == "available":
+                freshness_status = (
+                    "fresh"
+                    if normalized_snapshot["snapshot_age_sec"]
+                    <= DEFAULT_QUALITY_LIMITS["market_data_max_age_sec"]
+                    else "stale"
+                )
+            else:
+                freshness_status = "unknown"
         feeds[name] = {
             "requirement": requirement,
+            "contract_requirement": contract_requirement,
             "status": status,
-            "freshness_status": "fresh"
-            if normalized_snapshot["snapshot_age_sec"]
-            <= DEFAULT_QUALITY_LIMITS["market_data_max_age_sec"]
-            else "stale",
+            "freshness_status": freshness_status,
+            "scope": details.get("scope"),
+            "source_endpoint": details.get("source_endpoint"),
+            "reason_code": details.get("reason_code"),
         }
+    missing_feeds = [
+        name
+        for name, item in feeds.items()
+        if item["contract_requirement"] in {"required", "required_live"}
+        and item["status"] != "available"
+    ]
+    missing_required = [
+        name
+        for name, item in feeds.items()
+        if item["requirement"] == "required" and item["status"] != "available"
+    ]
+    remaining_out_of_scope = [
+        name
+        for name, item in feeds.items()
+        if item["requirement"] == "out_of_scope_for_fixture"
+        and item["status"] != "available"
+    ]
+    graph_complete = not missing_feeds
     return {
         "feeds": feeds,
-        "missing_feeds": [
-            name
-            for name, item in feeds.items()
-            if item["requirement"] == "not_implemented"
-            or (
-                item["requirement"] == "required"
-                and item["status"] != "available"
-            )
-        ],
-        "missing_required_feeds": [
-            name
-            for name, item in feeds.items()
-            if item["requirement"] == "required" and item["status"] != "available"
-        ],
-        "remaining_out_of_scope_feeds": [
-            name
-            for name, item in feeds.items()
-            if item["requirement"] == "not_implemented"
-        ],
-        "readiness_contribution": "research_only_partial_public_graph",
+        "missing_feeds": missing_feeds,
+        "missing_required_feeds": missing_required,
+        "remaining_out_of_scope_feeds": remaining_out_of_scope,
+        "graph_complete": graph_complete,
+        "scope": "live_required" if source_is_live else "fixture_replay_compatible",
+        "readiness_contribution": (
+            "research_only_complete_public_graph"
+            if graph_complete
+            else "research_only_partial_public_graph"
+        ),
     }
+
+
+def _live_feed_status(
+    normalized_snapshot: dict[str, Any],
+    name: str,
+) -> dict[str, Any]:
+    payload = (normalized_snapshot.get("feeds") or {}).get(name)
+    if not isinstance(payload, dict) or not payload:
+        return {
+            "status": "missing",
+            "freshness_status": "unknown",
+            "reason_code": f"{name.upper()}_MISSING",
+        }
+    if _is_live_deribit_source(normalized_snapshot.get("source")) and not _valid_live_provenance(
+        payload
+    ):
+        return _malformed_feed(f"{name.upper()}_PROVENANCE_MISSING")
+
+    validators = {
+        "index_spot": _validate_index_spot_feed,
+        "funding_basis": _validate_funding_basis_feed,
+        "order_book": _validate_order_book_feed,
+        "events": _validate_events_feed,
+    }
+    validator = validators.get(name)
+    if validator is None:
+        return {
+            "status": "malformed",
+            "freshness_status": "unknown",
+            "reason_code": "UNKNOWN_FEED_CONTRACT",
+        }
+    result = validator(payload, normalized_snapshot)
+    result.setdefault("scope", payload.get("scope"))
+    result.setdefault("source_endpoint", payload.get("source_endpoint"))
+    return result
+
+
+def _validate_index_spot_feed(
+    payload: dict[str, Any],
+    normalized_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    index_price = _to_number(payload.get("index_price", payload.get("price")))
+    if (
+        not payload.get("index_name")
+        or str(payload.get("currency") or "").upper()
+        != str(normalized_snapshot.get("currency") or "BTC").upper()
+        or index_price is None
+        or index_price <= 0
+    ):
+        return _malformed_feed("INDEX_SPOT_MALFORMED")
+    return _timestamped_feed_status(
+        payload,
+        normalized_snapshot,
+        timestamp_field="observed_at",
+        stale_reason="INDEX_SPOT_STALE",
+    )
+
+
+def _validate_funding_basis_feed(
+    payload: dict[str, Any],
+    normalized_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    funding_rate = _to_number(payload.get("funding_rate"))
+    basis_rate = _to_number(payload.get("basis_rate"))
+    index_price = _to_number(payload.get("index_price"))
+    mark_price = _to_number(
+        payload.get("perpetual_mark_price", payload.get("mark_price"))
+    )
+    if (
+        not payload.get("instrument_name")
+        or funding_rate is None
+        or basis_rate is None
+        or index_price is None
+        or index_price <= 0
+        or mark_price is None
+        or mark_price <= 0
+    ):
+        return _malformed_feed("FUNDING_BASIS_MALFORMED")
+    return _timestamped_feed_status(
+        payload,
+        normalized_snapshot,
+        timestamp_field="observed_at",
+        stale_reason="FUNDING_BASIS_STALE",
+    )
+
+
+def _validate_order_book_feed(
+    payload: dict[str, Any],
+    normalized_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    if (
+        not payload.get("instrument_name")
+        or not isinstance(payload.get("bids"), list)
+        or not isinstance(payload.get("asks"), list)
+        or payload.get("state") not in {
+            "open",
+            "settlement",
+            "delivered",
+            "inactive",
+            "locked",
+            "halted",
+            "archivized",
+        }
+        or _safe_nonnegative_int(payload.get("change_id")) <= 0
+    ):
+        return _malformed_feed("ORDER_BOOK_MALFORMED")
+    return _timestamped_feed_status(
+        payload,
+        normalized_snapshot,
+        timestamp_field="timestamp",
+        stale_reason="ORDER_BOOK_STALE",
+    )
+
+
+def _validate_events_feed(
+    payload: dict[str, Any],
+    normalized_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    if (
+        "exchange_locked" not in payload
+        or not isinstance(payload.get("locked_currencies"), list)
+        or not isinstance(payload.get("macro_events"), list)
+        or payload.get("scope") != "exchange_native_only"
+    ):
+        return _malformed_feed("EVENTS_FEED_MALFORMED")
+    # A locked exchange is valid evidence, not missing data.  The downstream
+    # regime/risk gates decide that it blocks actions.
+    return _timestamped_feed_status(
+        payload,
+        normalized_snapshot,
+        timestamp_field="observed_at",
+        stale_reason="EVENTS_FEED_STALE",
+    )
+
+
+def _timestamped_feed_status(
+    payload: dict[str, Any],
+    normalized_snapshot: dict[str, Any],
+    *,
+    timestamp_field: str,
+    stale_reason: str,
+) -> dict[str, Any]:
+    timestamp = payload.get(timestamp_field) or payload.get("as_of")
+    try:
+        timestamp_ms = parse_timestamp_ms(timestamp)
+    except (TypeError, ValueError, OverflowError):
+        return _malformed_feed(stale_reason.replace("STALE", "TIMESTAMP_MALFORMED"))
+    age_sec, future_sec = _timestamp_age_seconds(
+        reference_ms=normalized_snapshot["captured_at_ms"],
+        observed_ms=timestamp_ms,
+    )
+    if future_sec > PUBLIC_FEED_FUTURE_TOLERANCE_SEC:
+        feed_name = stale_reason.removesuffix("_STALE")
+        return {
+            "status": "invalid",
+            "freshness_status": "future",
+            "future_by_sec": future_sec,
+            "max_future_sec": PUBLIC_FEED_FUTURE_TOLERANCE_SEC,
+            "reason_code": f"FUTURE_TIMESTAMP_{feed_name}",
+        }
+    if age_sec > PUBLIC_FEED_MAX_AGE_SEC:
+        return {
+            "status": "stale",
+            "freshness_status": "stale",
+            "age_sec": age_sec,
+            "max_age_sec": PUBLIC_FEED_MAX_AGE_SEC,
+            "reason_code": stale_reason,
+        }
+    return {
+        "status": "available",
+        "freshness_status": "fresh",
+        "age_sec": age_sec,
+        "max_age_sec": PUBLIC_FEED_MAX_AGE_SEC,
+    }
+
+
+def _malformed_feed(reason_code: str) -> dict[str, Any]:
+    return {
+        "status": "malformed",
+        "freshness_status": "unknown",
+        "reason_code": reason_code,
+    }
+
+
+def _timestamp_age_seconds(*, reference_ms: int, observed_ms: int) -> tuple[float, float]:
+    delta_ms = reference_ms - observed_ms
+    return (
+        round(max(0, delta_ms) / 1000, 3),
+        round(max(0, -delta_ms) / 1000, 3),
+    )
+
+
+def _is_live_deribit_source(value: Any) -> bool:
+    return str(value or "").lower().startswith("deribit_live:")
+
+
+def _valid_live_provenance(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    provenance = payload.get("provenance")
+    return (
+        isinstance(provenance, dict)
+        and provenance.get("venue") == "DERIBIT"
+        and provenance.get("transport") == "HTTPS_JSON_RPC"
+        and str(provenance.get("source_endpoint") or "").startswith("public/")
+        and bool(provenance.get("observed_at"))
+    )
+
+
+def advance_trust_evidence(
+    snapshot: dict[str, Any],
+    *,
+    previous_snapshot: dict[str, Any] | None = None,
+    minimum_consecutive_passes: int = TRUST_MINIMUM_CONSECUTIVE_PASSES,
+    minimum_observation_seconds: int = TRUST_MINIMUM_OBSERVATION_SECONDS,
+    maximum_pass_gap_seconds: int = TRUST_MAXIMUM_PASS_GAP_SECONDS,
+) -> dict[str, Any]:
+    """Advance durable live-snapshot evidence without opening any trade mode."""
+    if (
+        minimum_consecutive_passes < 1
+        or minimum_observation_seconds < 0
+        or maximum_pass_gap_seconds < 1
+    ):
+        raise ValueError("trust evidence thresholds must be non-negative")
+    captured_at = str(snapshot.get("captured_at") or "")
+    captured_ms = parse_timestamp_ms(captured_at)
+    status = build_market_data_status(snapshot, now_ms=captured_ms)
+    feed_coverage = status["feed_coverage"]
+    source_identity = _trust_source_identity(snapshot)
+    eligible = (
+        status["validated"]
+        and _is_live_deribit_source(snapshot.get("source"))
+        and bool(feed_coverage.get("graph_complete"))
+        and not snapshot.get("fetch_errors")
+        and not snapshot.get("adapter_events")
+    )
+
+    previous_evidence = (
+        dict((previous_snapshot or {}).get("trust_evidence") or {})
+        if previous_snapshot
+        else {}
+    )
+    previous_identity = str(previous_evidence.get("source_identity") or "")
+    source_changed = bool(previous_identity and previous_identity != source_identity)
+    previous_consecutive = _safe_nonnegative_int(
+        previous_evidence.get("consecutive_passes")
+    )
+    continuity_broken = False
+    if previous_consecutive > 0:
+        try:
+            previous_last_ms = parse_timestamp_ms(previous_evidence.get("last_pass_at"))
+            pass_gap_ms = captured_ms - previous_last_ms
+            continuity_broken = (
+                pass_gap_ms < 0
+                or pass_gap_ms > maximum_pass_gap_seconds * 1000
+            )
+        except (TypeError, ValueError, OverflowError):
+            continuity_broken = True
+    rolling_observations = _advance_rolling_observations(
+        snapshot,
+        previous_evidence=(
+            {}
+            if source_changed or continuity_broken
+            else previous_evidence
+        ),
+        append_current=eligible,
+    )
+
+    if not eligible:
+        reason_codes: list[str] = []
+        if not status["validated"]:
+            reason_codes.append("MARKET_DATA_QUALITY_FAIL")
+        if not feed_coverage.get("graph_complete"):
+            reason_codes.append("PUBLIC_FEED_GRAPH_INCOMPLETE")
+        if snapshot.get("fetch_errors") or snapshot.get("adapter_events"):
+            reason_codes.append("PUBLIC_COLLECTION_DISCONTINUITY")
+        if not _is_live_deribit_source(snapshot.get("source")):
+            reason_codes.append("LIVE_SOURCE_REQUIRED_FOR_TRUST")
+        return _trust_evidence_payload(
+            status="reset",
+            consecutive_passes=0,
+            minimum_consecutive_passes=minimum_consecutive_passes,
+            first_pass_at=None,
+            last_pass_at=captured_at or None,
+            observation_seconds=0,
+            minimum_observation_seconds=minimum_observation_seconds,
+            reason_codes=reason_codes or ["TRUST_EVIDENCE_RESET"],
+            feed_graph_complete=bool(feed_coverage.get("graph_complete")),
+            source_identity=source_identity,
+            rolling_observations=rolling_observations,
+        )
+
+    can_continue = (
+        not source_changed
+        and not continuity_broken
+        and previous_evidence.get("status") in {"collecting", "promoted", "reset"}
+        and previous_identity == source_identity
+        and previous_consecutive > 0
+    )
+    if can_continue:
+        first_pass_at = str(previous_evidence.get("first_pass_at") or captured_at)
+        consecutive_passes = (
+            _safe_nonnegative_int(previous_evidence.get("consecutive_passes")) + 1
+        )
+    else:
+        first_pass_at = captured_at
+        consecutive_passes = 1
+    try:
+        observation_seconds = max(
+            0,
+            int((captured_ms - parse_timestamp_ms(first_pass_at)) / 1000),
+        )
+    except (TypeError, ValueError, OverflowError):
+        first_pass_at = captured_at
+        consecutive_passes = 1
+        observation_seconds = 0
+
+    promoted = (
+        consecutive_passes >= minimum_consecutive_passes
+        and observation_seconds >= minimum_observation_seconds
+    )
+    reason_codes = []
+    evidence_status = "promoted" if promoted else "collecting"
+    if source_changed:
+        evidence_status = "reset"
+        reason_codes.append("TRUST_SOURCE_CHANGED")
+    if continuity_broken:
+        evidence_status = "reset"
+        reason_codes.append("TRUST_PASS_GAP_EXCEEDED")
+    if consecutive_passes < minimum_consecutive_passes:
+        reason_codes.append("TRUST_CONSECUTIVE_PASSES_PENDING")
+    if observation_seconds < minimum_observation_seconds:
+        reason_codes.append("TRUST_OBSERVATION_WINDOW_PENDING")
+    return _trust_evidence_payload(
+        status=evidence_status,
+        consecutive_passes=consecutive_passes,
+        minimum_consecutive_passes=minimum_consecutive_passes,
+        first_pass_at=first_pass_at,
+        last_pass_at=captured_at,
+        observation_seconds=observation_seconds,
+        minimum_observation_seconds=minimum_observation_seconds,
+        reason_codes=reason_codes,
+        feed_graph_complete=True,
+        source_identity=source_identity,
+        rolling_observations=rolling_observations,
+    )
+
+
+def _verified_trust_evidence(
+    normalized_snapshot: dict[str, Any],
+    *,
+    quality_gate: dict[str, Any],
+    feed_coverage: dict[str, Any],
+) -> dict[str, Any]:
+    raw = dict(normalized_snapshot.get("trust_evidence") or {})
+    if not raw:
+        return _trust_evidence_payload(
+            status="collecting",
+            consecutive_passes=0,
+            minimum_consecutive_passes=TRUST_MINIMUM_CONSECUTIVE_PASSES,
+            first_pass_at=None,
+            last_pass_at=None,
+            observation_seconds=0,
+            minimum_observation_seconds=TRUST_MINIMUM_OBSERVATION_SECONDS,
+            reason_codes=["TRUST_EVIDENCE_NOT_OBSERVED"],
+            feed_graph_complete=bool(feed_coverage.get("graph_complete")),
+            source_identity=_trust_source_identity(normalized_snapshot),
+            rolling_observations=[],
+        )
+
+    consecutive = _safe_nonnegative_int(raw.get("consecutive_passes"))
+    minimum_passes = max(
+        TRUST_MINIMUM_CONSECUTIVE_PASSES,
+        _safe_nonnegative_int(
+            raw.get(
+                "minimum_consecutive_passes",
+                raw.get("required_consecutive_passes", TRUST_MINIMUM_CONSECUTIVE_PASSES),
+            )
+        ),
+    )
+    observation = _safe_nonnegative_int(
+        raw.get("observation_seconds", raw.get("observation_sec"))
+    )
+    minimum_observation = max(
+        TRUST_MINIMUM_OBSERVATION_SECONDS,
+        _safe_nonnegative_int(
+            raw.get(
+                "minimum_observation_seconds",
+                raw.get("required_observation_sec", TRUST_MINIMUM_OBSERVATION_SECONDS),
+            )
+        ),
+    )
+    claimed_status = str(raw.get("status") or "collecting")
+    current_valid = (
+        quality_gate.get("passed") is True
+        and _is_live_deribit_source(normalized_snapshot.get("source"))
+        and feed_coverage.get("graph_complete") is True
+    )
+    promotion_valid = (
+        claimed_status == "promoted"
+        and current_valid
+        and consecutive >= minimum_passes
+        and observation >= minimum_observation
+        and raw.get("source_identity") == _trust_source_identity(normalized_snapshot)
+    )
+    if claimed_status == "promoted" and not promotion_valid:
+        claimed_status = "reset"
+        reason_codes = ["TRUST_EVIDENCE_CLAIM_INVALID"]
+    else:
+        if claimed_status not in {"collecting", "promoted", "reset"}:
+            claimed_status = "reset"
+            reason_codes = ["TRUST_EVIDENCE_SCHEMA_INVALID"]
+        else:
+            reason_codes = [str(item) for item in raw.get("reason_codes") or []]
+    if not current_valid:
+        claimed_status = "reset"
+        if not feed_coverage.get("graph_complete"):
+            reason_codes.append("PUBLIC_FEED_GRAPH_INCOMPLETE")
+        if not quality_gate.get("passed"):
+            reason_codes.append("MARKET_DATA_QUALITY_FAIL")
+    if claimed_status != "promoted" and not reason_codes:
+        reason_codes.append("TRUST_PROMOTION_PENDING")
+    return _trust_evidence_payload(
+        status=claimed_status,
+        consecutive_passes=consecutive,
+        minimum_consecutive_passes=minimum_passes,
+        first_pass_at=raw.get("first_pass_at"),
+        last_pass_at=raw.get("last_pass_at"),
+        observation_seconds=observation,
+        minimum_observation_seconds=minimum_observation,
+        reason_codes=sorted(set(reason_codes)),
+        feed_graph_complete=bool(feed_coverage.get("graph_complete")),
+        source_identity=_trust_source_identity(normalized_snapshot),
+        rolling_observations=_sanitize_rolling_observations(
+            raw.get("rolling_observations", raw.get("rolling"))
+        ),
+    )
+
+
+def _trust_evidence_payload(
+    *,
+    status: str,
+    consecutive_passes: int,
+    minimum_consecutive_passes: int,
+    first_pass_at: Any,
+    last_pass_at: Any,
+    observation_seconds: int,
+    minimum_observation_seconds: int,
+    reason_codes: list[str],
+    feed_graph_complete: bool,
+    source_identity: str,
+    rolling_observations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    rolling = _sanitize_rolling_observations(rolling_observations)
+    soak_24h_complete = observation_seconds >= 86_400
+    continuous_7d_complete = observation_seconds >= 7 * 86_400
+    websocket_gap_resync_verified = False
+    production_reason_codes = []
+    if not websocket_gap_resync_verified:
+        production_reason_codes.append("MISSING_WS_GAP_RESYNC_EVIDENCE")
+    if not soak_24h_complete:
+        production_reason_codes.append("MISSING_24H_SOAK_EVIDENCE")
+    if not continuous_7d_complete:
+        production_reason_codes.append("MISSING_7D_CONTINUOUS_EVIDENCE")
+    production_ready = not production_reason_codes
+    return {
+        "schema_version": "market_trust_evidence.v1",
+        "status": status,
+        "consecutive_passes": consecutive_passes,
+        "minimum_consecutive_passes": minimum_consecutive_passes,
+        "required_consecutive_passes": minimum_consecutive_passes,
+        "first_pass_at": first_pass_at,
+        "last_pass_at": last_pass_at,
+        "observation_seconds": observation_seconds,
+        "observation_sec": observation_seconds,
+        "minimum_observation_seconds": minimum_observation_seconds,
+        "required_observation_sec": minimum_observation_seconds,
+        "reason_codes": sorted(set(str(item) for item in reason_codes if item)),
+        "feed_graph_complete": bool(feed_graph_complete),
+        "source_identity": source_identity,
+        "rolling_observations": rolling,
+        "rolling": rolling,
+        "rolling_observation_count": len(rolling),
+        "minimum_rolling_observations": 20,
+        "rolling_status": "ready" if len(rolling) >= 20 else "collecting",
+        # Snapshot-level trust is sufficient for research analytics only. The
+        # production gate remains separate so a short REST observation cannot
+        # masquerade as WebSocket gap/resync and multi-day soak evidence.
+        "production_gate": {
+            "schema_version": "market_production_trust_gate.v1",
+            "ready": production_ready,
+            "status": "ready" if production_ready else "collecting",
+            "websocket_gap_resync_verified": websocket_gap_resync_verified,
+            "soak_24h_complete": soak_24h_complete,
+            "continuous_7d_complete": continuous_7d_complete,
+            "minimum_soak_seconds": 86_400,
+            "minimum_continuous_seconds": 7 * 86_400,
+            "reason_codes": production_reason_codes,
+        },
+        "research_only": True,
+    }
+
+
+def _trust_source_identity(snapshot: dict[str, Any]) -> str:
+    return f"{str(snapshot.get('source') or 'missing')}|{str(snapshot.get('currency') or 'BTC').upper()}"
+
+
+def _safe_nonnegative_int(value: Any) -> int:
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _advance_rolling_observations(
+    snapshot: dict[str, Any],
+    *,
+    previous_evidence: dict[str, Any],
+    append_current: bool,
+) -> list[dict[str, Any]]:
+    observations = _sanitize_rolling_observations(
+        previous_evidence.get("rolling_observations", previous_evidence.get("rolling"))
+    )
+    if not append_current:
+        return observations
+    current = _rolling_observation_from_snapshot(snapshot)
+    if current is None:
+        return observations
+    observations = [
+        item for item in observations if item.get("observed_at") != current["observed_at"]
+    ]
+    observations.append(current)
+    observations.sort(key=lambda item: str(item.get("observed_at") or ""))
+    return observations[-288:]
+
+
+def _rolling_observation_from_snapshot(
+    snapshot: dict[str, Any],
+) -> dict[str, Any] | None:
+    feeds = snapshot.get("feeds") or {}
+    index_payload = feeds.get("index_spot") or {}
+    vol_payload = feeds.get("vol_index") or {}
+    funding_payload = feeds.get("funding_basis") or {}
+    index_price = _to_number(
+        index_payload.get("index_price", index_payload.get("price"))
+    )
+    dvol = _to_number(vol_payload.get("volatility"))
+    funding_rate = _to_number(funding_payload.get("funding_rate"))
+    observed_at = str(snapshot.get("captured_at") or "")
+    if (
+        not observed_at
+        or index_price is None
+        or index_price <= 0
+        or dvol is None
+        or dvol <= 0
+        or funding_rate is None
+    ):
+        return None
+
+    atm_candidates: list[tuple[float, float]] = []
+    for row in snapshot.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        ticker = row.get("ticker") or {}
+        summary = row.get("summary") or row
+        mark_iv = _to_number(ticker.get("mark_iv"))
+        underlying = _first_number(
+            ticker.get("underlying_price"),
+            summary.get("underlying_price"),
+            index_price,
+        )
+        instrument_name = (
+            row.get("instrument_name")
+            or ticker.get("instrument_name")
+            or summary.get("instrument_name")
+        )
+        try:
+            strike = _to_number(_parse_option_metadata(instrument_name)["strike"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if (
+            mark_iv is None
+            or mark_iv <= 0
+            or underlying is None
+            or underlying <= 0
+            or strike is None
+        ):
+            continue
+        normalized_iv = mark_iv / 100.0 if mark_iv > 5.0 else mark_iv
+        atm_candidates.append((abs(strike / underlying - 1.0), normalized_iv))
+    if not atm_candidates:
+        return None
+    _, atm_iv = min(atm_candidates, key=lambda item: item[0])
+    return {
+        "observed_at": observed_at,
+        "index_price": index_price,
+        "dvol": dvol,
+        "atm_iv": atm_iv,
+        "iv_unit": "fraction",
+        "funding_rate": funding_rate,
+        "source": str(snapshot.get("source") or "missing"),
+    }
+
+
+def _sanitize_rolling_observations(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    sanitized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value[-288:]:
+        if not isinstance(item, dict):
+            continue
+        observed_at = str(item.get("observed_at") or "")
+        index_price = _to_number(item.get("index_price"))
+        dvol = _to_number(item.get("dvol"))
+        atm_iv = _to_number(item.get("atm_iv"))
+        funding_rate = _to_number(item.get("funding_rate"))
+        try:
+            parse_timestamp_ms(observed_at)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if (
+            observed_at in seen
+            or index_price is None
+            or index_price <= 0
+            or dvol is None
+            or dvol <= 0
+            or atm_iv is None
+            or atm_iv <= 0
+            or funding_rate is None
+        ):
+            continue
+        seen.add(observed_at)
+        sanitized.append(
+            {
+                "observed_at": observed_at,
+                "index_price": index_price,
+                "dvol": dvol,
+                "atm_iv": atm_iv,
+                "iv_unit": "fraction",
+                "funding_rate": funding_rate,
+                "source": str(item.get("source") or "missing"),
+            }
+        )
+    sanitized.sort(key=lambda item: item["observed_at"])
+    return sanitized[-288:]
 
 
 def _vol_index_status(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -1067,9 +2112,9 @@ def _vol_index_status(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
             "reason_code": "VOL_INDEX_TIMESTAMP_MALFORMED",
         }
 
-    age_sec = round(
-        max(0, normalized_snapshot["captured_at_ms"] - timestamp_ms) / 1000,
-        3,
+    age_sec, future_sec = _timestamp_age_seconds(
+        reference_ms=normalized_snapshot["captured_at_ms"],
+        observed_ms=timestamp_ms,
     )
     volatility = _to_number(payload.get("volatility"))
     if volatility is None or volatility <= 0:
@@ -1077,6 +2122,14 @@ def _vol_index_status(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
             "status": "malformed",
             "required_fields": required_fields,
             "reason_code": "VOL_INDEX_VALUE_MALFORMED",
+        }
+    if future_sec > PUBLIC_FEED_FUTURE_TOLERANCE_SEC:
+        return {
+            "status": "invalid",
+            "freshness_status": "future",
+            "future_by_sec": future_sec,
+            "max_future_sec": PUBLIC_FEED_FUTURE_TOLERANCE_SEC,
+            "reason_code": "FUTURE_TIMESTAMP_VOL_INDEX",
         }
     if age_sec > VOL_INDEX_MAX_AGE_SEC:
         return {
@@ -1162,6 +2215,8 @@ def _quality_flags(quote: dict[str, Any], limits: dict[str, float]) -> list[str]
 
     if quote["quote_age_sec"] > limits["stale_quote_max_sec"]:
         flags.append("STALE_QUOTE")
+    if quote.get("quote_future_sec", 0) > PUBLIC_FEED_FUTURE_TOLERANCE_SEC:
+        flags.append("FUTURE_QUOTE_TIMESTAMP")
     if quote["underlying_price"] is None or quote["underlying_price"] <= 0:
         flags.append("INVALID_UNDERLYING_PRICE")
     if quote["depth"] is None or quote["depth"] <= 0:
@@ -1352,9 +2407,14 @@ def _fetch_vol_index_feed(
         "index_name": index_name,
         "currency": currency,
         "timestamp": timestamp,
+        "as_of": timestamp,
         "volatility": normalized,
         "source_endpoint": "public/get_volatility_index_data",
         "raw_close": volatility,
+        "provenance": _feed_provenance(
+            endpoint="public/get_volatility_index_data",
+            observed_at=timestamp,
+        ),
     }
 
 

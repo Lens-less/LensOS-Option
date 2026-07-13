@@ -719,6 +719,15 @@
       overflow-wrap: anywhere;
     }
 
+    .readiness-owner {
+      grid-column: 2 / -1;
+      color: #0958d9;
+      font-size: 0.74rem;
+      font-weight: 500;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
     .gate-row {
       grid-template-columns: minmax(0, 1fr) auto;
       padding: 9px 0;
@@ -1746,11 +1755,38 @@
     .reason-band .chip-row {
       min-width: 0;
       padding-top: 1px;
+      flex-wrap: wrap;
+      overflow-x: visible;
+      gap: 6px;
     }
 
     .reason-band .chip {
+      flex: 0 1 auto;
+      max-width: 100%;
       padding: 2px 8px;
       font-size: 0.73rem;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      line-height: 1.35;
+    }
+
+    .reason-band .chip[data-owner="system"],
+    .reason-band .chip[data-owner="system_observation"] {
+      border-color: #91caff;
+      background: #e6f4ff;
+      color: #0958d9;
+    }
+
+    .reason-band .chip[data-owner="policy"] {
+      border-color: #d9d9d9;
+      background: #fafafa;
+      color: #595959;
+    }
+
+    .reason-band .chip[data-owner="none"] {
+      border-color: #b7eb8f;
+      background: #f6ffed;
+      color: #237804;
     }
 
     .workbench {
@@ -2071,7 +2107,59 @@
       overflow-wrap: anywhere;
     }
 
+    .operational-boundary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .boundary-item {
+      min-width: 0;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-left: 3px solid #1677ff;
+      border-radius: var(--radius);
+      background: #ffffff;
+    }
+
+    .boundary-item[data-tone="green"] {
+      border-left-color: #52c41a;
+    }
+
+    .boundary-item[data-tone="amber"] {
+      border-left-color: #faad14;
+    }
+
+    .boundary-item[data-tone="red"] {
+      border-left-color: #ff4d4f;
+    }
+
+    .boundary-label {
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 500;
+    }
+
+    .boundary-state {
+      display: block;
+      margin-top: 5px;
+      color: var(--ink);
+      font-size: 0.94rem;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+
+    .boundary-note {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 0.72rem;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
     @media (max-width: 980px) {
+      .operational-boundary,
       .truth-meta-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
@@ -2087,6 +2175,7 @@
         text-align: left;
       }
 
+      .operational-boundary,
       .truth-meta-grid {
         grid-template-columns: 1fr;
       }
@@ -2140,6 +2229,29 @@
             <span class="refresh-glyph" aria-hidden="true">↻</span>
           </button>
         </div>
+      </section>
+
+      <section class="operational-boundary" aria-label="系统运行边界" aria-live="polite">
+        <article class="boundary-item" id="service-boundary" data-tone="amber">
+          <div class="boundary-label">服务可用性</div>
+          <strong class="boundary-state" id="service-availability">检查中</strong>
+          <div class="boundary-note" id="service-availability-note">等待报告 API 响应。</div>
+        </article>
+        <article class="boundary-item" id="market-boundary" data-tone="amber">
+          <div class="boundary-label">市场证据</div>
+          <strong class="boundary-state" id="market-evidence-state">检查中</strong>
+          <div class="boundary-note" id="market-evidence-note">等待质量与连续性证据。</div>
+        </article>
+        <article class="boundary-item" id="release-boundary" data-tone="red">
+          <div class="boundary-label">产品发布</div>
+          <strong class="boundary-state" id="product-release-state">NO-GO</strong>
+          <div class="boundary-note" id="product-release-note">发布门禁与服务运行状态分开计算。</div>
+        </article>
+        <article class="boundary-item" id="policy-boundary" data-tone="blue">
+          <div class="boundary-label">安全策略</div>
+          <strong class="boundary-state" id="policy-boundary-state">RESEARCH_ONLY</strong>
+          <div class="boundary-note" id="policy-boundary-note">交易输出由策略禁用，非系统故障。</div>
+        </article>
       </section>
 
       <section
@@ -2210,10 +2322,10 @@
         </article>
       </section>
 
-      <section class="reason-band" aria-label="阻断原因列表">
-        <div class="reason-title">阻断原因</div>
+      <section class="reason-band" aria-label="当前限制列表">
+        <div class="reason-title">当前限制</div>
         <div class="reason-content">
-          <p class="reason-copy">系统保持 research_only，仅展示证据、门禁和状态，不生成交易指令。</p>
+          <p class="reason-copy">等待配置、证据积累和安全策略分别标注；只有真实异常才作为故障处理。</p>
           <div class="chip-row" id="reason-codes"></div>
         </div>
       </section>
@@ -2236,10 +2348,10 @@
           <article class="panel">
             <header class="panel-header">
               <div>
-                <h2 class="panel-title">Mode Gate 输出门禁</h2>
-                <span class="panel-kicker">按合约阻断的输出</span>
+                <h2 class="panel-title">安全策略边界</h2>
+                <span class="panel-kicker">RESEARCH_ONLY 合约禁止的输出（非故障）</span>
               </div>
-              <span class="badge red">已阻断</span>
+              <span class="badge cyan">策略禁用</span>
             </header>
             <div class="panel-body">
               <ul class="mode-gate-list" id="mode-gate-list"></ul>
@@ -2420,7 +2532,10 @@
       "unavailable": "不可用",
       "available": "可用",
       "trusted": "可信",
+      "degraded": "证据降级",
       "untrusted": "不可信",
+      "collecting": "证据采集中",
+      "promoted": "证据已晋级",
       "not_run": "未运行",
       "not_verified": "未验证",
       "verified": "已验证",
@@ -2453,6 +2568,12 @@
       "portfolio_risk": "组合风险",
       "position_management": "仓位管理",
       "walk_forward_calibration": "Walk-forward 校准",
+      "public_response_contract": "公开响应契约",
+      "public_feed_graph_complete": "公开 feed 图完整性",
+      "private_account_replay_contract": "只读账户回放契约",
+      "calibration_model_promoted": "校准模型提升",
+      "backtest_alignment": "Backtest 对齐",
+      "paper_ledger_persistence": "Paper ledger 持久化",
       "paper_ledger_reconciliation": "Paper ledger 对账",
       "manual_approval_runbook": "Manual approval runbook",
       "margin_light": "margin_light",
@@ -2475,6 +2596,22 @@
       "MISSING_ACCOUNT_API_SNAPSHOT": "缺少账户 API 快照",
       "MISSING_CALIBRATED_MODEL": "缺少已校准模型",
       "MISSING_BACKTEST_ALIGNMENT": "缺少 Backtest 对齐",
+      "MISSING_LIVE_PRIVATE_ACCOUNT_EVIDENCE": "缺少真实只读账户证据",
+      "REGIME_ROLLING_HISTORY_INSUFFICIENT": "Regime 实时观察样本仍在积累",
+      "REGIME_MIN_OBSERVATIONS_NOT_MET": "Regime 最少观察数尚未达到",
+      "REGIME_ROLLING_FIELDS_INCOMPLETE": "Regime 滚动字段仍在补全",
+      "VOLATILITY_CAP_0": "波动率压力限制为 0",
+      "CALIBRATION_PROMOTION_PENDING": "校准模型尚待提升评审",
+      "BACKTEST_NOT_RUN": "Backtest 尚未运行",
+      "MISSING_VENDOR_HISTORY_PROVENANCE": "缺少获授权历史数据来源证明",
+      "MISSING_VALIDATED_PATH_RISK": "缺少已验证路径风险证据",
+      "MISSING_OUT_OF_SAMPLE_EVIDENCE": "缺少样本外验证证据",
+      "MISSING_EXTERNAL_PROMOTION_REVIEW": "缺少外部模型提升评审",
+      "MISSING_PAPER_RECONCILIATION": "缺少 Paper 对账证据",
+      "MISSING_30_60_DAY_RECONCILIATION": "缺少 30 至 60 天 Paper 对账观察",
+      "EXTERNAL_APPROVAL_PENDING": "外部人工审批尚待记录",
+      "PORTFOLIO_RELEASE_INPUTS_NOT_READY": "组合风险发布输入尚未就绪",
+      "POSITION_RELEASE_INPUTS_NOT_READY": "仓位管理发布输入尚未就绪",
       "Account state is missing, stale, auth-failed, or otherwise halted.": "账户状态缺失、过期、认证失败或已进入 HALT。",
       "Validated market data is missing.": "缺少已验证市场数据。",
       "Regime or volatility cap sets sell permission to zero.": "Regime 或 volatility cap 将卖出权限降为 0。",
@@ -2498,6 +2635,16 @@
       "Exchange status is not safe for research replay.": "交易所状态不适合 research replay。",
       "No position-state blocker is active.": "当前没有激活的仓位状态阻断。",
       "Score calibration is not promoted into sizing, so final actionable size remains zero.": "评分校准尚未提升到 sizing，因此最终可执行仓位保持为 0。"
+    };
+    const READINESS_ACTION_LABELS = {
+      "Inject read-only account credentials locally and capture a sanitized snapshot.": "在本机配置只读账户凭证，并生成脱敏快照。",
+      "Provide private account evidence; the system will recompute portfolio risk.": "提供只读账户证据后，系统自动重算组合风险。",
+      "Provide private account evidence; the system will recompute position state.": "提供只读账户证据后，系统自动重算仓位状态。",
+      "Configure validated history, run walk-forward calibration, and review evidence.": "配置获授权历史数据；系统运行 Walk-forward 校准后，请评审证据。",
+      "Review calibration evidence and record an explicit model-promotion decision.": "评审校准证据，并记录明确的模型提升决定。",
+      "Configure an operator-owned historical fixture and run the bounded backtest job.": "配置你持有的历史数据快照；系统随后运行有限边界 Backtest。",
+      "Accumulate and reconcile at least 30 days of paper observations.": "前置门禁通过后，系统累计至少 30 天 Paper 观察并生成对账证据。",
+      "Review the versioned runbook and record external manual approval.": "审阅版本化 runbook，并记录外部人工批准。"
     };
 
     const FALLBACK_REPORT = {
@@ -2714,9 +2861,85 @@
           ? `${valueText(data.market_data_age_sec)} 秒`
           : "不可用"
       );
-      setText("market-data-source", data.source || trust.source_class, "未配置");
+      setMarketDataSource(data.source || trust.source_class);
       setText("market-data-trust", trust.verdict, "不可信");
       renderCollectionScope(data);
+    }
+
+    function setMarketDataSource(value) {
+      const raw = valueText(value, "未配置");
+      const node = el("market-data-source");
+      node.textContent = raw.startsWith("deribit_live:")
+        ? "Deribit · 实时公开 API"
+        : displayText(raw, "未配置");
+      node.title = raw;
+    }
+
+    function setBoundary(id, stateId, state, noteId, note, tone) {
+      el(id).dataset.tone = tone;
+      el(stateId).textContent = state;
+      el(noteId).textContent = note;
+    }
+
+    function renderOperationalBoundary(report, meta) {
+      const data = report.data_status || {};
+      const trust = report.data_trust || {};
+      const readiness = ((report.full_system_surface || {}).release_readiness || {});
+      const currentPublicData = hasCurrentPublicData(data, meta);
+      const trustedCurrent = currentPublicData && trust.verdict === "trusted";
+      const productionTrust = ((data.trust_evidence || {}).production_gate || {});
+      const productionMarketReady = productionTrust.ready === true;
+
+      setBoundary(
+        "service-boundary",
+        "service-availability",
+        meta.fallback ? "服务不可用" : "服务正常",
+        "service-availability-note",
+        meta.fallback ? "报告 API 未响应；页面仅显示离线真值。" : "报告 API 正常响应；这不代表产品已发布。",
+        meta.fallback ? "red" : "green"
+      );
+
+      setBoundary(
+        "market-boundary",
+        "market-evidence-state",
+        meta.fallback || !currentPublicData
+          ? "市场证据不可用"
+          : trustedCurrent && productionMarketReady
+          ? "市场证据生产就绪"
+          : trustedCurrent
+          ? "研究证据可信"
+          : "证据采集中",
+        "market-evidence-note",
+        meta.fallback || !currentPublicData
+          ? "需要当前、合约有效且未过期的公共市场快照。"
+          : trustedCurrent && productionMarketReady
+          ? "质量、feed 图、WebSocket gap/resync 与连续观察证据均已通过。"
+          : trustedCurrent
+          ? "当前快照可用于研究；生产发布仍需 WebSocket gap/resync、24 小时 soak 与连续 7 天证据。"
+          : "当前快照质量通过，正在累计连续合格观察证据。",
+        meta.fallback || !currentPublicData ? "red" : trustedCurrent ? "green" : "amber"
+      );
+
+      const releaseStatus = valueText(readiness.status, "NO-GO").toUpperCase();
+      setBoundary(
+        "release-boundary",
+        "product-release-state",
+        releaseStatus,
+        "product-release-note",
+        releaseStatus === "GO"
+          ? "全部发布门禁已满足。"
+          : "仍有发布证据未满足；不影响研究服务继续运行。",
+        releaseStatus === "GO" ? "green" : "red"
+      );
+
+      setBoundary(
+        "policy-boundary",
+        "policy-boundary-state",
+        valueText(report.effective_mode || report.mode, "research_only").toUpperCase(),
+        "policy-boundary-note",
+        "交易建议、仓位和订单输出由安全策略禁用，非系统故障。",
+        "blue"
+      );
     }
 
     function scannerStatusText(scanner) {
@@ -2834,6 +3057,7 @@
       const generated = valueText(report.generated_at);
 
       setReportStatus(meta, generated);
+      renderOperationalBoundary(report, meta);
       renderTruthMetadata(report, meta);
       setText("action", report.action);
       setText("effective-mode", `mode: ${valueText(report.effective_mode)}`);
@@ -2859,8 +3083,14 @@
           ? `${scannerStatusText(scanner)} / ${(scanner.summary || {}).top_candidate_id || "无首选候选"}`
           : "无当前市场数据，候选未评估"
       );
-      const blockingCount = (readiness.prerequisites || []).filter((gate) => gate.satisfied !== true).length;
-      setText("missing-count", `${blockingCount} 项发布阻断`);
+      const blockingGates = (readiness.prerequisites || []).filter((gate) => gate.satisfied !== true);
+      const rootCauses = new Set(blockingGates.map((gate) =>
+        gate.root_cause
+        || (gate.reason_codes || [])[0]
+        || gate.reason_code
+        || gate.name
+      ));
+      setText("missing-count", `${rootCauses.size} 个根因 · ${blockingGates.length} 项门禁`);
       setText("data-source", data.source);
       setText("surface-model", surface.fit_model);
       setText("matrix-data", data.status);
@@ -2907,14 +3137,59 @@
     function renderReasons(codes) {
       const list = el("reason-codes");
       clear(list);
-      const values = codes.length ? codes : ["NO_ACTIVE_REASON_CODES"];
-      values.forEach((code) => {
+      const values = codes.filter((code) => !isInformationalReason(code));
+      if (!values.length) {
         const item = document.createElement("span");
         item.className = "chip";
-        item.textContent = code;
-        item.title = code;
+        item.dataset.owner = "none";
+        item.textContent = "暂无需要处理的限制";
+        item.title = "当前报告没有需要处理的限制原因";
+        list.appendChild(item);
+        return;
+      }
+      values.forEach((code) => {
+        const ownership = reasonOwnership(code);
+        const item = document.createElement("span");
+        item.className = "chip";
+        item.dataset.owner = ownership.owner;
+        item.textContent = `${displayText(code)} · ${ownership.label}`;
+        item.title = `${code} · ${ownership.action}`;
         list.appendChild(item);
       });
+    }
+
+    function isInformationalReason(code) {
+      const value = valueText(code, "").toUpperCase();
+      return value.startsWith("PRIMARY_REGIME_") || value.endsWith("_PERMISSION_ACTIVE");
+    }
+
+    function reasonOwnership(code) {
+      const value = valueText(code, "").toUpperCase();
+      if (value.includes("ACCOUNT") || value.includes("PRIVATE_API") || value.includes("PRIVATE_ACCOUNT")) {
+        return { owner: "operator", label: "需要你提供", action: "在本机配置只读账户 API 凭证或快照" };
+      }
+      if (
+        value.includes("REGIME")
+        && (value.includes("ROLLING") || value.includes("OBSERVATION") || value.includes("MIN_OBSERVATIONS"))
+      ) {
+        return { owner: "system_observation", label: "系统持续执行", action: "继续累计实时 Regime 观察样本" };
+      }
+      if (value.includes("VOLATILITY_CAP") || value.includes("SELL_PERMISSION")) {
+        return { owner: "policy", label: "安全策略", action: "当前市场状态触发研究权限上限，无需修复" };
+      }
+      if (value.includes("HISTOR") || value.includes("VENDOR") || value.includes("BACKTEST")) {
+        return { owner: "operator", label: "需要你提供", action: "配置获授权的历史数据源" };
+      }
+      if (value.includes("CALIBRATION") || value.includes("PROMOTION")) {
+        return { owner: "external", label: "需要你评审", action: "提供历史证据并完成模型提升评审" };
+      }
+      if (value.includes("MODE") || value.includes("RESEARCH_ONLY") || value.includes("NO_TRADE")) {
+        return { owner: "policy", label: "安全策略", action: "无需修复；保持 research-only" };
+      }
+      if (value.includes("RECONCILIATION") || value.includes("OBSERVATION") || value.includes("CALENDAR")) {
+        return { owner: "system_observation", label: "系统持续执行", action: "继续累计观察与对账证据" };
+      }
+      return { owner: "system", label: "系统处理", action: "系统将继续采集、校验或计算" };
     }
 
     function renderEvidence(report) {
@@ -2978,8 +3253,8 @@
         const label = document.createElement("span");
         label.textContent = name;
         const state = document.createElement("span");
-        state.className = `badge ${allowed ? "green" : "red"}`;
-        state.textContent = allowed ? "允许" : "已阻断";
+        state.className = `badge ${allowed ? "green" : "cyan"}`;
+        state.textContent = allowed ? "合约允许" : "策略禁用";
         row.appendChild(label);
         row.appendChild(state);
         list.appendChild(row);
@@ -3100,13 +3375,55 @@
         const reasonNode = document.createElement("span");
         reasonNode.className = "readiness-reason";
         reasonNode.textContent = reason;
+        const owner = readinessOwner(gate);
+        const ownerNode = document.createElement("span");
+        ownerNode.className = "readiness-owner";
+        ownerNode.textContent = `${owner.label} · ${readinessAction(gate, owner)}`;
         item.appendChild(dot);
         item.appendChild(label);
         item.appendChild(evidence);
         item.appendChild(release);
         item.appendChild(reasonNode);
+        item.appendChild(ownerNode);
         list.appendChild(item);
       });
+    }
+
+    function readinessAction(gate, owner) {
+      const releaseState = valueText(gate.release_state, gate.satisfied ? "ready" : "not_ready");
+      if (releaseState === "ready") {
+        return "无需操作；系统持续监测";
+      }
+      const raw = valueText(gate.next_action || gate.action || owner.action, owner.action);
+      return READINESS_ACTION_LABELS[raw] || raw;
+    }
+
+    function readinessOwner(gate) {
+      const owner = valueText(gate.owner, "").toLowerCase();
+      const action = valueText(gate.next_action || gate.action, "").toLowerCase();
+      if (["operator", "user", "credential_owner"].includes(owner)) {
+        if (action.includes("review") || action.includes("approval")) {
+          return { label: "需要你评审", action: "完成评审或审批" };
+        }
+        return { label: "需要你提供", action: "提供外部配置或凭证" };
+      }
+      if (owner === "shared") {
+        return { label: "你提供后系统处理", action: "提供外部输入后系统自动重算" };
+      }
+      if (["system_observation", "calendar", "observation"].includes(owner)) {
+        return { label: "系统持续执行", action: "继续累计观察证据" };
+      }
+      if (["external", "external_review", "reviewer"].includes(owner)) {
+        return { label: "需要外部复核", action: "完成独立审阅或审批" };
+      }
+      if (["policy", "safety_policy"].includes(owner)) {
+        return { label: "安全策略", action: "无需修复" };
+      }
+      if (["system", "agent", "automatic"].includes(owner)) {
+        return { label: "系统负责", action: "系统自动完成" };
+      }
+      const fallback = reasonOwnership((gate.reason_codes || [])[0] || gate.reason_code || gate.name);
+      return { label: fallback.label, action: fallback.action };
     }
 
     document.getElementById("refresh").addEventListener("click", loadReport);

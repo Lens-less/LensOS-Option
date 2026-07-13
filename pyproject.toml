@@ -17,12 +17,13 @@ test = ["pytest>=8,<9"]
 crypto-options-report = "crypto_options_report.cli:main"
 crypto-options-report-api = "crypto_options_report.api:main"
 crypto-options-snapshot-sidecar = "crypto_options_report.snapshot_sidecar:main"
+crypto-options-account-snapshot-sidecar = "crypto_options_report.account_snapshot_sidecar:main"
 
 [tool.setuptools.packages.find]
 include = ["crypto_options_report*"]
 
 [tool.setuptools.package-data]
-crypto_options_report = ["static/*.html"]
+crypto_options_report = ["static/*.html", "resources/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

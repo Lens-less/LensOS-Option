@@ -46,7 +46,8 @@ python -m crypto_options_report.snapshot_sidecar `
   --once `
   --output $sidecarOutput `
   --instrument-limit 20 `
-  --currency BTC
+  --currency BTC `
+  --complete-feed-graph
 ```
 
 Point the web process at that exact file, then start it normally:
@@ -67,14 +68,30 @@ python -m crypto_options_report.snapshot_sidecar `
   --interval 10 `
   --instrument-limit 20 `
   --currency BTC `
-  --base-url https://www.deribit.com
+  --base-url https://www.deribit.com `
+  --complete-feed-graph
 ```
 
 The interval is measured from one completed refresh attempt to the next attempt. The default is 10 seconds so a healthy completed snapshot remains inside the report's 60-second freshness threshold even when collection itself takes time. Keep `--instrument-limit 20`; it is the public ticker request budget, not a request to collect the full venue universe.
 
 Installed wheels also expose the equivalent `crypto-options-snapshot-sidecar` command. The package module form above works consistently in source checkouts, wheels, and the production container.
 
-Each successful or fail-closed public collector result is written with a same-directory temporary file plus atomic replace. `collection_started_at` records when network collection began, `captured_at` records when the complete snapshot became available, and `collection_duration_ms` exposes the elapsed collection cost. Instrument metadata and DVOL requests run concurrently with the bounded ticker pool to avoid serial network latency. An unexpected collection/write exception leaves the previous file intact, emits a redacted structured JSON failure event, waits for the next interval, and retries. `Ctrl-C` emits a clean stop event and exits zero. Logs contain public operational metadata only; the sidecar has no private-account or order path.
+Each successful or fail-closed public collector result is written with a same-directory temporary file plus atomic replace. `collection_started_at` records when network collection began, `captured_at` records when the complete snapshot became available, and `collection_duration_ms` exposes the elapsed collection cost. `--complete-feed-graph` also captures bounded order-book, index, funding/basis, DVOL, and exchange-health evidence, then persists consecutive trust observations and up to 288 real rolling samples. Instrument metadata and DVOL requests run concurrently with the bounded ticker pool to avoid serial network latency. An unexpected collection/write exception leaves the previous file intact, emits a redacted structured JSON failure event, waits for the next interval, and retries. `Ctrl-C` emits a clean stop event and exits zero. Logs contain public operational metadata only; the public sidecar has no private-account or order path.
+
+The short REST observation window promotes only research-snapshot trust. It does not satisfy the production market gate. Production release additionally requires WebSocket sequence gap/resync evidence, a clean 24-hour soak, and seven continuous days of evidence. These remain system-owned observation blockers and must never be replaced with shorter thresholds or injected fixture claims.
+
+Private account evidence uses a separate read-only sidecar. The key must grant exactly `account:read` and `trade:read`; any `read_write` scope is rejected before private collection. Keep the credentials in the sidecar service environment only:
+
+```powershell
+$env:DERIBIT_CLIENT_ID = "<local-secret>"
+$env:DERIBIT_CLIENT_SECRET = "<local-secret>"
+python -m crypto_options_report.account_snapshot_sidecar `
+  --output "C:\service-data\crypto-options\account.json" `
+  --interval 15 `
+  --currency BTC
+```
+
+The sanitized account JSON omits credentials, access tokens, raw account identifiers, order ids, and labels. Configure the API with `CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_FIXTURE`; never pass Deribit credentials into the Web process. Configure `CRYPTO_OPTIONS_BACKTEST_ARTIFACT_DIR`, `CRYPTO_OPTIONS_PAPER_LEDGER_PATH`, and `CRYPTO_OPTIONS_MANUAL_APPROVAL_RUNBOOK` for durable local evidence. Add `CRYPTO_OPTIONS_HISTORICAL_FIXTURE` only after an authorized historical source is validated.
 
 The API rereads the configured snapshot path for reports, so atomic sidecar updates become visible without browser-triggered fetches. Do not run multiple sidecars for the same output file. HTTP-triggered live fetch remains unsupported in production.
 
@@ -106,12 +123,14 @@ A blocked or absent market is still a service-ready, fail-closed report. It must
 - Dashboard requests are same-origin only. Do not add broad CORS or client-selectable API origins.
 - Alert webhook secrets come from `ALERT_WEBHOOK_SECRET`; webhook URLs must be HTTPS.
 - Snapshot, alert state, and paper-ledger writes use same-directory temporary files plus atomic replace. Run one scheduler writer per state file.
+- Report, dashboard, and readiness GET requests are read-only. They may project an existing paper ledger but must not rewrite it.
+- Backtest submission requires strict JSON and `Idempotency-Key`, returns `202`, and executes in a bounded worker queue plus a hard-timeout subprocess. Poll `/backtest/jobs/{job_id}`; failed or timed-out work cannot promote the default result, and result reads never recompute the replay.
 
 ## Verification
 
 ```powershell
 python -m compileall -q crypto_options_report tools
-python -m pytest -q tests/test_market_snapshot_sidecar.py
+python -m pytest -q tests/test_market_snapshot_sidecar.py tests/test_public_feed_graph_runtime.py tests/test_account_snapshot_sidecar.py
 python -m pytest -q
 python -m crypto_options_report.api --runtime-profile development --smoke
 python -m pip wheel --no-deps . -w dist

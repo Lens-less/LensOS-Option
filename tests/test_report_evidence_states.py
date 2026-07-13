@@ -101,7 +101,8 @@ class ReportEvidenceStateTests(unittest.TestCase):
         data_gate = gates["data_quality"]
         self.assertFalse(data_gate["satisfied"])
         self.assertEqual("verified_local", data_gate["evidence_state"])
-        self.assertEqual("awaiting_external", data_gate["release_state"])
+        self.assertEqual("not_ready", data_gate["release_state"])
+        self.assertEqual("system_observation", data_gate["owner"])
         self.assertIn("DATA_TRUST_PROMOTION_PENDING", data_gate["reason_codes"])
 
         calibration_gate = gates["walk_forward_calibration"]
@@ -113,6 +114,7 @@ class ReportEvidenceStateTests(unittest.TestCase):
         self.assertFalse(reconciliation_gate["satisfied"])
         self.assertEqual("not_run", reconciliation_gate["evidence_state"])
         self.assertEqual("awaiting_calendar", reconciliation_gate["release_state"])
+        self.assertEqual("system_observation", reconciliation_gate["owner"])
 
         for gate in gates.values():
             self.assertIn("release_blocking", gate)

@@ -7,20 +7,31 @@ import http.client
 import ipaddress
 import json
 import os
+import re
 import socket
 import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from .account_risk import AVAILABLE_ACCOUNT_SCENARIOS
 from .contract import generate_research_report
+from .evidence_store import (
+    BacktestIdempotencyConflict,
+    BacktestJobSubmissionFailed,
+    BacktestJobService,
+    BacktestQueueFull,
+    empty_backtest_lookup,
+    load_backtest_evidence,
+)
 from .full_surface import build_recommendation_projection
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
@@ -44,11 +55,20 @@ GET_SURFACE_PATHS = {
     "/candidates",
     "/recommendation",
     "/backtest/report/default",
+    "/backtest/report/{id}",
     "/dashboard",
 }
 POST_SURFACE_PATHS = {"/backtest/run"}
 LIVENESS_PATHS = {"/health", "/livez"}
 READINESS_PATH = "/readyz"
+BACKTEST_REPORT_PREFIX = "/backtest/report/"
+BACKTEST_JOB_PREFIX = "/backtest/jobs/"
+BACKTEST_REQUEST_SCHEMA_VERSION = "backtest_run_request.v1"
+MAX_BACKTEST_REQUEST_BYTES = 16 * 1024
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_RFC3339_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
 SMOKE_SERVER_START_GRACE_SEC = 0.05
 SMOKE_SERVER_READY_DEADLINE_SEC = 15.0
 SMOKE_SERVER_REQUEST_TIMEOUT_SEC = 2.0
@@ -60,6 +80,77 @@ OVERLOAD_DRAIN_TIMEOUT_SEC = 0.05
 OVERLOAD_DRAIN_LIMIT_BYTES = 64 * 1024
 
 
+class _RequestContractError(ValueError):
+    def __init__(self, status: HTTPStatus, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def _validate_backtest_request(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise _RequestContractError(
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            "backtest request must be a JSON object",
+        )
+    allowed = {"schema_version", "generated_at"}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise _RequestContractError(
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            f"unknown backtest request fields: {', '.join(unknown)}",
+        )
+    if value.get("schema_version") != BACKTEST_REQUEST_SCHEMA_VERSION:
+        raise _RequestContractError(
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            f"schema_version must be {BACKTEST_REQUEST_SCHEMA_VERSION}",
+        )
+    generated_at = value.get("generated_at")
+    if generated_at is not None:
+        if not isinstance(generated_at, str):
+            raise _RequestContractError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "generated_at must be an RFC3339 string",
+            )
+        if not _RFC3339_TIMESTAMP.fullmatch(generated_at):
+            raise _RequestContractError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "generated_at must be an RFC3339 string",
+            )
+        try:
+            parsed = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise _RequestContractError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "generated_at must be an RFC3339 string",
+            ) from exc
+        if parsed.tzinfo is None:
+            raise _RequestContractError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "generated_at must include a timezone",
+            )
+    return {key: value[key] for key in ("schema_version", "generated_at") if key in value}
+
+
+def _validate_idempotency_key(value: str | None) -> str:
+    if value is None or not _IDEMPOTENCY_KEY.fullmatch(value):
+        raise _RequestContractError(
+            HTTPStatus.BAD_REQUEST,
+            "Idempotency-Key must be 1-128 safe ASCII characters",
+        )
+    return value
+
+
+def _parse_backtest_job_path(path: str) -> tuple[str, bool] | None:
+    if not path.startswith(BACKTEST_JOB_PREFIX):
+        return None
+    remainder = path.removeprefix(BACKTEST_JOB_PREFIX)
+    wants_result = remainder.endswith("/result")
+    job_id = remainder.removesuffix("/result") if wants_result else remainder
+    if "/" in job_id or not re.fullmatch(r"job-[0-9a-f]{64}", job_id):
+        return None
+    return job_id, wants_result
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     """HTTP runtime policy, deliberately separate from the product mode."""
@@ -68,8 +159,13 @@ class RuntimeConfig:
     max_workers: int = DEFAULT_MAX_WORKERS
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT_SEC
     snapshot_fixture: str | None = None
+    account_snapshot_fixture: str | None = None
     allow_live_fetch: bool = False
     access_log: bool | None = None
+    historical_fixture: str | None = None
+    backtest_artifact_dir: str | None = None
+    paper_ledger_path: str | None = None
+    manual_approval_runbook_path: str | None = None
 
     @property
     def production(self) -> bool:
@@ -94,6 +190,14 @@ class RuntimeConfig:
             )
         if self.snapshot_fixture:
             load_snapshot_fixture(self.snapshot_fixture)
+        if self.account_snapshot_fixture:
+            _load_account_snapshot(self.account_snapshot_fixture)
+        if self.historical_fixture and not Path(self.historical_fixture).expanduser().is_file():
+            raise ValueError("historical_fixture not found")
+        if self.backtest_artifact_dir:
+            artifact_path = Path(self.backtest_artifact_dir).expanduser()
+            if artifact_path.exists() and not artifact_path.is_dir():
+                raise ValueError("backtest_artifact_dir must be a directory")
         return self
 
 
@@ -114,6 +218,21 @@ class ResearchHTTPServer(ThreadingHTTPServer):
         self.runtime = (runtime or RuntimeConfig()).validate()
         self._worker_slots = threading.BoundedSemaphore(self.runtime.max_workers)
         super().__init__(server_address, handler_class)
+        self.backtest_jobs = (
+            BacktestJobService(
+                fixture_path=self.runtime.historical_fixture,
+                artifact_dir=self.runtime.backtest_artifact_dir,
+            )
+            if self.runtime.historical_fixture and self.runtime.backtest_artifact_dir
+            else None
+        )
+
+    def server_close(self) -> None:
+        try:
+            if self.backtest_jobs is not None:
+                self.backtest_jobs.close()
+        finally:
+            super().server_close()
 
     def process_request(self, request: socket.socket, client_address: Any) -> None:
         if not self._worker_slots.acquire(blocking=False):
@@ -207,8 +326,12 @@ def build_api_report(
     deribit_base_url: str = DEFAULT_DERIBIT_BASE_URL,
     instrument_limit: int | None = None,
     account_scenario: str | None = None,
+    account_snapshot_fixture: str | None = None,
     generated_at: str | None = None,
     sandbox_fixtures: bool = False,
+    backtest_artifact_dir: str | None = None,
+    paper_ledger_path: str | None = None,
+    manual_approval_runbook_path: str | None = None,
 ) -> dict[str, Any]:
     if snapshot_fixture and live_deribit:
         raise ValueError("choose snapshot_fixture or live_deribit, not both")
@@ -231,12 +354,31 @@ def build_api_report(
             currency=currency,
             base_url=safe_base,
             instrument_limit=instrument_limit,
+            include_feed_graph=True,
         )
+    backtest_artifact = None
+    if backtest_artifact_dir:
+        try:
+            backtest_artifact = load_backtest_evidence(backtest_artifact_dir)
+        except FileNotFoundError:
+            backtest_artifact = None
+    account_payload = (
+        _load_account_snapshot(account_snapshot_fixture)
+        if account_snapshot_fixture
+        else None
+    )
+    if account_payload is not None and account_scenario is not None:
+        raise ValueError("operator account snapshot cannot be combined with account_scenario")
     return generate_research_report(
         mode=mode,
         market_snapshot=market_snapshot,
         account_scenario=account_scenario,
+        account_payload=account_payload,
         generated_at=generated_at,
+        backtest_artifact=backtest_artifact,
+        paper_ledger_path=paper_ledger_path,
+        manual_approval_runbook_path=manual_approval_runbook_path,
+        persist_paper_ledger=False,
     )
 
 
@@ -266,7 +408,40 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             status = HTTPStatus.OK if payload["service_ready"] else HTTPStatus.SERVICE_UNAVAILABLE
             self._write_json(status, payload)
             return
-        if parsed.path not in REPORT_ALIASES and parsed.path not in GET_SURFACE_PATHS:
+        job_route = _parse_backtest_job_path(parsed.path)
+        if job_route is not None:
+            if parsed.query:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"error": "job lookup rejects query parameters"})
+                return
+            service = getattr(self.server, "backtest_jobs", None)
+            if service is None:
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": "backtest_job_not_found"})
+                return
+            job_id, wants_result = job_route
+            try:
+                if wants_result:
+                    job_status, payload = service.result(job_id)
+                    status = (
+                        HTTPStatus.OK
+                        if job_status == "succeeded"
+                        else HTTPStatus.ACCEPTED
+                        if job_status in {"queued", "running"}
+                        else HTTPStatus.CONFLICT
+                    )
+                else:
+                    payload = service.get(job_id)
+                    status = HTTPStatus.OK
+            except (FileNotFoundError, ValueError):
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": "backtest_job_not_found"})
+                return
+            self._write_json(status, payload)
+            return
+        backtest_lookup = _is_backtest_report_path(parsed.path)
+        if (
+            parsed.path not in REPORT_ALIASES
+            and parsed.path not in GET_SURFACE_PATHS
+            and not backtest_lookup
+        ):
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
 
@@ -278,6 +453,9 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             )
         except ValueError as exc:
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+        except FileNotFoundError:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "backtest_report_not_found"})
             return
         except Exception as exc:  # noqa: BLE001 - map unexpected failures to JSON 500
             _log_json(
@@ -297,31 +475,107 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         if parsed.path not in POST_SURFACE_PATHS:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
-        try:
-            _report_options_from_query(parsed.query, runtime=self._runtime())
-        except ValueError as exc:
-            self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        if parsed.query:
+            self._write_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "backtest run accepts JSON body fields, not query parameters"},
+            )
             return
-        except Exception as exc:  # noqa: BLE001 - map unexpected failures to JSON 500
+        try:
+            request = self._read_backtest_request()
+            idempotency_key = _validate_idempotency_key(
+                self.headers.get("Idempotency-Key")
+            )
+        except _RequestContractError as exc:
+            self._write_json(exc.status, {"error": str(exc)})
+            return
+        runtime = self._runtime()
+        if not runtime.historical_fixture or not runtime.backtest_artifact_dir:
+            self._write_json(
+                HTTPStatus.CONFLICT,
+                {
+                    "schema_version": "backtest_run_response.v1",
+                    "status": "historical_data_not_configured",
+                    "reason_code": "MISSING_HISTORICAL_FIXTURE",
+                    "action": "CONFIGURE_HISTORICAL_FIXTURE",
+                    "report_id": None,
+                    "backtest_comparison": [],
+                    "research_only": True,
+                },
+            )
+            return
+        service = getattr(self.server, "backtest_jobs", None)
+        if service is None:
+            self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "backtest_job_service_unavailable"})
+            return
+        try:
+            job = service.submit(
+                idempotency_key=idempotency_key,
+                request=request,
+            )
+        except BacktestIdempotencyConflict:
+            self._write_json(
+                HTTPStatus.CONFLICT,
+                {
+                    "schema_version": "backtest_run_response.v1",
+                    "status": "idempotency_conflict",
+                    "reason_code": "IDEMPOTENCY_KEY_REUSE_CONFLICT",
+                    "research_only": True,
+                },
+            )
+            return
+        except BacktestQueueFull:
+            self._write_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "schema_version": "backtest_run_response.v1",
+                    "status": "queue_full",
+                    "reason_code": "BACKTEST_QUEUE_FULL",
+                    "research_only": True,
+                },
+                extra_headers={"Retry-After": "1"},
+            )
+            return
+        except BacktestJobSubmissionFailed as exc:
+            self._write_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                exc.job,
+                extra_headers={"Retry-After": "1"},
+            )
+            return
+        except (FileNotFoundError, ValueError) as exc:
             _log_json(
-                "request_error",
+                "backtest_job_rejected",
                 request_id=self._request_id,
-                method="POST",
-                path=parsed.path,
                 error_type=type(exc).__name__,
             )
-            self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal"})
+            self._write_json(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                {
+                    "schema_version": "backtest_run_response.v1",
+                    "status": "invalid_historical_fixture",
+                    "reason_code": "HISTORICAL_FIXTURE_REJECTED",
+                    "action": "VALIDATE_HISTORICAL_FIXTURE",
+                    "report_id": None,
+                    "backtest_comparison": [],
+                    "research_only": True,
+                },
+            )
+            return
+        if (
+            job.get("status") == "failed"
+            and job.get("reason_code") == "BACKTEST_JOB_SUBMISSION_FAILED"
+        ):
+            self._write_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                job,
+                extra_headers={"Retry-After": "1"},
+            )
             return
         self._write_json(
-            HTTPStatus.NOT_IMPLEMENTED,
-            {
-                "schema_version": "backtest_run_response.v1",
-                "status": "not_implemented",
-                "reason_code": "BOUNDED_BACKTEST_JOB_NOT_IMPLEMENTED",
-                "report_id": None,
-                "backtest_comparison": [],
-                "research_only": True,
-            },
+            HTTPStatus.ACCEPTED,
+            job,
+            extra_headers={"Location": str(job["status_url"])},
         )
 
     def do_HEAD(self) -> None:
@@ -334,7 +588,25 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         self._method_not_allowed()
 
     def do_DELETE(self) -> None:
-        self._method_not_allowed()
+        self._start_request()
+        parsed = urlparse(self.path)
+        route = _parse_backtest_job_path(parsed.path)
+        if route is None or route[1] or parsed.query:
+            self._method_not_allowed()
+            return
+        service = getattr(self.server, "backtest_jobs", None)
+        if service is None:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "backtest_job_not_found"})
+            return
+        try:
+            payload = service.cancel(route[0])
+        except FileNotFoundError:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "backtest_job_not_found"})
+            return
+        except (RuntimeError, ValueError) as exc:
+            self._write_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+            return
+        self._write_json(HTTPStatus.OK, payload)
 
     def do_PATCH(self) -> None:
         self._method_not_allowed()
@@ -342,12 +614,19 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
 
-    def _write_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
+    def _write_json(
+        self,
+        status: HTTPStatus,
+        payload: dict[str, Any],
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
         self._write_response(
             status,
             body,
             content_type="application/json; charset=utf-8",
+            extra_headers=extra_headers,
         )
 
     def _write_html(self, status: HTTPStatus, body: str) -> None:
@@ -372,6 +651,7 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         content_type: str,
         content_security_policy: str | None = None,
         write_body: bool = True,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         self._ensure_request_context()
         self.send_response(status)
@@ -385,6 +665,8 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         self.send_header("X-Request-ID", self._request_id)
         if content_security_policy:
             self.send_header("Content-Security-Policy", content_security_policy)
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Connection", "close")
         self.end_headers()
@@ -401,6 +683,40 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         finally:
             self.close_connection = True
             self._log_access(status)
+
+    def _read_backtest_request(self) -> dict[str, Any]:
+        if self.headers.get_content_type() != "application/json":
+            raise _RequestContractError(
+                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                "Content-Type must be application/json",
+            )
+        raw_length = self.headers.get("Content-Length")
+        try:
+            content_length = int(raw_length or "")
+        except ValueError as exc:
+            raise _RequestContractError(
+                HTTPStatus.BAD_REQUEST,
+                "Content-Length must be a positive integer",
+            ) from exc
+        if content_length < 1:
+            raise _RequestContractError(
+                HTTPStatus.BAD_REQUEST,
+                "JSON request body is required",
+            )
+        if content_length > MAX_BACKTEST_REQUEST_BYTES:
+            raise _RequestContractError(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                f"JSON request body exceeds {MAX_BACKTEST_REQUEST_BYTES} bytes",
+            )
+        raw = self.rfile.read(content_length)
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _RequestContractError(
+                HTTPStatus.BAD_REQUEST,
+                "request body must be valid UTF-8 JSON",
+            ) from exc
+        return _validate_backtest_request(value)
 
     def _method_not_allowed(self, *, write_body: bool = True) -> None:
         self._start_request()
@@ -497,6 +813,10 @@ def readiness_payload(runtime: RuntimeConfig) -> dict[str, Any]:
         report = build_api_report(
             mode="research_only",
             snapshot_fixture=runtime.snapshot_fixture,
+            account_snapshot_fixture=runtime.account_snapshot_fixture,
+            backtest_artifact_dir=runtime.backtest_artifact_dir,
+            paper_ledger_path=runtime.paper_ledger_path,
+            manual_approval_runbook_path=runtime.manual_approval_runbook_path,
         )
         ready = (
             report.get("schema_version") == "research_report.v1"
@@ -525,16 +845,20 @@ def _payload_for_path(
 ) -> dict[str, Any]:
     if path in LIVENESS_PATHS:
         return {"status": "ok"}
-    if path == "/backtest/report/default":
+    if _is_backtest_report_path(path):
         _report_options_from_query(query, runtime=runtime)
-        return {
-            "schema_version": "backtest_report_lookup.v1",
-            "status": "not_run",
-            "reason_code": "BACKTEST_NOT_RUN",
-            "report_id": None,
-            "backtest_comparison": [],
-            "research_only": True,
-        }
+        configured_dir = (runtime or RuntimeConfig()).backtest_artifact_dir
+        report_id = path.removeprefix(BACKTEST_REPORT_PREFIX)
+        if not configured_dir:
+            if report_id == "default":
+                return empty_backtest_lookup()
+            raise FileNotFoundError("backtest report store is not configured")
+        try:
+            return load_backtest_evidence(configured_dir, report_id)
+        except FileNotFoundError:
+            if report_id == "default":
+                return empty_backtest_lookup()
+            raise
     report = _report_from_query(query, runtime=runtime)
     if path in REPORT_ALIASES:
         return report
@@ -583,6 +907,10 @@ def _report_options_from_query(
         return {
             "mode": "research_only",
             "snapshot_fixture": runtime.snapshot_fixture,
+            "account_snapshot_fixture": runtime.account_snapshot_fixture,
+            "backtest_artifact_dir": runtime.backtest_artifact_dir,
+            "paper_ledger_path": runtime.paper_ledger_path,
+            "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
         }
 
     # HTTP always stays research_only for display/action consistency.
@@ -622,8 +950,12 @@ def _report_options_from_query(
         "deribit_base_url": deribit_base_url,
         "instrument_limit": instrument_limit,
         "account_scenario": account_scenario,
+        "account_snapshot_fixture": runtime.account_snapshot_fixture,
         "generated_at": generated_at,
         "sandbox_fixtures": True,
+        "backtest_artifact_dir": runtime.backtest_artifact_dir,
+        "paper_ledger_path": runtime.paper_ledger_path,
+        "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
     }
 
 
@@ -739,10 +1071,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="operator-controlled snapshot used by the production profile",
     )
     parser.add_argument(
+        "--account-snapshot-fixture",
+        default=os.environ.get("CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_FIXTURE"),
+        help="operator-owned read-only account sidecar snapshot",
+    )
+    parser.add_argument(
         "--allow-live-fetch",
         action="store_true",
         default=_environment_flag("CRYPTO_OPTIONS_API_ALLOW_LIVE_FETCH"),
         help="development-only HTTP live fetch gate",
+    )
+    parser.add_argument(
+        "--historical-fixture",
+        default=os.environ.get("CRYPTO_OPTIONS_HISTORICAL_FIXTURE"),
+        help="operator-controlled local historical fixture used by POST /backtest/run",
+    )
+    parser.add_argument(
+        "--backtest-artifact-dir",
+        default=os.environ.get("CRYPTO_OPTIONS_BACKTEST_ARTIFACT_DIR"),
+        help="directory for immutable content-addressed backtest artifacts",
+    )
+    parser.add_argument(
+        "--paper-ledger-path",
+        default=os.environ.get("CRYPTO_OPTIONS_PAPER_LEDGER_PATH"),
+        help="durable JSON path for the paper proposal ledger",
+    )
+    parser.add_argument(
+        "--manual-approval-runbook",
+        default=os.environ.get("CRYPTO_OPTIONS_MANUAL_APPROVAL_RUNBOOK"),
+        help="versioned RESEARCH_ONLY manual approval runbook",
     )
     parser.add_argument(
         "--access-log",
@@ -770,8 +1127,13 @@ def main(argv: list[str] | None = None) -> int:
         max_workers=args.max_workers,
         request_timeout=args.request_timeout,
         snapshot_fixture=args.snapshot_fixture,
+        account_snapshot_fixture=args.account_snapshot_fixture,
         allow_live_fetch=args.allow_live_fetch,
         access_log=args.access_log,
+        historical_fixture=args.historical_fixture,
+        backtest_artifact_dir=args.backtest_artifact_dir,
+        paper_ledger_path=args.paper_ledger_path,
+        manual_approval_runbook_path=args.manual_approval_runbook,
     ).validate()
     if args.smoke:
         if runtime.production:
@@ -795,6 +1157,37 @@ def _parse_optional_int(value: str | None, *, name: str) -> int | None:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
+
+
+def _is_backtest_report_path(path: str) -> bool:
+    if not path.startswith(BACKTEST_REPORT_PREFIX):
+        return False
+    suffix = path.removeprefix(BACKTEST_REPORT_PREFIX)
+    return bool(suffix) and "/" not in suffix
+
+
+def _load_account_snapshot(path: str | Path) -> dict[str, Any]:
+    candidate = Path(path).expanduser().resolve()
+    if not candidate.is_file():
+        raise ValueError("account_snapshot_fixture not found")
+    if candidate.stat().st_size > 4 * 1024 * 1024:
+        raise ValueError("account_snapshot_fixture exceeds 4194304 bytes")
+    try:
+        value = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("account_snapshot_fixture must be valid JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("account_snapshot_fixture must be a JSON object")
+    payload = value.get("account_snapshot", value.get("payload", value))
+    if not isinstance(payload, dict):
+        raise ValueError("account_snapshot_fixture payload must be a JSON object")
+    normalized = dict(payload)
+    account = dict(normalized.get("account") or {})
+    if str(account.get("status") or "").lower() == "not_configured":
+        account["status"] = "missing"
+        account["source"] = "not_configured"
+        normalized["account"] = account
+    return normalized
 
 
 def _remote_bind_allowed() -> bool:
