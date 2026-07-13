@@ -30,8 +30,8 @@ DEFAULT_QUALITY_LIMITS = {
     "max_bad_quote_ratio_per_expiry": 0.25,
     "max_spread_ratio": 0.50,
 }
-HTTP_MAX_INSTRUMENT_LIMIT = 50
 DEFAULT_TICKER_REQUEST_BUDGET = 20
+HTTP_MAX_INSTRUMENT_LIMIT = DEFAULT_TICKER_REQUEST_BUDGET
 RESEARCH_DTE_RANGE_DAYS = (7, 35)
 # Deribit returns DVOL as one-minute candles. The row timestamp is the candle
 # boundary, so a healthy latest row can be slightly older than 60 seconds at
@@ -171,6 +171,22 @@ def validate_deribit_base_url(base_url: str) -> str:
     return candidate
 
 
+def validate_ticker_request_limit(instrument_limit: int | None) -> int:
+    """Return the explicit bounded public-ticker request budget."""
+    if instrument_limit is None:
+        return DEFAULT_TICKER_REQUEST_BUDGET
+    if (
+        isinstance(instrument_limit, bool)
+        or not isinstance(instrument_limit, int)
+        or not 1 <= instrument_limit <= DEFAULT_TICKER_REQUEST_BUDGET
+    ):
+        raise ValueError(
+            "instrument_limit must be between 1 and "
+            f"{DEFAULT_TICKER_REQUEST_BUDGET}"
+        )
+    return instrument_limit
+
+
 def load_public_replay_fixture(
     path: str | Path,
     *,
@@ -226,6 +242,7 @@ def fetch_deribit_option_chain_snapshot(
     stay fail-closed rather than crashing mid-pipeline.
     """
     safe_base = validate_deribit_base_url(base_url)
+    requested_limit = validate_ticker_request_limit(instrument_limit)
     collection_started_monotonic = monotonic()
     collection_started_at = utc_timestamp()
     errors: list[str] = []
@@ -259,7 +276,7 @@ def fetch_deribit_option_chain_snapshot(
     summaries, selection_policy = _select_research_summaries(
         summaries,
         captured_at=collection_started_at,
-        instrument_limit=instrument_limit,
+        instrument_limit=requested_limit,
     )
 
     tickers: dict[str, Any] = {}
@@ -390,13 +407,10 @@ def _select_research_summaries(
     summaries: list[dict[str, Any]],
     *,
     captured_at: str,
-    instrument_limit: int | None,
+    instrument_limit: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    requested_limit = None if instrument_limit is None else max(0, int(instrument_limit))
-    effective_limit = min(
-        DEFAULT_TICKER_REQUEST_BUDGET,
-        requested_limit if requested_limit is not None else DEFAULT_TICKER_REQUEST_BUDGET,
-    )
+    requested_limit = validate_ticker_request_limit(instrument_limit)
+    effective_limit = requested_limit
     min_per_expiry = int(DEFAULT_QUALITY_LIMITS["min_valid_quotes_per_expiry"])
     captured_date = datetime.fromtimestamp(
         parse_timestamp_ms(captured_at) / 1000,

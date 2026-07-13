@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [master]
+    branches: [main]
 
 permissions:
   contents: read
@@ -37,6 +37,7 @@ jobs:
           wheel-venv/bin/python -m pip check
           wheel-venv/bin/crypto-options-report --help >/dev/null
           wheel-venv/bin/crypto-options-report-api --smoke >/dev/null
+          wheel-venv/bin/crypto-options-snapshot-sidecar --help >/dev/null
       - name: Verify built wheel on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -47,6 +48,7 @@ jobs:
           wheel-venv\Scripts\python.exe -m pip check
           wheel-venv\Scripts\crypto-options-report.exe --help | Out-Null
           wheel-venv\Scripts\crypto-options-report-api.exe --smoke | Out-Null
+          wheel-venv\Scripts\crypto-options-snapshot-sidecar.exe --help | Out-Null
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Linux' && matrix.python-version == '3.13'
         with:
@@ -63,6 +65,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          docker run --rm crypto-options-research-console:ci \
+            python -m crypto_options_report.snapshot_sidecar --help >/dev/null
           docker run --detach --name crypto-options-research-console-ci \
             --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
             --publish 127.0.0.1:18000:8000 \

@@ -42,7 +42,7 @@ python -m crypto_options_report.api --runtime-profile production --host 127.0.0.
 python -m unittest tests.test_full_system_surfaces
 python -m pytest -q
 python -m crypto_options_report.cli ingestion-status --live-deribit --instrument-limit 5 --compact
-python -m crypto_options_report.cli ingestion-status --live-deribit --instrument-limit 40 --compact
+python -m crypto_options_report.cli ingestion-status --live-deribit --instrument-limit 20 --compact
 ```
 
 ## Analysis Ops And Alerts
@@ -50,7 +50,7 @@ python -m crypto_options_report.cli ingestion-status --live-deribit --instrument
 Capture a live snapshot for offline analysis:
 
 ```powershell
-python -m crypto_options_report.cli pull-snapshot --instrument-limit 40 --output artifacts/snapshots/btc-chain.json --compact
+python -m crypto_options_report.cli pull-snapshot --instrument-limit 20 --output artifacts/snapshots/btc-chain.json --compact
 python -m crypto_options_report.cli report --snapshot-fixture artifacts/snapshots/btc-chain.json --output artifacts/reports/latest.json --fail-on-blocked --compact
 ```
 

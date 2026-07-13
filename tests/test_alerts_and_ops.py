@@ -485,7 +485,7 @@ class AlertsAndOpsTests(unittest.TestCase):
         ):
             snapshot = fetch_deribit_option_chain_snapshot(
                 currency="BTC",
-                instrument_limit=40,
+                instrument_limit=20,
             )
             bounded_ticker_requests = list(ticker_requests)
             ticker_requests.clear()
@@ -536,6 +536,13 @@ class AlertsAndOpsTests(unittest.TestCase):
         self.assertTrue(
             all(int(name.split("-")[2]) >= 64000 for name in fallback_names)
         )
+
+    def test_live_collector_rejects_limits_above_the_public_request_budget(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "instrument_limit must be between 1 and 20",
+        ):
+            fetch_deribit_option_chain_snapshot(instrument_limit=21)
 
     def test_live_collector_classifies_ticker_rate_limits_fail_closed(self):
         instrument_name = "BTC-24JUL26-100000-C"

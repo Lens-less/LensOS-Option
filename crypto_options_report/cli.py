@@ -27,6 +27,7 @@ from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     fetch_deribit_option_chain_snapshot,
     load_snapshot_fixture,
+    validate_ticker_request_limit,
     write_snapshot_fixture,
 )
 from .historical import build_historical_reconciliation_report, load_historical_fixture
@@ -70,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pull.add_argument("--currency", default="BTC")
     pull.add_argument("--deribit-base-url", default=DEFAULT_DERIBIT_BASE_URL)
-    pull.add_argument("--instrument-limit", type=int)
+    pull.add_argument("--instrument-limit", type=_parse_ticker_request_limit)
     pull.add_argument(
         "--output",
         required=True,
@@ -370,7 +371,7 @@ def _add_report_replay_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--currency", default="BTC")
     parser.add_argument("--deribit-base-url", default=DEFAULT_DERIBIT_BASE_URL)
-    parser.add_argument("--instrument-limit", type=int)
+    parser.add_argument("--instrument-limit", type=_parse_ticker_request_limit)
     parser.add_argument(
         "--account-scenario",
         choices=AVAILABLE_ACCOUNT_SCENARIOS,
@@ -396,6 +397,17 @@ def _build_report_from_args(args: argparse.Namespace) -> dict:
         account_scenario=args.account_scenario,
         generated_at=args.generated_at,
     )
+
+
+def _parse_ticker_request_limit(value: str) -> int:
+    try:
+        candidate = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("instrument_limit must be an integer") from exc
+    try:
+        return validate_ticker_request_limit(candidate)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _surface_payload(command: str, report: dict) -> dict:

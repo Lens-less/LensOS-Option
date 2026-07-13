@@ -42,7 +42,7 @@ For refreshed data, run the public-market sidecar as a separate process. The web
 ```powershell
 $sidecarOutput = "C:\service-data\crypto-options\snapshot.json"
 New-Item -ItemType Directory -Force -Path (Split-Path $sidecarOutput) | Out-Null
-python -m tools.refresh_market_snapshot `
+python -m crypto_options_report.snapshot_sidecar `
   --once `
   --output $sidecarOutput `
   --instrument-limit 20 `
@@ -62,7 +62,7 @@ python -m crypto_options_report.api `
 Run the continuous sidecar under a separate singleton service-manager unit:
 
 ```powershell
-python -m tools.refresh_market_snapshot `
+python -m crypto_options_report.snapshot_sidecar `
   --output "C:\service-data\crypto-options\snapshot.json" `
   --interval 10 `
   --instrument-limit 20 `
@@ -71,6 +71,8 @@ python -m tools.refresh_market_snapshot `
 ```
 
 The interval is measured from one completed refresh attempt to the next attempt. The default is 10 seconds so a healthy completed snapshot remains inside the report's 60-second freshness threshold even when collection itself takes time. Keep `--instrument-limit 20`; it is the public ticker request budget, not a request to collect the full venue universe.
+
+Installed wheels also expose the equivalent `crypto-options-snapshot-sidecar` command. The package module form above works consistently in source checkouts, wheels, and the production container.
 
 Each successful or fail-closed public collector result is written with a same-directory temporary file plus atomic replace. `collection_started_at` records when network collection began, `captured_at` records when the complete snapshot became available, and `collection_duration_ms` exposes the elapsed collection cost. Instrument metadata and DVOL requests run concurrently with the bounded ticker pool to avoid serial network latency. An unexpected collection/write exception leaves the previous file intact, emits a redacted structured JSON failure event, waits for the next interval, and retries. `Ctrl-C` emits a clean stop event and exits zero. Logs contain public operational metadata only; the sidecar has no private-account or order path.
 

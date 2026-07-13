@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tools import refresh_market_snapshot
+from crypto_options_report import snapshot_sidecar as refresh_market_snapshot
 
 
 class MarketSnapshotSidecarTests(unittest.TestCase):

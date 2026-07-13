@@ -16,6 +16,7 @@ test = ["pytest>=8,<9"]
 [project.scripts]
 crypto-options-report = "crypto_options_report.cli:main"
 crypto-options-report-api = "crypto_options_report.api:main"
+crypto-options-snapshot-sidecar = "crypto_options_report.snapshot_sidecar:main"
 
 [tool.setuptools.packages.find]
 include = ["crypto_options_report*"]
