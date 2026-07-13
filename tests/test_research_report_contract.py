@@ -34,7 +34,7 @@ class ResearchReportContractTests(unittest.TestCase):
         self.assertEqual("HALT", report["risk_state"])
         self.assertEqual("pass", report["pnl_evidence"]["status"])
 
-    def test_missing_prerequisites_have_distinct_reason_codes(self):
+    def test_unavailable_and_pending_prerequisites_have_distinct_reason_codes(self):
         report = generate_research_report(generated_at="2026-07-07T00:00:00Z")
 
         for code in DEFAULT_REASON_CODES[:3]:
@@ -48,9 +48,10 @@ class ResearchReportContractTests(unittest.TestCase):
             report["account_status"]["reason_code"],
         )
         self.assertEqual(
-            "MISSING_CALIBRATED_MODEL",
+            "CALIBRATION_PROMOTION_PENDING",
             report["calibration_status"]["reason_code"],
         )
+        self.assertEqual("BACKTEST_NOT_RUN", report["backtest_status"]["reason_code"])
 
     def test_research_only_mode_gate_blocks_trade_outputs(self):
         report = generate_research_report(generated_at="2026-07-07T00:00:00Z")
@@ -88,7 +89,7 @@ class ResearchReportContractTests(unittest.TestCase):
         self.assertIn("market data status must include a source", errors)
         self.assertIn("market data status must include snapshot_captured_at", errors)
         self.assertIn("available account_status.snapshot is required", errors)
-        self.assertIn("calibration_status.calibrated must be false", errors)
+        self.assertIn("calibration_status must match walk-forward model registry", errors)
         self.assertIn("backtest_status.aligned must be false", errors)
 
     def test_validator_rejects_forbidden_actionable_aliases(self):

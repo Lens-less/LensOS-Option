@@ -50,28 +50,42 @@ class WalkForwardCalibrationTests(unittest.TestCase):
             report["score"]["score"],
         )
 
-    def test_compares_all_system_variants_and_highlights_slow_bull_windows(self):
+    def test_hides_performance_until_backtest_ledger_evidence_exists(self):
         report = build_walk_forward_calibration_report(
             generated_at="2026-07-07T00:01:30Z",
         )
 
-        self.assertEqual(
-            {"baseline", "regime_only", "pricing_only", "full_system"},
-            {row["variant"] for row in report["system_comparison"]},
+        self.assertEqual("not_run", report["comparison_status"]["status"])
+        self.assertEqual("BACKTEST_NOT_RUN", report["comparison_status"]["reason_code"])
+        self.assertIsNone(report["comparison_status"]["metrics_source"])
+        self.assertEqual([], report["system_comparison"])
+        self.assertEqual([], report["slow_bull_acute_rally_windows"])
+
+    def test_available_comparison_requires_artifact_and_complete_numeric_rows(self):
+        report = build_walk_forward_calibration_report(
+            generated_at="2026-07-07T00:01:30Z",
         )
-        for row in report["system_comparison"]:
-            for metric in (
-                "calmar",
-                "max_drawdown",
-                "cvar_99",
-                "touch_rate",
-                "forced_exit_count",
-                "margin_breach_count",
-                "premium_to_cvar",
-                "recovery_days",
-            ):
-                self.assertIn(metric, row)
-        self.assertGreaterEqual(len(report["slow_bull_acute_rally_windows"]), 2)
+        report["comparison_status"] = {
+            "status": "available",
+            "reason_code": None,
+            "metrics_source": "immutable_backtest_ledger",
+            "artifact_id": None,
+        }
+        report["system_comparison"] = [
+            {"variant": variant, "calmar": 999.0}
+            for variant in ("baseline", "regime_only", "pricing_only", "full_system")
+        ]
+
+        errors = validate_walk_forward_calibration_report(report)
+
+        self.assertIn(
+            "available calibration comparison must name immutable ledger artifact",
+            errors,
+        )
+        self.assertIn(
+            "available calibration comparison rows must include all performance metrics",
+            errors,
+        )
 
     def test_no_future_data_is_used(self):
         report = build_walk_forward_calibration_report(

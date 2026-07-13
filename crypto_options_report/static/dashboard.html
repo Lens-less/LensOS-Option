@@ -701,6 +701,24 @@
       font-size: 0.84rem;
     }
 
+    .check-row {
+      grid-template-columns: 20px minmax(0, 1fr) auto auto;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .check-row:last-child {
+      border-bottom: 0;
+    }
+
+    .readiness-reason {
+      grid-column: 2 / -1;
+      color: var(--muted);
+      font-size: 0.76rem;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
     .gate-row {
       grid-template-columns: minmax(0, 1fr) auto;
       padding: 9px 0;
@@ -1434,6 +1452,12 @@
         gap: 4px;
         overflow-x: auto;
         padding: 8px 10px 8px 0;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+
+      .nav::-webkit-scrollbar {
+        display: none;
       }
 
       .nav-item {
@@ -1967,6 +1991,118 @@
         border-top: 1px solid var(--line);
       }
     }
+
+    .truth-state {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 12px 14px;
+      border: 1px solid rgba(184, 51, 51, 0.34);
+      border-left: 4px solid var(--red);
+      border-radius: var(--radius);
+      background: var(--red-soft);
+      color: #7f2020;
+      box-shadow: 0 8px 24px rgba(184, 51, 51, 0.09);
+    }
+
+    .truth-state[hidden] {
+      display: none;
+    }
+
+    .truth-state strong {
+      font-size: clamp(0.88rem, 0.78rem + 0.35vw, 1.08rem);
+      letter-spacing: 0.04em;
+    }
+
+    .truth-state span {
+      color: #823939;
+      font-size: 0.82rem;
+      text-align: right;
+    }
+
+    .truth-state[data-state="current-public-trust-pending"] {
+      border-color: rgba(161, 101, 6, 0.34);
+      border-left-color: var(--amber);
+      background: var(--amber-soft);
+      color: #714700;
+      box-shadow: 0 8px 24px rgba(161, 101, 6, 0.09);
+    }
+
+    .truth-state[data-state="current-public-trust-pending"] span {
+      color: #795514;
+    }
+
+    .truth-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .truth-meta-item {
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.78);
+    }
+
+    .truth-meta-label {
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 850;
+      letter-spacing: 0.02em;
+    }
+
+    .truth-meta-value {
+      margin-top: 4px;
+      color: var(--ink);
+      font-size: 0.8rem;
+      font-weight: 760;
+      overflow-wrap: anywhere;
+    }
+
+    .truth-meta-note {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 0.7rem;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 980px) {
+      .truth-meta-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 620px) {
+      .truth-state {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .truth-state span {
+        text-align: left;
+      }
+
+      .truth-meta-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .check-row {
+        grid-template-columns: 20px minmax(0, 1fr);
+        align-items: start;
+      }
+
+      .readiness-evidence,
+      .readiness-release,
+      .readiness-reason {
+        grid-column: 2;
+        justify-self: start;
+      }
+    }
   </style>
 </head>
 <body>
@@ -2004,6 +2140,46 @@
             <span class="refresh-glyph" aria-hidden="true">↻</span>
           </button>
         </div>
+      </section>
+
+      <section
+        class="truth-state"
+        id="market-data-truth-state"
+        data-testid="market-data-truth-state"
+        data-state="not-current"
+        role="status"
+        aria-live="polite"
+      >
+        <strong id="market-data-truth-label">NOT CURRENT MARKET DATA</strong>
+        <span id="market-data-truth-detail">尚未加载可信的当前市场证据。</span>
+      </section>
+
+      <section class="truth-meta-grid" aria-label="报告与市场数据真值">
+        <article class="truth-meta-item">
+          <div class="truth-meta-label">报告生成时间</div>
+          <div class="truth-meta-value" id="report-generated-time">未生成</div>
+        </article>
+        <article class="truth-meta-item">
+          <div class="truth-meta-label">市场数据时间</div>
+          <div class="truth-meta-value" id="market-as-of-time">无当前市场时间</div>
+        </article>
+        <article class="truth-meta-item">
+          <div class="truth-meta-label">市场数据年龄</div>
+          <div class="truth-meta-value" id="market-data-age">不可用</div>
+        </article>
+        <article class="truth-meta-item">
+          <div class="truth-meta-label">数据来源</div>
+          <div class="truth-meta-value" id="market-data-source">未配置</div>
+        </article>
+        <article class="truth-meta-item">
+          <div class="truth-meta-label">信任裁决</div>
+          <div class="truth-meta-value" id="market-data-trust">不可信</div>
+        </article>
+        <article class="truth-meta-item">
+          <div class="truth-meta-label">采集范围</div>
+          <div class="truth-meta-value" id="market-collection-counts">未提供</div>
+          <div class="truth-meta-note" id="market-collection-coverage">覆盖率不可用</div>
+        </article>
       </section>
 
       <section class="command-band" aria-label="系统裁决">
@@ -2093,7 +2269,7 @@
                   <div class="matrix-note" id="matrix-account-note">暂无</div>
                 </div>
                 <div class="matrix-cell">
-                  <div class="matrix-label">卖出权限</div>
+                  <div class="matrix-label">Regime 研究上限（非交易授权）</div>
                   <div class="matrix-value" id="sell-permission">暂无</div>
                   <div class="matrix-note" id="limiting-dimension">暂无</div>
                 </div>
@@ -2152,15 +2328,16 @@
             </div>
           </article>
 
-          <article class="panel">
+          <article class="panel" id="backtest-panel">
             <header class="panel-header">
               <div>
                 <h2 class="panel-title">Backtest 对比</h2>
-                <span class="panel-kicker">按确定性对照版本比较 Calmar</span>
+                <span class="panel-kicker" id="backtest-evidence-status">等待已对齐证据</span>
               </div>
             </header>
             <div class="panel-body">
               <div class="bar-list" id="backtest-bars"></div>
+              <div class="empty" id="backtest-empty" hidden></div>
             </div>
           </article>
         </div>
@@ -2240,7 +2417,20 @@
       "offline preview": "离线预览",
       "离线预览": "离线预览",
       "Unavailable": "不可用",
+      "unavailable": "不可用",
       "available": "可用",
+      "trusted": "可信",
+      "untrusted": "不可信",
+      "not_run": "未运行",
+      "not_verified": "未验证",
+      "verified": "已验证",
+      "satisfied": "发布通过",
+      "verified_local": "本地已验证",
+      "ready": "发布就绪",
+      "not_ready": "尚未就绪",
+      "awaiting_external": "等待外部证据",
+      "awaiting_calendar": "等待观察期",
+      "invalid": "无效",
       "missing": "缺失",
       "blocked": "已阻断",
       "validated": "已验证",
@@ -2271,7 +2461,7 @@
       "dependency_gate": "依赖门禁",
       "halt_system": "系统 HALT",
       "no_new_trades": "禁止新交易",
-      "allow_new": "允许新交易",
+      "allow_new": "局部门禁通过",
       "reduce_existing": "降低现有风险",
       "close_all_and_pause": "全部关闭并暂停",
       "close_batch": "关闭受影响批次",
@@ -2288,7 +2478,7 @@
       "Account state is missing, stale, auth-failed, or otherwise halted.": "账户状态缺失、过期、认证失败或已进入 HALT。",
       "Validated market data is missing.": "缺少已验证市场数据。",
       "Regime or volatility cap sets sell permission to zero.": "Regime 或 volatility cap 将卖出权限降为 0。",
-      "Account margin light is green and projected margin allows new trades.": "账户保证金灯号为 green，预测保证金允许新交易。",
+      "Account margin light is green and projected margin allows new trades.": "账户保证金灯号与预测保证金局部门禁通过；最终授权仍由组合仲裁决定。",
       "Yellow margin state blocks new positions but permits reductions.": "Yellow 保证金状态阻断新仓，但允许降低风险。",
       "Red margin state requires existing risk reduction.": "Red 保证金状态要求降低现有风险。",
       "Market data quality gate is validated.": "市场数据质量门禁已验证。",
@@ -2311,7 +2501,7 @@
     };
 
     const FALLBACK_REPORT = {
-      generated_at: "离线预览",
+      generated_at: null,
       mode: "research_only",
       effective_mode: "research_only",
       action: "RESEARCH_ONLY",
@@ -2328,23 +2518,28 @@
         order_instructions_allowed: false,
         paper_manual_candidates_allowed: false
       },
+      data_trust: {
+        verdict: "untrusted",
+        source_class: "unavailable",
+        reason_codes: ["REPORT_API_UNAVAILABLE"]
+      },
       data_status: {
-        status: "missing",
+        status: "unavailable",
         source: "not_configured",
         validated: false,
-        reason_code: "MISSING_VALIDATED_MARKET_DATA"
+        reason_code: "REPORT_API_UNAVAILABLE"
       },
       account_status: {
-        status: "missing",
+        status: "not_configured",
+        source: "not_configured",
         margin_light: "HALT",
         trade_gate: "NO_TRADE",
         reason_code: "MISSING_ACCOUNT_API_SNAPSHOT"
       },
       vol_surface_status: {
-        status: "missing",
+        status: "not_run",
         validated: false,
-        fit_model: "linear_iv_vs_log_moneyness",
-        reason_code: "MISSING_VALIDATED_MARKET_DATA",
+        reason_code: "REPORT_API_UNAVAILABLE",
         expiries: [],
         summary: {
           expiries_evaluated: 0,
@@ -2358,74 +2553,31 @@
         limiting_cap: 0,
         limiting_dimension: "dependency_gate"
       },
-      ev_candidate_scanner: {
-        status: "blocked",
-        score_status: "UNCALIBRATED_RESEARCH_ONLY",
-        ranked_candidates: [],
-        summary: {
-          top_candidate_id: null
-        }
-      },
       portfolio_risk: {
-        final_action: "halt_system",
-        summary: {
-          signal_count: 3
-        },
-        signals: [
-          {
-            source: "margin_light",
-            severity: "halt_system",
-            reason: "账户状态缺失、过期、认证失败或已进入 HALT。"
-          },
-          {
-            source: "data_quality",
-            severity: "halt_system",
-            reason: "缺少已验证市场数据。"
-          },
-          {
-            source: "permission_cap",
-            severity: "no_new_trades",
-            reason: "Regime 或 volatility cap 将卖出权限降为 0。"
-          }
-        ]
+        final_action: "halt_system"
       },
-      walk_forward_calibration: {
-        score: {
-          status: "calibrated",
-          model_version: "walk_forward_fixture_v1"
-        },
-        system_comparison: [
-          { variant: "baseline", calmar: 0.48 },
-          { variant: "regime_only", calmar: 0.66 },
-          { variant: "pricing_only", calmar: 0.71 },
-          { variant: "full_system", calmar: 0.92 }
-        ]
+      calibration_status: {
+        status: "not_run",
+        model_version: null,
+        reason_code: "REPORT_API_UNAVAILABLE"
+      },
+      backtest_status: {
+        status: "not_run",
+        aligned: false,
+        reason_code: "REPORT_API_UNAVAILABLE"
       },
       full_system_surface: {
-        backtest_comparison: [
-          { variant: "baseline", calmar: 0.48 },
-          { variant: "regime_only", calmar: 0.66 },
-          { variant: "pricing_only", calmar: 0.71 },
-          { variant: "full_system", calmar: 0.92 }
-        ],
         release_readiness: {
           status: "NO-GO",
           paper_mode_allowed: false,
-          missing_prerequisites: [
-            "data_quality",
-            "vol_surface",
-            "paper_ledger_reconciliation",
-            "manual_approval_runbook"
-          ],
           prerequisites: [
-            { name: "data_quality", satisfied: false },
-            { name: "pnl_evidence", satisfied: true },
-            { name: "vol_surface", satisfied: false },
-            { name: "portfolio_risk", satisfied: true },
-            { name: "position_management", satisfied: true },
-            { name: "walk_forward_calibration", satisfied: true },
-            { name: "paper_ledger_reconciliation", satisfied: false },
-            { name: "manual_approval_runbook", satisfied: false }
+            {
+              name: "report_api",
+              satisfied: false,
+              evidence_state: "not_configured",
+              release_state: "not_ready",
+              reason: "报告 API 不可用，未加载任何当前市场或表现证据。"
+            }
           ]
         }
       }
@@ -2478,10 +2630,99 @@
     function setReportStatus(meta, generated) {
       const node = el("source-pill");
       node.className = `report-status ${meta.fallback ? "is-offline" : "is-live"}`;
-      node.textContent = meta.fallback ? "连接失败，显示离线预览" : snapshotLabel(generated);
+      node.textContent = meta.fallback ? "报告 API 不可用" : snapshotLabel(generated);
       node.title = meta.fallback
-        ? `使用 fallback 数据: ${valueText(meta.error, "API 不可用")}`
+        ? `连接失败，显示离线预览；未加载当前市场数据: ${valueText(meta.error, "API 不可用")}`
         : `报告路由: ${valueText(meta.source)}/research/report`;
+    }
+
+    function marketAsOf(data) {
+      return data.snapshot_captured_at
+        || data.market_as_of
+        || data.observed_at
+        || data.captured_at
+        || null;
+    }
+
+    function hasCurrentPublicData(data, meta) {
+      const thresholds = ((data.quality_gate || {}).thresholds || {});
+      const maxAge = thresholds.market_data_max_age_sec;
+      const age = data.market_data_age_sec;
+      const responseStatus = ((data.public_response_contract || {}).overall_status || "").toLowerCase();
+      const qualityReasons = (data.quality_gate || {}).reason_codes || [];
+      return !meta.fallback
+        && data.status === "validated"
+        && data.validated === true
+        && Boolean(marketAsOf(data))
+        && typeof age === "number"
+        && !(typeof maxAge === "number" && age > maxAge)
+        && responseStatus !== "stale"
+        && !qualityReasons.includes("MARKET_DATA_AGE_EXCEEDED");
+    }
+
+    function renderCollectionScope(data) {
+      const scope = data.collection_scope || {};
+      const upstream = scope.upstream_instrument_count;
+      const selected = scope.selected_instrument_count;
+      const coverage = scope.coverage_ratio;
+      const hasCounts = Number.isInteger(upstream) && Number.isInteger(selected);
+      setText("market-collection-counts", hasCounts ? `上游 ${upstream} → 入选 ${selected}` : "未提供");
+      const coverageText = typeof coverage === "number" ? `${(coverage * 100).toFixed(2)}%` : "不可用";
+      const policy = (scope.selection_policy || {}).name;
+      setText(
+        "market-collection-coverage",
+        `覆盖率 ${coverageText}${scope.scope ? ` · ${scope.scope}` : ""}${policy ? ` · ${policy}` : ""}`
+      );
+    }
+
+    function renderTruthMetadata(report, meta) {
+      const data = report.data_status || {};
+      const trust = report.data_trust || {};
+      const marketTime = marketAsOf(data);
+      const publicDataCurrent = hasCurrentPublicData(data, meta);
+      const trustedCurrent = publicDataCurrent && trust.verdict === "trusted";
+      const truthState = el("market-data-truth-state");
+
+      truthState.hidden = trustedCurrent;
+      truthState.dataset.state = meta.fallback
+        ? "offline"
+        : trustedCurrent
+        ? "current-trusted"
+        : publicDataCurrent
+        ? "current-public-trust-pending"
+        : "not-current";
+      setText(
+        "market-data-truth-label",
+        trustedCurrent
+          ? "CURRENT TRUSTED MARKET DATA"
+          : publicDataCurrent
+          ? "CURRENT PUBLIC DATA · TRUST PENDING"
+          : "NOT CURRENT MARKET DATA"
+      );
+      el("market-data-truth-detail").textContent = meta.fallback
+        ? "报告 API 不可用，未加载当前市场数据。"
+        : publicDataCurrent && !trustedCurrent
+        ? "市场数据当前且质量通过；共享信任裁决待完成，仅供研究，不生成交易建议。"
+        : trustedCurrent
+        ? "当前市场数据与共享信任裁决均已通过。"
+        : "市场数据缺失、质量未通过或已过期，不可视为当前市场数据。";
+      setText("report-generated-time", report.generated_at, "未生成");
+      setText("market-as-of-time", marketTime, "无当前市场时间");
+      setText(
+        "market-data-age",
+        typeof data.market_data_age_sec === "number"
+          ? `${valueText(data.market_data_age_sec)} 秒`
+          : "不可用"
+      );
+      setText("market-data-source", data.source || trust.source_class, "未配置");
+      setText("market-data-trust", trust.verdict, "不可信");
+      renderCollectionScope(data);
+    }
+
+    function scannerStatusText(scanner) {
+      const status = displayText(scanner.status, "未运行");
+      const reason = scanner.reason_code || (scanner.reason_codes || []).join(" · ");
+      return reason ? `${status} · ${reason}` : status;
     }
 
     function percent(value) {
@@ -2493,13 +2734,13 @@
 
     function badgeClass(value) {
       const normalized = valueText(value).toLowerCase();
-      if (["go", "green", "validated", "available", "pass", "allow_new", "research_only", "calibrated"].includes(normalized)) {
+      if (["go", "green", "validated", "available", "pass", "allow_new", "research_only", "calibrated", "ready", "verified_local"].includes(normalized)) {
         return "green";
       }
-      if (["halt", "red", "blocked", "missing", "no-go", "fail", "no_trade", "halt_system", "locked"].includes(normalized)) {
+      if (["halt", "red", "blocked", "missing", "no-go", "fail", "no_trade", "halt_system", "locked", "not_ready", "invalid"].includes(normalized)) {
         return "red";
       }
-      if (["yellow", "stale", "uncalibrated", "review", "reduce_existing", "no_new_trades"].includes(normalized)) {
+      if (["yellow", "stale", "uncalibrated", "review", "reduce_existing", "no_new_trades", "not_configured", "not_run", "awaiting_external", "awaiting_calendar"].includes(normalized)) {
         return "amber";
       }
       return "cyan";
@@ -2587,38 +2828,62 @@
       const surface = report.vol_surface_status || {};
       const calibration = report.walk_forward_calibration || {};
       const score = calibration.score || {};
+      const calibrationStatus = report.calibration_status || {};
+      const trust = report.data_trust || {};
+      const currentPublicData = hasCurrentPublicData(data, meta);
       const generated = valueText(report.generated_at);
 
       setReportStatus(meta, generated);
+      renderTruthMetadata(report, meta);
       setText("action", report.action);
       setText("effective-mode", `mode: ${valueText(report.effective_mode)}`);
       setText("risk-state", report.risk_state);
       setText("portfolio-action", portfolio.final_action);
       setText("readiness-status", readiness.status);
       setText("paper-state", readiness.paper_mode_allowed ? "paper mode 允许" : "paper mode 已阻断");
-      setText("candidate-count", (scanner.ranked_candidates || []).length);
-      setText("candidate-meta", scanner.status);
-      setText("calibration", score.status || (report.calibration_status || {}).status);
-      setText("model-version", score.model_version || (report.calibration_status || {}).model_version);
+      setText("candidate-count", currentPublicData ? (scanner.ranked_candidates || []).length : "未评估");
+      setText("candidate-meta", currentPublicData ? scannerStatusText(scanner) : "无当前市场数据");
+      setText("calibration", score.status || calibrationStatus.status || "未运行");
+      setText("model-version", score.model_version || calibrationStatus.model_version || "无可信证据");
       setText("generated-at", generated);
       setText("risk-summary", `${displayText(report.risk_state)} 风险状态，来源 ${displayText(portfolio.final_action)}`);
-      setText("portfolio-summary", `已评估 ${valueText((portfolio.summary || {}).signal_count, 0)} 条信号`);
-      setText("scanner-status", `${displayText(scanner.status)} / ${(scanner.summary || {}).top_candidate_id || "无首选候选"}`);
-      setText("missing-count", `缺失 ${(readiness.missing_prerequisites || []).length} 项前置条件`);
+      setText(
+        "portfolio-summary",
+        currentPublicData
+          ? `已评估 ${valueText((portfolio.summary || {}).signal_count, 0)} 条信号`
+          : "无可信市场数据，组合信号未评估"
+      );
+      setText(
+        "scanner-status",
+        currentPublicData
+          ? `${scannerStatusText(scanner)} / ${(scanner.summary || {}).top_candidate_id || "无首选候选"}`
+          : "无当前市场数据，候选未评估"
+      );
+      const blockingCount = (readiness.prerequisites || []).filter((gate) => gate.satisfied !== true).length;
+      setText("missing-count", `${blockingCount} 项发布阻断`);
       setText("data-source", data.source);
       setText("surface-model", surface.fit_model);
       setText("matrix-data", data.status);
       setText("matrix-data-note", data.reason_code || data.source);
-      setText("matrix-account", account.trade_gate);
-      setText("matrix-account-note", `${displayText(account.status)} / ${displayText(account.margin_light)}`);
+      const accountNotConfigured = account.source === "not_configured";
+      setText("matrix-account", accountNotConfigured ? "not_configured" : account.trade_gate);
+      setText(
+        "matrix-account-note",
+        accountNotConfigured
+          ? "只读账户数据源未配置（非系统错误）"
+          : `${displayText(account.status)} / ${displayText(account.margin_light)}`
+      );
       setText("sell-permission", percent(permission.sell_permission));
       setText("limiting-dimension", permission.limiting_dimension);
       setText("data-validated", data.validated ? "是" : "否");
       setText("data-age", data.market_data_age_sec === undefined ? "暂无" : `${valueText(data.market_data_age_sec)} 秒`);
 
       const surfaceSummary = surface.summary || {};
-      setText("expiry-count", surfaceSummary.expiries_evaluated || (surface.expiries || []).length || 0);
-      setText("eligible-expiry-count", surfaceSummary.eligible_expiries || 0);
+      setText(
+        "expiry-count",
+        currentPublicData ? (surfaceSummary.expiries_evaluated || (surface.expiries || []).length || 0) : "未评估"
+      );
+      setText("eligible-expiry-count", currentPublicData ? (surfaceSummary.eligible_expiries || 0) : "未评估");
 
       setBadge("mode-badge", report.mode);
       setBadge("final-action", portfolio.final_action);
@@ -2630,9 +2895,12 @@
       renderReasons(report.reason_codes || []);
       renderEvidence(report);
       renderModeGate(report.mode_gate || {});
-      renderCandidates(scanner);
+      renderCandidates(scanner, data, meta);
       renderRiskSignals(portfolio);
-      renderBacktests(full.backtest_comparison || calibration.system_comparison || []);
+      renderBacktests(
+        full.backtest_comparison || report.backtest_comparison || calibration.system_comparison || [],
+        report.backtest_status || {}
+      );
       renderReadiness(readiness);
     }
 
@@ -2655,13 +2923,22 @@
       const surface = report.vol_surface_status || {};
       const permission = report.permission_state || {};
       const calibration = report.walk_forward_calibration || {};
+      const calibrationStatus = report.calibration_status || {};
       const portfolio = report.portfolio_risk || {};
       const chain = [
         ["市场数据", data.status, data.reason_code || data.source],
-        ["账户与保证金", account.status, account.reason_code || account.trade_gate],
+        [
+          "账户与保证金",
+          account.source === "not_configured" ? "not_configured" : account.status,
+          account.source === "not_configured" ? "只读账户数据源未配置（非系统错误）" : (account.reason_code || account.trade_gate)
+        ],
         ["Vol Surface", surface.status, surface.reason_code || surface.fit_model],
         ["Regime 权限", permission.status, permission.primary_regime_label],
-        ["校准", (calibration.score || {}).status || "missing", (calibration.score || {}).model_version],
+        [
+          "校准",
+          (calibration.score || {}).status || calibrationStatus.status || "not_run",
+          (calibration.score || {}).model_version || calibrationStatus.model_version || calibrationStatus.reason_code
+        ],
         ["组合仲裁", portfolio.final_action, (portfolio.final_signal || {}).reason]
       ];
       const node = el("evidence-chain");
@@ -2709,12 +2986,20 @@
       });
     }
 
-    function renderCandidates(scanner) {
+    function renderCandidates(scanner, data, meta) {
       const rows = scanner.ranked_candidates || [];
       const tbody = el("candidate-rows");
+      const empty = el("candidate-empty");
+      const currentPublicData = hasCurrentPublicData(data, meta);
       clear(tbody);
-      el("candidate-empty").hidden = rows.length > 0;
-      el("candidate-table-wrap").hidden = rows.length === 0;
+      empty.hidden = currentPublicData && rows.length > 0;
+      el("candidate-table-wrap").hidden = !currentPublicData || rows.length === 0;
+      empty.textContent = currentPublicData
+        ? `${scannerStatusText(scanner)}，${rows.length} 个候选；这是扫描结果，不是数据缺失。`
+        : "无可信市场数据，候选尚未评估。";
+      if (!currentPublicData) {
+        return;
+      }
       rows.slice(0, 8).forEach((candidate) => {
         const row = document.createElement("tr");
         appendCell(row, candidate.candidate_id, "mono", true);
@@ -2739,18 +3024,30 @@
       });
     }
 
-    function renderBacktests(items) {
+    function renderBacktests(items, backtestStatus) {
       const list = el("backtest-bars");
+      const empty = el("backtest-empty");
+      const rows = Array.isArray(items) ? items : [];
+      const aligned = backtestStatus.status === "aligned" && backtestStatus.aligned === true;
+      const hasComparison = aligned && rows.length > 0;
       clear(list);
-      if (!items.length) {
-        const empty = document.createElement("div");
-        empty.className = "empty";
-        empty.textContent = "当前报告没有 Backtest 对比。";
-        list.appendChild(empty);
+      list.hidden = !hasComparison;
+      empty.hidden = hasComparison;
+      if (!hasComparison) {
+        const reason = displayText(backtestStatus.reason_code, "无可用对比证据");
+        if (backtestStatus.status === "not_run") {
+          empty.textContent = `未运行：Backtest 尚未产生可展示证据（${reason}）。`;
+        } else if (aligned) {
+          empty.textContent = "证据不足：Backtest 标记为已对齐，但没有可用对比结果。";
+        } else {
+          empty.textContent = `证据不足：Backtest 尚未对齐（${reason}）。`;
+        }
+        setText("backtest-evidence-status", backtestStatus.status || "not_run");
         return;
       }
-      const maxCalmar = Math.max(...items.map((item) => Number(item.calmar) || 0), 1);
-      items.forEach((item) => {
+      setText("backtest-evidence-status", `已对齐 · ${rows.length} 组对比`);
+      const maxCalmar = Math.max(...rows.map((item) => Number(item.calmar) || 0), 1);
+      rows.forEach((item) => {
         const row = document.createElement("div");
         row.className = "bar-row";
 
@@ -2780,18 +3077,34 @@
       const list = el("readiness-list");
       clear(list);
       (readiness.prerequisites || []).forEach((gate) => {
+        const evidenceState = gate.evidence_state || (gate.satisfied ? "verified_local" : "not_run");
+        const releaseState = gate.release_state || (gate.satisfied ? "ready" : "not_ready");
+        const reason = gate.reason
+          || gate.reason_code
+          || (gate.reason_codes || []).map((code) => displayText(code)).join(" · ")
+          || (gate.satisfied ? "证据与发布门禁均已满足。" : "尚无满足发布门禁的证据。");
         const item = document.createElement("li");
         item.className = "check-row";
+        item.dataset.evidenceState = evidenceState;
+        item.dataset.releaseState = releaseState;
         const dot = document.createElement("span");
-        dot.className = gate.satisfied ? "dot ok" : "dot";
+        dot.className = releaseState === "ready" ? "dot ok" : "dot";
         const label = document.createElement("span");
         label.textContent = displayText(gate.name);
-        const state = document.createElement("span");
-        state.className = `badge ${gate.satisfied ? "green" : "red"}`;
-        state.textContent = gate.satisfied ? "通过" : "缺失";
+        const evidence = document.createElement("span");
+        evidence.className = `badge readiness-evidence ${badgeClass(evidenceState)}`;
+        evidence.textContent = displayText(evidenceState);
+        const release = document.createElement("span");
+        release.className = `badge readiness-release ${badgeClass(releaseState)}`;
+        release.textContent = displayText(releaseState);
+        const reasonNode = document.createElement("span");
+        reasonNode.className = "readiness-reason";
+        reasonNode.textContent = reason;
         item.appendChild(dot);
         item.appendChild(label);
-        item.appendChild(state);
+        item.appendChild(evidence);
+        item.appendChild(release);
+        item.appendChild(reasonNode);
         list.appendChild(item);
       });
     }

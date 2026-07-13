@@ -110,8 +110,8 @@ FORBIDDEN_RESEARCH_ONLY_KEYS = {
 DEFAULT_REASON_CODES = [
     "MISSING_VALIDATED_MARKET_DATA",
     "MISSING_ACCOUNT_API_SNAPSHOT",
-    "MISSING_CALIBRATED_MODEL",
-    "MISSING_BACKTEST_ALIGNMENT",
+    "CALIBRATION_PROMOTION_PENDING",
+    "BACKTEST_NOT_RUN",
 ]
 
 
@@ -168,7 +168,6 @@ def generate_research_report(
         reason_codes.extend(data_status["quality_gate"]["reason_codes"])
 
     reason_codes.extend(account_reason_codes(account_status))
-    reason_codes.extend(["MISSING_CALIBRATED_MODEL", "MISSING_BACKTEST_ALIGNMENT"])
 
     data_trust = _build_data_trust_summary(data_status)
 
@@ -203,12 +202,21 @@ def generate_research_report(
     )
     reason_codes.extend(permission_state["reason_codes"])
 
-    calibration_status = {
-        "status": "missing",
-        "calibrated": False,
-        "model_version": None,
-        "reason_code": "MISSING_CALIBRATED_MODEL",
+    walk_forward_calibration = build_walk_forward_calibration_report(
+        generated_at=generated,
+    )
+    calibration_status = _calibration_status_from_walk_forward(
+        walk_forward_calibration
+    )
+    backtest_status = {
+        "status": "not_run",
+        "aligned": False,
+        "artifact_id": None,
+        "reason_code": "BACKTEST_NOT_RUN",
     }
+    if calibration_status.get("reason_code"):
+        reason_codes.append(str(calibration_status["reason_code"]))
+    reason_codes.append(str(backtest_status["reason_code"]))
     ev_candidate_scanner = build_ev_candidate_scanner(
         generated_at=generated,
         data_status=data_status,
@@ -230,12 +238,6 @@ def generate_research_report(
         portfolio_risk=portfolio_risk,
         permission_state=permission_state,
     )
-    walk_forward_calibration = build_walk_forward_calibration_report(
-        generated_at=generated,
-        portfolio_risk=portfolio_risk,
-        position_management=position_management,
-    )
-
     report = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": generated,
@@ -254,11 +256,7 @@ def generate_research_report(
         "data_status": data_status,
         "account_status": account_status,
         "calibration_status": calibration_status,
-        "backtest_status": {
-            "status": "missing",
-            "aligned": False,
-            "reason_code": "MISSING_BACKTEST_ALIGNMENT",
-        },
+        "backtest_status": backtest_status,
         "mode_gate": {
             "trade_recommendation_allowed": False,
             "recommended_size_allowed": False,
@@ -294,6 +292,36 @@ def generate_research_report(
     if errors:
         raise ValueError("; ".join(errors))
     return report
+
+
+def _calibration_status_from_walk_forward(
+    calibration: dict[str, Any],
+) -> dict[str, Any]:
+    registry = calibration.get("model_registry") or {}
+    model_version = registry.get("model_version")
+    promotion_status = registry.get("promotion_status")
+    if not model_version or not promotion_status:
+        return {
+            "status": "missing",
+            "calibrated": False,
+            "model_version": None,
+            "promotion_status": "missing",
+            "evidence_class": None,
+            "reason_code": "MISSING_CALIBRATION_EVIDENCE",
+        }
+
+    promoted = (
+        registry.get("promoted_for_sizing") is True
+        and promotion_status == "promoted"
+    )
+    return {
+        "status": "calibrated" if promoted else "research_fixture",
+        "calibrated": promoted,
+        "model_version": str(model_version),
+        "promotion_status": str(promotion_status),
+        "evidence_class": calibration.get("evidence_class"),
+        "reason_code": None if promoted else "CALIBRATION_PROMOTION_PENDING",
+    }
 
 
 def report_shape(value: Any) -> Any:
@@ -340,10 +368,6 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
         for code in data_status.get("quality_gate", {}).get("reason_codes", []):
             if code not in report.get("reason_codes", []):
                 errors.append(f"missing quality reason code: {code}")
-    for code in ("MISSING_CALIBRATED_MODEL", "MISSING_BACKTEST_ALIGNMENT"):
-        if code not in report.get("reason_codes", []):
-            errors.append(f"missing reason code: {code}")
-
     account_reason_code = (report.get("account_status", {}) or {}).get("reason_code")
     if account_reason_code and account_reason_code not in report.get("reason_codes", []):
         errors.append("account_status reason_code must appear in report reason_codes")
@@ -373,22 +397,50 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
     errors.extend(_validate_permission_state(report.get("permission_state", {})))
 
     calibration_status = report.get("calibration_status", {})
-    if calibration_status.get("status") != "missing":
-        errors.append("calibration_status.status must be missing")
-    if calibration_status.get("calibrated") is not False:
-        errors.append("calibration_status.calibrated must be false")
-    if calibration_status.get("model_version") is not None:
-        errors.append("calibration_status.model_version must be null")
-    if calibration_status.get("reason_code") != "MISSING_CALIBRATED_MODEL":
-        errors.append("calibration_status.reason_code must be MISSING_CALIBRATED_MODEL")
+    expected_calibration = _calibration_status_from_walk_forward(
+        report.get("walk_forward_calibration") or {}
+    )
+    if calibration_status != expected_calibration:
+        errors.append("calibration_status must match walk-forward model registry")
+    calibration_reason = calibration_status.get("reason_code")
+    if calibration_reason and calibration_reason not in report.get("reason_codes", []):
+        errors.append("calibration_status reason_code must appear in report reason_codes")
 
     backtest_status = report.get("backtest_status", {})
-    if backtest_status.get("status") != "missing":
-        errors.append("backtest_status.status must be missing")
+    if backtest_status.get("status") != "not_run":
+        errors.append("backtest_status.status must be not_run without an artifact")
     if backtest_status.get("aligned") is not False:
         errors.append("backtest_status.aligned must be false")
-    if backtest_status.get("reason_code") != "MISSING_BACKTEST_ALIGNMENT":
-        errors.append("backtest_status.reason_code must be MISSING_BACKTEST_ALIGNMENT")
+    if backtest_status.get("artifact_id") is not None:
+        errors.append("not-run backtest_status.artifact_id must be null")
+    if backtest_status.get("reason_code") != "BACKTEST_NOT_RUN":
+        errors.append("not-run backtest_status.reason_code must be BACKTEST_NOT_RUN")
+    if "BACKTEST_NOT_RUN" not in report.get("reason_codes", []):
+        errors.append("missing reason code: BACKTEST_NOT_RUN")
+
+    walk_forward = report.get("walk_forward_calibration") or {}
+    comparison_status = walk_forward.get("comparison_status") or {}
+    comparison_rows = walk_forward.get("system_comparison")
+    surface_comparison = (
+        (report.get("full_system_surface") or {}).get("backtest_comparison")
+    )
+    if backtest_status.get("status") == "not_run":
+        if comparison_status.get("status") == "available":
+            errors.append(
+                "not-run backtest must not expose an available calibration comparison"
+            )
+        if comparison_rows != []:
+            errors.append(
+                "not-run backtest must not expose calibration performance rows"
+            )
+        if surface_comparison != []:
+            errors.append(
+                "not-run backtest must not expose full-system performance rows"
+            )
+    if surface_comparison != comparison_rows:
+        errors.append(
+            "full-system backtest comparison must match walk-forward comparison"
+        )
 
     errors.extend(_validate_pnl_evidence(report.get("pnl_evidence")))
     errors.extend(_validate_vol_surface_status(report.get("vol_surface_status")))
@@ -435,6 +487,18 @@ def _validate_data_status(data_status: dict[str, Any]) -> list[str]:
     if not isinstance(data_status.get("market_data_age_sec"), (int, float)):
         errors.append("market data status must include numeric market_data_age_sec")
 
+    collection_scope = data_status.get("collection_scope")
+    errors.extend(_validate_collection_scope(collection_scope))
+    response_contract = data_status.get("public_response_contract")
+    if not isinstance(response_contract, dict):
+        errors.append("market data status must include public_response_contract")
+    elif "collection_scope" not in response_contract:
+        errors.append("public response contract must include collection_scope")
+    elif response_contract.get("collection_scope") != collection_scope:
+        errors.append(
+            "public response collection_scope must match data_status collection_scope"
+        )
+
     gate = data_status.get("quality_gate", {})
     if gate.get("action_if_fail") != "RESEARCH_ONLY_NO_TRADE":
         errors.append("quality gate action_if_fail must be RESEARCH_ONLY_NO_TRADE")
@@ -464,6 +528,53 @@ def _validate_data_status(data_status: dict[str, Any]) -> list[str]:
         if not gate.get("reason_codes"):
             errors.append("blocked quality gate must include reason_codes")
 
+    return errors
+
+
+def _validate_collection_scope(scope: Any) -> list[str]:
+    if not isinstance(scope, dict):
+        return ["market data status must include collection_scope"]
+
+    errors: list[str] = []
+    required = {
+        "scope",
+        "upstream_instrument_count",
+        "selected_instrument_count",
+        "coverage_ratio",
+        "selection_policy",
+    }
+    if not required.issubset(scope):
+        errors.append("market data collection_scope is missing required fields")
+
+    upstream = scope.get("upstream_instrument_count")
+    selected = scope.get("selected_instrument_count")
+    valid_counts = all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in (upstream, selected)
+    )
+    if not valid_counts or selected > upstream:
+        errors.append("market data collection_scope counts are invalid")
+    else:
+        expected_scope = (
+            "empty_snapshot"
+            if upstream == 0
+            else "research_sample"
+            if selected < upstream
+            else "full_snapshot"
+        )
+        if scope.get("scope") != expected_scope:
+            errors.append("market data collection_scope label does not match counts")
+        expected_ratio = round(selected / upstream, 4) if upstream else 0.0
+        ratio = scope.get("coverage_ratio")
+        if (
+            isinstance(ratio, bool)
+            or not isinstance(ratio, (int, float))
+            or float(ratio) != expected_ratio
+        ):
+            errors.append("market data collection_scope coverage_ratio is invalid")
+
+    if not isinstance(scope.get("selection_policy"), dict):
+        errors.append("market data collection_scope selection_policy must be a dict")
     return errors
 
 

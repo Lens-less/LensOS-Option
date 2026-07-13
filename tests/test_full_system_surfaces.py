@@ -56,6 +56,10 @@ class FullSystemSurfaceTests(unittest.TestCase):
         self.assertFalse(surface["cli"]["paper_manual_actions_visible"])
         self.assertFalse(surface["dashboard"]["paper_manual_actions_visible"])
         self.assertEqual("NO-GO", surface["release_readiness"]["status"])
+        route_status = {
+            item["route"]: item["status"] for item in surface["api"]["routes"]
+        }
+        self.assertEqual("not_implemented", route_status["POST /backtest/run"])
 
     def test_api_route_descriptors_match_runtime_routes(self):
         declared_routes = set(API_ROUTES)
@@ -312,20 +316,20 @@ class FullSystemSurfaceTests(unittest.TestCase):
             first.close()
             second.close()
 
-    def test_http_backtest_run_route_returns_schema(self):
+    def test_http_backtest_run_route_refuses_to_invent_performance(self):
         status, headers, body = self._request(
             "POST",
             "/backtest/run?generated_at=2026-07-07T00%3A01%3A30Z",
         )
         payload = json.loads(body)
 
-        self.assertEqual(200, status)
+        self.assertEqual(501, status)
         self.assertEqual("application/json; charset=utf-8", headers["content-type"])
         self.assertEqual("backtest_run_response.v1", payload["schema_version"])
-        self.assertEqual("completed", payload["status"])
-        self.assertEqual("default", payload["report_id"])
+        self.assertEqual("not_implemented", payload["status"])
+        self.assertIsNone(payload["report_id"])
         self.assertTrue(payload["research_only"])
-        self.assertIn("backtest_comparison", payload)
+        self.assertEqual([], payload["backtest_comparison"])
 
     def test_http_backtest_run_rejects_invalid_query(self):
         status, headers, body = self._request(

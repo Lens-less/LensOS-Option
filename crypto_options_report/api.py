@@ -298,7 +298,7 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
         try:
-            report = _report_from_query(parsed.query, runtime=self._runtime())
+            _report_options_from_query(parsed.query, runtime=self._runtime())
         except ValueError as exc:
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
@@ -313,14 +313,13 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal"})
             return
         self._write_json(
-            HTTPStatus.OK,
+            HTTPStatus.NOT_IMPLEMENTED,
             {
                 "schema_version": "backtest_run_response.v1",
-                "status": "completed",
-                "report_id": "default",
-                "backtest_comparison": report["walk_forward_calibration"][
-                    "system_comparison"
-                ],
+                "status": "not_implemented",
+                "reason_code": "BOUNDED_BACKTEST_JOB_NOT_IMPLEMENTED",
+                "report_id": None,
+                "backtest_comparison": [],
                 "research_only": True,
             },
         )
@@ -526,6 +525,16 @@ def _payload_for_path(
 ) -> dict[str, Any]:
     if path in LIVENESS_PATHS:
         return {"status": "ok"}
+    if path == "/backtest/report/default":
+        _report_options_from_query(query, runtime=runtime)
+        return {
+            "schema_version": "backtest_report_lookup.v1",
+            "status": "not_run",
+            "reason_code": "BACKTEST_NOT_RUN",
+            "report_id": None,
+            "backtest_comparison": [],
+            "research_only": True,
+        }
     report = _report_from_query(query, runtime=runtime)
     if path in REPORT_ALIASES:
         return report
@@ -543,20 +552,20 @@ def _payload_for_path(
         return report["ev_candidate_scanner"]
     if path == "/recommendation":
         return build_recommendation_projection(report)
-    if path == "/backtest/report/default":
-        return {
-            "schema_version": "backtest_report_lookup.v1",
-            "report_id": "default",
-            "backtest_comparison": report["walk_forward_calibration"][
-                "system_comparison"
-            ],
-        }
     if path == "/dashboard":
         return report["full_system_surface"]["dashboard"]
     raise ValueError(f"unsupported path: {path}")
 
 
 def _report_from_query(
+    query: str,
+    *,
+    runtime: RuntimeConfig | None = None,
+) -> dict[str, Any]:
+    return build_api_report(**_report_options_from_query(query, runtime=runtime))
+
+
+def _report_options_from_query(
     query: str,
     *,
     runtime: RuntimeConfig | None = None,
@@ -571,10 +580,10 @@ def _report_from_query(
             raise ValueError(
                 f"production profile rejects browser-controlled parameters: {details}"
             )
-        return build_api_report(
-            mode="research_only",
-            snapshot_fixture=runtime.snapshot_fixture,
-        )
+        return {
+            "mode": "research_only",
+            "snapshot_fixture": runtime.snapshot_fixture,
+        }
 
     # HTTP always stays research_only for display/action consistency.
     mode = "research_only"
@@ -605,17 +614,17 @@ def _report_from_query(
         raise ValueError(
             "live_deribit HTTP fetch is disabled; capture a snapshot with the CLI"
         )
-    return build_api_report(
-        mode=mode,
-        snapshot_fixture=snapshot_fixture,
-        live_deribit=live_deribit,
-        currency=currency,
-        deribit_base_url=deribit_base_url,
-        instrument_limit=instrument_limit,
-        account_scenario=account_scenario,
-        generated_at=generated_at,
-        sandbox_fixtures=True,
-    )
+    return {
+        "mode": mode,
+        "snapshot_fixture": snapshot_fixture,
+        "live_deribit": live_deribit,
+        "currency": currency,
+        "deribit_base_url": deribit_base_url,
+        "instrument_limit": instrument_limit,
+        "account_scenario": account_scenario,
+        "generated_at": generated_at,
+        "sandbox_fixtures": True,
+    }
 
 
 def smoke_once(

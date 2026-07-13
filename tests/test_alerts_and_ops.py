@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ from crypto_options_report.contract import generate_research_report
 from crypto_options_report.market_data import (
     _fetch_vol_index_feed,
     _fetch_option_instrument_metadata,
+    build_market_data_status,
+    fetch_deribit_option_chain_snapshot,
     write_snapshot_fixture,
 )
 
@@ -144,6 +147,7 @@ class AlertsAndOpsTests(unittest.TestCase):
             self.assertEqual([], loaded["rows"])
 
     def test_fetch_vol_index_and_instruments_helpers(self):
+        observed_vol_params = {}
         vol_payload = {
             "result": {
                 "data": [
@@ -164,6 +168,7 @@ class AlertsAndOpsTests(unittest.TestCase):
 
         def fake_get_json(url, params, timeout):
             if "get_volatility_index_data" in url:
+                observed_vol_params.update(params)
                 return vol_payload
             if "get_instruments" in url:
                 return instruments_payload
@@ -186,7 +191,473 @@ class AlertsAndOpsTests(unittest.TestCase):
             )
         self.assertEqual("BTC DVOL", vol["index_name"])
         self.assertAlmostEqual(0.55, vol["volatility"], places=6)
+        self.assertEqual(60, observed_vol_params["resolution"])
         self.assertEqual("BTC", meta["BTC-9JUL26-90000-C"]["settlement_currency"])
+
+    def test_one_minute_dvol_rollover_does_not_flicker_stale(self):
+        base = json.loads(
+            (FIXTURES / "deribit_btc_option_chain_snapshot.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        base["feeds"]["vol_index"]["timestamp"] = "2026-07-07T00:00:00Z"
+
+        rollover = json.loads(json.dumps(base))
+        rollover["captured_at"] = "2026-07-07T00:01:03Z"
+        rollover_status = build_market_data_status(
+            rollover,
+            now_ms=1783382463000,
+        )
+        self.assertEqual(
+            "available",
+            rollover_status["public_response_contract"]["endpoints"]["vol_index"][
+                "status"
+            ],
+        )
+        self.assertEqual(
+            90,
+            rollover_status["public_response_contract"]["endpoints"]["vol_index"][
+                "max_age_sec"
+            ],
+        )
+
+        stale = json.loads(json.dumps(base))
+        stale["captured_at"] = "2026-07-07T00:01:31Z"
+        stale_status = build_market_data_status(stale, now_ms=1783382491000)
+        self.assertEqual(
+            "stale",
+            stale_status["public_response_contract"]["endpoints"]["vol_index"][
+                "status"
+            ],
+        )
+        self.assertIn(
+            "VOL_INDEX_STALE",
+            stale_status["quality_gate"]["reason_codes"],
+        )
+
+    def test_isolated_bad_quote_is_quarantined_within_declared_ratio(self):
+        snapshot = json.loads(
+            (FIXTURES / "deribit_btc_option_chain_snapshot.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        snapshot["rows"][0]["ticker"]["bid_iv"] = 0
+
+        status = build_market_data_status(
+            snapshot,
+            now_ms=1783382490000,
+            limits={"min_valid_quotes_per_expiry": 7},
+        )
+
+        self.assertEqual("validated", status["status"])
+        self.assertTrue(status["quality_gate"]["passed"])
+        expiry = status["quality_gate"]["per_expiry"][0]
+        self.assertEqual(7, expiry["valid_quotes"])
+        self.assertEqual(1, expiry["invalid_quotes"])
+        self.assertEqual(0.125, expiry["bad_quote_ratio"])
+        self.assertIn("INVALID_BID_IV", expiry["observed_quality_flags"])
+        self.assertNotIn("INVALID_BID_IV", expiry["reason_codes"])
+        contract = status["public_response_contract"]
+        self.assertEqual("pass", contract["overall_status"])
+        self.assertEqual(1, contract["quarantined_quotes"])
+        self.assertTrue(contract["response_classes"]["quality_quarantined"])
+        self.assertFalse(contract["response_classes"]["malformed"])
+
+    def test_live_collector_retains_successful_book_summaries(self):
+        instrument_name = "BTC-9JUL26-90000-C"
+
+        def fake_get_json(url, params, timeout):
+            if "get_book_summary_by_currency" in url:
+                return {
+                    "result": [
+                        {
+                            "instrument_name": instrument_name,
+                            "bid_price": 0.01,
+                            "ask_price": 0.02,
+                        }
+                    ]
+                }
+            if "/ticker" in url:
+                return {
+                    "result": {
+                        "instrument_name": instrument_name,
+                        "timestamp": 1783382460000,
+                    }
+                }
+            if "get_instruments" in url:
+                return {
+                    "result": [
+                        {
+                            "instrument_name": instrument_name,
+                            "settlement_currency": "BTC",
+                            "quote_currency": "BTC",
+                            "base_currency": "BTC",
+                        }
+                    ]
+                }
+            if "get_volatility_index_data" in url:
+                return {
+                    "result": {
+                        "data": [[1783382400000, 0.5, 0.6, 0.4, 55.0]],
+                    }
+                }
+            raise AssertionError(url)
+
+        with mock.patch(
+            "crypto_options_report.market_data._get_json",
+            side_effect=fake_get_json,
+        ):
+            snapshot = fetch_deribit_option_chain_snapshot(
+                currency="BTC",
+                instrument_limit=1,
+            )
+
+        self.assertEqual([], snapshot["fetch_errors"])
+        self.assertEqual(1, snapshot["instrument_metadata_count"])
+        self.assertEqual([instrument_name], [row["instrument_name"] for row in snapshot["rows"]])
+        self.assertEqual(
+            "explicit_settlement_currency",
+            snapshot["rows"][0]["summary"]["settlement_currency_source"],
+        )
+
+    def test_live_collector_marks_completion_time_and_runs_auxiliary_feeds_with_ticker(self):
+        instrument_name = "BTC-24JUL26-100000-C"
+        concurrent_requests = threading.Barrier(3, timeout=2)
+
+        def fake_get_json(url, params, timeout):
+            if "get_book_summary_by_currency" in url:
+                return {
+                    "result": [
+                        {
+                            "instrument_name": instrument_name,
+                            "bid_price": 0.01,
+                            "ask_price": 0.011,
+                        }
+                    ]
+                }
+            if "/ticker" in url:
+                concurrent_requests.wait()
+                return {
+                    "result": {
+                        "instrument_name": instrument_name,
+                        "timestamp": 1783872000000,
+                    }
+                }
+            if "get_instruments" in url:
+                concurrent_requests.wait()
+                return {
+                    "result": [
+                        {
+                            "instrument_name": instrument_name,
+                            "settlement_currency": "BTC",
+                            "quote_currency": "BTC",
+                            "base_currency": "BTC",
+                        }
+                    ]
+                }
+            if "get_volatility_index_data" in url:
+                concurrent_requests.wait()
+                return {
+                    "result": {
+                        "data": [[1783872000000, 0.5, 0.6, 0.4, 55.0]],
+                    }
+                }
+            raise AssertionError(url)
+
+        with (
+            mock.patch(
+                "crypto_options_report.market_data._get_json",
+                side_effect=fake_get_json,
+            ),
+            mock.patch(
+                "crypto_options_report.market_data.utc_timestamp",
+                side_effect=[
+                    "2026-07-12T16:00:00Z",
+                    "2026-07-12T16:00:12Z",
+                ],
+            ),
+            mock.patch(
+                "crypto_options_report.market_data.monotonic",
+                side_effect=[100.0, 112.345],
+                create=True,
+            ),
+        ):
+            snapshot = fetch_deribit_option_chain_snapshot(
+                currency="BTC",
+                instrument_limit=1,
+            )
+
+        self.assertEqual([], snapshot["fetch_errors"])
+        self.assertEqual("2026-07-12T16:00:00Z", snapshot["collection_started_at"])
+        self.assertEqual("2026-07-12T16:00:12Z", snapshot["captured_at"])
+        self.assertEqual(12345, snapshot["collection_duration_ms"])
+        self.assertEqual(1, snapshot["instrument_metadata_count"])
+        self.assertIn("vol_index", snapshot["feeds"])
+
+    def test_live_collector_selects_bounded_stratified_research_universe(self):
+        captured_at = "2026-07-12T16:00:00Z"
+        captured_ms = 1783872000000
+
+        def summary(expiry: str, strike: int, option_type: str, *, liquid: bool = True):
+            bid = 0.01 if liquid else 0.0
+            ask = 0.011 if liquid else 0.02
+            return {
+                "instrument_name": f"BTC-{expiry}-{strike}-{option_type}",
+                "bid_price": bid,
+                "ask_price": ask,
+                "underlying_price": 64000.0,
+            }
+
+        upstream = [
+            summary("13JUL26", 56000 + offset * 1000, "C")
+            for offset in range(10)
+        ]
+        upstream.extend(
+            summary("24JUL26", 50000 + offset * 1000, "C")
+            for offset in range(10)
+        )
+        upstream.extend(
+            summary("31JUL26", 50000 + offset * 1000, "C")
+            for offset in range(10)
+        )
+        upstream.extend(
+            summary("24JUL26", 65000 + offset * 1000, "C")
+            for offset in range(10)
+        )
+        upstream.extend(
+            summary("31JUL26", 65000 + offset * 1000, "C")
+            for offset in range(10)
+        )
+        upstream.extend(
+            summary("24JUL26", 110000 + offset * 1000, "P")
+            for offset in range(4)
+        )
+        upstream.extend(
+            summary("31JUL26", 120000 + offset * 1000, "C", liquid=False)
+            for offset in range(4)
+        )
+        ticker_requests = []
+
+        def fake_get_json(url, params, timeout):
+            if "get_book_summary_by_currency" in url:
+                return {"result": upstream}
+            if "/ticker" in url:
+                ticker_requests.append(params["instrument_name"])
+                return {
+                    "result": {
+                        "instrument_name": params["instrument_name"],
+                        "timestamp": captured_ms,
+                        "best_bid_price": 0.01,
+                        "best_ask_price": 0.011,
+                        "best_bid_amount": 5.0,
+                        "best_ask_amount": 5.0,
+                        "bid_iv": 50.0,
+                        "ask_iv": 51.0,
+                        "mark_iv": 50.5,
+                        "underlying_price": 100000.0,
+                    }
+                }
+            if "get_instruments" in url:
+                return {
+                    "result": [
+                        {
+                            "instrument_name": row["instrument_name"],
+                            "settlement_currency": "BTC",
+                            "quote_currency": "BTC",
+                            "base_currency": "BTC",
+                        }
+                        for row in upstream
+                    ]
+                }
+            if "get_volatility_index_data" in url:
+                return {"result": {"data": [[captured_ms, 0.5, 0.6, 0.4, 55.0]]}}
+            raise AssertionError(url)
+
+        with (
+            mock.patch(
+                "crypto_options_report.market_data._get_json",
+                side_effect=fake_get_json,
+            ),
+            mock.patch(
+                "crypto_options_report.market_data.utc_timestamp",
+                return_value=captured_at,
+            ),
+        ):
+            snapshot = fetch_deribit_option_chain_snapshot(
+                currency="BTC",
+                instrument_limit=40,
+            )
+            bounded_ticker_requests = list(ticker_requests)
+            ticker_requests.clear()
+            fallback_snapshot = fetch_deribit_option_chain_snapshot(
+                currency="BTC",
+                instrument_limit=5,
+            )
+            fallback_ticker_requests = list(ticker_requests)
+
+        selected_names = [row["instrument_name"] for row in snapshot["rows"]]
+        self.assertEqual(58, snapshot["upstream_instrument_count"])
+        self.assertEqual(20, snapshot["selected_instrument_count"])
+        self.assertEqual(20, len(bounded_ticker_requests))
+        self.assertEqual(set(selected_names), set(bounded_ticker_requests))
+        self.assertTrue(all("-C" in name for name in selected_names))
+        self.assertFalse(any("13JUL26" in name for name in selected_names))
+        self.assertTrue(
+            all(int(name.split("-")[2]) >= 64000 for name in selected_names)
+        )
+        self.assertEqual(
+            {"2026-07-24": 10, "2026-07-31": 10},
+            snapshot["selection_policy"]["selected_per_expiry"],
+        )
+        self.assertEqual(
+            "research_candidate_stratified_v1",
+            snapshot["selection_policy"]["name"],
+        )
+        self.assertFalse(snapshot["selection_policy"]["fallback_used"])
+        data_status = build_market_data_status(snapshot, now_ms=captured_ms)
+        collection_scope = data_status["collection_scope"]
+        self.assertEqual("research_sample", collection_scope["scope"])
+        self.assertEqual(58, collection_scope["upstream_instrument_count"])
+        self.assertEqual(20, collection_scope["selected_instrument_count"])
+        self.assertEqual(
+            snapshot["selection_policy"],
+            collection_scope["selection_policy"],
+        )
+        self.assertEqual(
+            collection_scope,
+            data_status["public_response_contract"]["collection_scope"],
+        )
+        fallback_names = [
+            row["instrument_name"] for row in fallback_snapshot["rows"]
+        ]
+        self.assertEqual(5, len(fallback_ticker_requests))
+        self.assertEqual(set(fallback_names), set(fallback_ticker_requests))
+        self.assertTrue(fallback_snapshot["selection_policy"]["fallback_used"])
+        self.assertTrue(
+            all(int(name.split("-")[2]) >= 64000 for name in fallback_names)
+        )
+
+    def test_live_collector_classifies_ticker_rate_limits_fail_closed(self):
+        instrument_name = "BTC-24JUL26-100000-C"
+        captured_at = "2026-07-12T16:00:00Z"
+        captured_ms = 1783872000000
+
+        def fake_get_json(url, params, timeout):
+            if "get_book_summary_by_currency" in url:
+                return {
+                    "result": [
+                        {
+                            "instrument_name": instrument_name,
+                            "bid_price": 0.01,
+                            "ask_price": 0.011,
+                        }
+                    ]
+                }
+            if "/ticker" in url:
+                raise ValueError("http 429 Too Many Requests")
+            if "get_instruments" in url:
+                return {
+                    "result": [
+                        {
+                            "instrument_name": instrument_name,
+                            "settlement_currency": "BTC",
+                            "quote_currency": "BTC",
+                            "base_currency": "BTC",
+                        }
+                    ]
+                }
+            if "get_volatility_index_data" in url:
+                return {"result": {"data": [[captured_ms, 0.5, 0.6, 0.4, 55.0]]}}
+            raise AssertionError(url)
+
+        with (
+            mock.patch(
+                "crypto_options_report.market_data._get_json",
+                side_effect=fake_get_json,
+            ),
+            mock.patch(
+                "crypto_options_report.market_data.utc_timestamp",
+                return_value=captured_at,
+            ),
+        ):
+            snapshot = fetch_deribit_option_chain_snapshot(
+                currency="BTC",
+                instrument_limit=1,
+            )
+
+        self.assertEqual(
+            [f"{instrument_name}: http 429 Too Many Requests"],
+            snapshot["fetch_errors"],
+        )
+        self.assertEqual(1, len(snapshot["adapter_events"]))
+        event = snapshot["adapter_events"][0]
+        self.assertEqual("rate_limit", event["class"])
+        self.assertEqual("public/ticker", event["endpoint"])
+        self.assertEqual(instrument_name, event["instrument_name"])
+        self.assertTrue(event["retryable"])
+
+    def test_live_collector_classifies_deribit_jsonrpc_10028_as_retryable_rate_limit(self):
+        instrument_name = "BTC-24JUL26-100000-C"
+        captured_at = "2026-07-12T16:00:00Z"
+        captured_ms = 1783872000000
+
+        def fake_get_json(url, params, timeout):
+            if "get_book_summary_by_currency" in url:
+                return {
+                    "result": [
+                        {
+                            "instrument_name": instrument_name,
+                            "bid_price": 0.01,
+                            "ask_price": 0.011,
+                        }
+                    ]
+                }
+            if "/ticker" in url:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {
+                        "code": 10028,
+                        "message": "too_many_requests",
+                    },
+                }
+            if "get_instruments" in url:
+                return {
+                    "result": [
+                        {
+                            "instrument_name": instrument_name,
+                            "settlement_currency": "BTC",
+                            "quote_currency": "BTC",
+                            "base_currency": "BTC",
+                        }
+                    ]
+                }
+            if "get_volatility_index_data" in url:
+                return {"result": {"data": [[captured_ms, 0.5, 0.6, 0.4, 55.0]]}}
+            raise AssertionError(url)
+
+        with (
+            mock.patch(
+                "crypto_options_report.market_data._get_json",
+                side_effect=fake_get_json,
+            ),
+            mock.patch(
+                "crypto_options_report.market_data.utc_timestamp",
+                return_value=captured_at,
+            ),
+        ):
+            snapshot = fetch_deribit_option_chain_snapshot(
+                currency="BTC",
+                instrument_limit=1,
+            )
+
+        self.assertEqual(1, len(snapshot["adapter_events"]))
+        event = snapshot["adapter_events"][0]
+        self.assertEqual("rate_limit", event["class"])
+        self.assertEqual("public/ticker", event["endpoint"])
+        self.assertEqual(instrument_name, event["instrument_name"])
+        self.assertTrue(event["retryable"])
+        self.assertIn("rpc error 10028: too_many_requests", event["message"])
 
     def test_malformed_dvol_row_fails_closed_without_crash(self):
         from crypto_options_report.market_data import fetch_deribit_option_chain_snapshot

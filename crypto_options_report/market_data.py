@@ -8,6 +8,7 @@ import json
 from math import isfinite
 from pathlib import Path
 import re
+from time import monotonic
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -30,6 +31,13 @@ DEFAULT_QUALITY_LIMITS = {
     "max_spread_ratio": 0.50,
 }
 HTTP_MAX_INSTRUMENT_LIMIT = 50
+DEFAULT_TICKER_REQUEST_BUDGET = 20
+RESEARCH_DTE_RANGE_DAYS = (7, 35)
+# Deribit returns DVOL as one-minute candles. The row timestamp is the candle
+# boundary, so a healthy latest row can be slightly older than 60 seconds at
+# the minute rollover. Keep this stricter than quote staleness (120s) while
+# avoiding a predictable red/green flicker every minute.
+VOL_INDEX_MAX_AGE_SEC = 90
 INSTRUMENT_RE = re.compile(
     r"^(?P<base>[A-Z0-9]+)-(?P<day>\d{1,2})(?P<month>[A-Z]{3})(?P<year>\d{2})-"
     r"(?P<strike>\d+(?:\.\d+)?)-(?P<option>[CP])$"
@@ -218,7 +226,8 @@ def fetch_deribit_option_chain_snapshot(
     stay fail-closed rather than crashing mid-pipeline.
     """
     safe_base = validate_deribit_base_url(base_url)
-    captured_at = utc_timestamp()
+    collection_started_monotonic = monotonic()
+    collection_started_at = utc_timestamp()
     errors: list[str] = []
     adapter_events: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
@@ -244,45 +253,86 @@ def fetch_deribit_option_chain_snapshot(
         message = str(exc)
         errors.append(f"book_summary: {message}")
         adapter_events.append(_adapter_event_from_error(message))
-    summaries = []
+        summaries = []
 
-    if instrument_limit is not None:
-        summaries = summaries[: max(0, int(instrument_limit))]
+    upstream_instrument_count = len(summaries)
+    summaries, selection_policy = _select_research_summaries(
+        summaries,
+        captured_at=collection_started_at,
+        instrument_limit=instrument_limit,
+    )
 
     tickers: dict[str, Any] = {}
-    max_workers = max(1, min(8, len(summaries) or 1))
-    if summaries:
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(
-                    _get_json,
-                    f"{safe_base}/api/v2/public/ticker",
-                    {"instrument_name": row["instrument_name"]},
-                    timeout,
-                ): row["instrument_name"]
-                for row in summaries
-            }
-            for future in as_completed(futures):
-                instrument_name = futures[future]
-                try:
-                    ticker_payload = future.result()
-                    tickers[instrument_name] = _jsonrpc_result(
-                        ticker_payload,
-                        endpoint=f"ticker:{instrument_name}",
-                    )
-                except (ValueError, TypeError, KeyError) as exc:
-                    errors.append(f"{instrument_name}: {exc}")
-
     instrument_meta: dict[str, dict[str, Any]] = {}
-    if summaries:
-        try:
-            instrument_meta = _fetch_option_instrument_metadata(
+    feeds: dict[str, Any] = {}
+    max_workers = max(1, min(8, len(summaries) or 1))
+    # Instrument metadata and DVOL are independent of individual ticker calls.
+    # Run them beside the bounded eight-worker ticker pool instead of adding two
+    # serial network round trips to the snapshot critical path.
+    with ThreadPoolExecutor(max_workers=2) as auxiliary_pool:
+        instrument_meta_future = (
+            auxiliary_pool.submit(
+                _fetch_option_instrument_metadata,
                 safe_base,
                 currency=currency,
                 timeout=timeout,
             )
-        except (ValueError, TypeError, KeyError) as exc:
-            message = f"instruments: {exc}"
+            if summaries
+            else None
+        )
+        vol_index_future = auxiliary_pool.submit(
+            _fetch_vol_index_feed,
+            safe_base,
+            currency=currency,
+            timeout=timeout,
+            captured_at=collection_started_at,
+        )
+
+        if summaries:
+            with ThreadPoolExecutor(max_workers=max_workers) as ticker_pool:
+                futures = {
+                    ticker_pool.submit(
+                        _get_json,
+                        f"{safe_base}/api/v2/public/ticker",
+                        {"instrument_name": row["instrument_name"]},
+                        timeout,
+                    ): row["instrument_name"]
+                    for row in summaries
+                }
+                for future in as_completed(futures):
+                    instrument_name = futures[future]
+                    try:
+                        ticker_payload = future.result()
+                        tickers[instrument_name] = _jsonrpc_result(
+                            ticker_payload,
+                            endpoint=f"ticker:{instrument_name}",
+                        )
+                    except (ValueError, TypeError, KeyError) as exc:
+                        message = f"{instrument_name}: {exc}"
+                        errors.append(message)
+                        event = _adapter_event_from_error(message)
+                        event.update(
+                            {
+                                "endpoint": "public/ticker",
+                                "instrument_name": instrument_name,
+                                "retryable": event["class"]
+                                in {"rate_limit", "transient_network"},
+                            }
+                        )
+                        adapter_events.append(event)
+
+        if instrument_meta_future is not None:
+            try:
+                instrument_meta = instrument_meta_future.result()
+            except (ValueError, TypeError, KeyError) as exc:
+                message = f"instruments: {exc}"
+                errors.append(message)
+                adapter_events.append(_adapter_event_from_error(message))
+
+        try:
+            feeds["vol_index"] = vol_index_future.result()
+        except (ValueError, TypeError, KeyError, OSError, OverflowError) as exc:
+            message = f"vol_index: {exc}"
             errors.append(message)
             adapter_events.append(_adapter_event_from_error(message))
 
@@ -313,22 +363,16 @@ def fetch_deribit_option_chain_snapshot(
             }
         )
 
-    feeds: dict[str, Any] = {}
-    try:
-        vol_index = _fetch_vol_index_feed(
-            safe_base,
-            currency=currency,
-            timeout=timeout,
-            captured_at=captured_at,
-        )
-        feeds["vol_index"] = vol_index
-    except (ValueError, TypeError, KeyError, OSError, OverflowError) as exc:
-        message = f"vol_index: {exc}"
-        errors.append(message)
-        adapter_events.append(_adapter_event_from_error(message))
+    captured_at = utc_timestamp()
+    collection_duration_ms = max(
+        0,
+        round((monotonic() - collection_started_monotonic) * 1000),
+    )
 
     return {
         "captured_at": captured_at,
+        "collection_started_at": collection_started_at,
+        "collection_duration_ms": collection_duration_ms,
         "currency": currency,
         "source": f"deribit_live:{safe_base}",
         "rows": rows,
@@ -336,7 +380,214 @@ def fetch_deribit_option_chain_snapshot(
         "adapter_events": adapter_events,
         "feeds": feeds,
         "instrument_metadata_count": len(instrument_meta),
+        "upstream_instrument_count": upstream_instrument_count,
+        "selected_instrument_count": len(summaries),
+        "selection_policy": selection_policy,
     }
+
+
+def _select_research_summaries(
+    summaries: list[dict[str, Any]],
+    *,
+    captured_at: str,
+    instrument_limit: int | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    requested_limit = None if instrument_limit is None else max(0, int(instrument_limit))
+    effective_limit = min(
+        DEFAULT_TICKER_REQUEST_BUDGET,
+        requested_limit if requested_limit is not None else DEFAULT_TICKER_REQUEST_BUDGET,
+    )
+    min_per_expiry = int(DEFAULT_QUALITY_LIMITS["min_valid_quotes_per_expiry"])
+    captured_date = datetime.fromtimestamp(
+        parse_timestamp_ms(captured_at) / 1000,
+        tz=timezone.utc,
+    ).date()
+
+    ranked: list[dict[str, Any]] = []
+    for summary in summaries:
+        instrument_name = str(summary.get("instrument_name") or "")
+        try:
+            metadata = _parse_option_metadata(instrument_name)
+            expiry_date = str(metadata["expiry_date"])
+            dte_days = (datetime.fromisoformat(expiry_date).date() - captured_date).days
+            option_type = str(metadata["option_type"])
+            underlying_price = _to_number(summary.get("underlying_price"))
+            strike = _to_number(metadata.get("strike"))
+            moneyness = (
+                strike / underlying_price
+                if strike is not None
+                and underlying_price is not None
+                and underlying_price > 0
+                else None
+            )
+        except (TypeError, ValueError, KeyError):
+            expiry_date = "unknown"
+            dte_days = None
+            option_type = "unknown"
+            moneyness = None
+        in_target_dte = (
+            dte_days is not None
+            and RESEARCH_DTE_RANGE_DAYS[0] <= dte_days <= RESEARCH_DTE_RANGE_DAYS[1]
+        )
+        liquid = _summary_has_preferred_liquidity(summary)
+        ranked.append(
+            {
+                "summary": summary,
+                "instrument_name": instrument_name,
+                "expiry_date": expiry_date,
+                "dte_days": dte_days,
+                "option_type": option_type,
+                "moneyness": moneyness,
+                "in_target_dte": in_target_dte,
+                "preferred_liquidity": liquid,
+            }
+        )
+
+    preferred_groups: dict[str, list[dict[str, Any]]] = {}
+    for item in ranked:
+        if (
+            item["in_target_dte"]
+            and item["option_type"] == "call"
+            and item["preferred_liquidity"]
+        ):
+            preferred_groups.setdefault(item["expiry_date"], []).append(item)
+    for rows in preferred_groups.values():
+        rows.sort(key=_research_summary_sort_key)
+
+    qualifying_groups = [
+        (expiry, rows)
+        for expiry, rows in sorted(preferred_groups.items())
+        if len(rows) >= min_per_expiry
+    ]
+    selected_items: list[dict[str, Any]] = []
+    fallback_used = True
+    if effective_limit >= min_per_expiry and qualifying_groups:
+        group_limit = max(1, effective_limit // min_per_expiry)
+        chosen_groups = qualifying_groups[:group_limit]
+        for _, rows in chosen_groups:
+            selected_items.extend(rows[:min_per_expiry])
+        next_indexes = [min_per_expiry for _ in chosen_groups]
+        while len(selected_items) < effective_limit:
+            added = False
+            for index, (_, rows) in enumerate(chosen_groups):
+                next_index = next_indexes[index]
+                if next_index >= len(rows):
+                    continue
+                selected_items.append(rows[next_index])
+                next_indexes[index] += 1
+                added = True
+                if len(selected_items) >= effective_limit:
+                    break
+            if not added:
+                break
+        fallback_used = False
+    elif effective_limit:
+        selected_items = sorted(
+            ranked,
+            key=lambda item: (
+                not item["in_target_dte"],
+                item["option_type"] != "call",
+                not item["preferred_liquidity"],
+                abs((item["dte_days"] if item["dte_days"] is not None else 10_000) - 21),
+                item["expiry_date"],
+                *_research_summary_sort_key(item),
+            ),
+        )[:effective_limit]
+
+    selected_per_expiry: dict[str, int] = {}
+    for item in selected_items:
+        expiry = str(item["expiry_date"])
+        selected_per_expiry[expiry] = selected_per_expiry.get(expiry, 0) + 1
+    selected = [item["summary"] for item in selected_items]
+    return selected, {
+        "name": "research_candidate_stratified_v1",
+        "requested_instrument_limit": requested_limit,
+        "ticker_request_budget": DEFAULT_TICKER_REQUEST_BUDGET,
+        "effective_limit": effective_limit,
+        "preferred_dte_days": list(RESEARCH_DTE_RANGE_DAYS),
+        "preferred_option_type": "call",
+        "preferred_call_moneyness": [1.0, 1.3],
+        "target_call_moneyness": 1.1,
+        "min_quotes_per_expiry": min_per_expiry,
+        "max_spread_ratio": DEFAULT_QUALITY_LIMITS["max_spread_ratio"],
+        "fallback_used": fallback_used,
+        "selected_per_expiry": selected_per_expiry,
+    }
+
+
+def _summary_has_preferred_liquidity(summary: dict[str, Any]) -> bool:
+    bid = _to_number(summary.get("bid_price"))
+    ask = _to_number(summary.get("ask_price"))
+    if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
+        return False
+    mid = (bid + ask) / 2
+    if mid <= 0:
+        return False
+    return (ask - bid) / mid <= DEFAULT_QUALITY_LIMITS["max_spread_ratio"]
+
+
+def _research_summary_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    moneyness = item.get("moneyness")
+    in_preferred_band = (
+        isinstance(moneyness, (int, float)) and 1.0 <= moneyness <= 1.3
+    )
+    bid = _to_number(item["summary"].get("bid_price"))
+    ask = _to_number(item["summary"].get("ask_price"))
+    mid = (bid + ask) / 2 if bid is not None and ask is not None else None
+    spread_ratio = (
+        (ask - bid) / mid
+        if bid is not None and ask is not None and mid is not None and mid > 0
+        else float("inf")
+    )
+    open_interest = _to_number(item["summary"].get("open_interest")) or 0.0
+    return (
+        not in_preferred_band,
+        abs(moneyness - 1.1) if isinstance(moneyness, (int, float)) else float("inf"),
+        spread_ratio,
+        -open_interest,
+        item["instrument_name"],
+    )
+
+
+def _snapshot_collection_scope(
+    snapshot: dict[str, Any],
+    *,
+    row_count: int,
+) -> dict[str, Any]:
+    upstream_count = _nonnegative_int(
+        snapshot.get("upstream_instrument_count"),
+        default=row_count,
+    )
+    selected_count = _nonnegative_int(
+        snapshot.get("selected_instrument_count"),
+        default=row_count,
+    )
+    upstream_count = max(upstream_count, selected_count)
+    if upstream_count == 0:
+        scope = "empty_snapshot"
+    elif selected_count < upstream_count:
+        scope = "research_sample"
+    else:
+        scope = "full_snapshot"
+    policy = snapshot.get("selection_policy")
+    return {
+        "scope": scope,
+        "upstream_instrument_count": upstream_count,
+        "selected_instrument_count": selected_count,
+        "coverage_ratio": round(selected_count / upstream_count, 4)
+        if upstream_count
+        else 0.0,
+        "selection_policy": dict(policy) if isinstance(policy, dict) else {},
+    }
+
+
+def _nonnegative_int(value: Any, *, default: int) -> int:
+    if value is None or isinstance(value, bool):
+        return max(0, int(default))
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return max(0, int(default))
 
 
 def write_snapshot_fixture(path: str | Path, snapshot: dict[str, Any]) -> Path:
@@ -372,6 +623,7 @@ def build_market_data_status(
         "quality_gate": gate,
         "public_response_contract": response_contract,
         "feed_coverage": feed_coverage,
+        "collection_scope": dict(normalized["collection_scope"]),
     }
 
 
@@ -389,9 +641,10 @@ def normalize_market_snapshot(
         now_ms if now_ms is not None else parse_timestamp_ms(utc_timestamp())
     )
     captured_at_ms = parse_timestamp_ms(snapshot["captured_at"])
+    rows = list(snapshot["rows"])
     quotes = [
         _normalize_quote_row(row, snapshot, evaluation_now_ms, normalized_limits)
-        for row in snapshot["rows"]
+        for row in rows
     ]
     return {
         "captured_at": snapshot["captured_at"],
@@ -404,6 +657,7 @@ def normalize_market_snapshot(
         "adapter_events": list(snapshot.get("adapter_events", [])),
         "feeds": dict(snapshot.get("feeds") or {}),
         "replay_scenario": snapshot.get("replay_scenario"),
+        "collection_scope": _snapshot_collection_scope(snapshot, row_count=len(rows)),
     }
 
 
@@ -488,13 +742,18 @@ def evaluate_market_data_quality(
             reason_codes.append("INSUFFICIENT_VALID_QUOTES")
         if bad_quote_ratio > normalized_limits["max_bad_quote_ratio_per_expiry"]:
             reason_codes.append("BAD_QUOTE_RATIO_EXCEEDED")
-        if spread_sanity_failures:
-            reason_codes.append("SPREAD_SANITY_FAILED")
         if duplicate_instruments or duplicate_strikes:
             reason_codes.append("DUPLICATE_INSTRUMENT_OR_STRIKE")
-        reason_codes.extend(
-            flag for flag in invalid_quote_flags if flag not in reason_codes
+        threshold_failed = (
+            valid_quotes < normalized_limits["min_valid_quotes_per_expiry"]
+            or bad_quote_ratio > normalized_limits["max_bad_quote_ratio_per_expiry"]
         )
+        if threshold_failed:
+            if spread_sanity_failures:
+                reason_codes.append("SPREAD_SANITY_FAILED")
+            reason_codes.extend(
+                flag for flag in invalid_quote_flags if flag not in reason_codes
+            )
         status = "pass" if not reason_codes else "fail"
         if status == "fail":
             for code in reason_codes:
@@ -513,6 +772,7 @@ def evaluate_market_data_quality(
                 "duplicate_instruments": duplicate_instruments,
                 "duplicate_strikes": duplicate_strikes,
                 "bad_quote_ratio": round(bad_quote_ratio, 4),
+                "observed_quality_flags": invalid_quote_flags,
                 "reason_codes": reason_codes,
             }
         )
@@ -644,7 +904,12 @@ def _public_response_contract(normalized_snapshot: dict[str, Any]) -> dict[str, 
     duplicate_strikes = _duplicate_count(
         (quote["expiry_date"], quote["strike"], quote["option_type"]) for quote in quotes
     )
-    malformed_quotes = sum(quote["quality_status"] != "valid" for quote in quotes)
+    quarantined_quotes = sum(quote["quality_status"] != "valid" for quote in quotes)
+    schema_malformed_quotes = sum(
+        bool(quote.get("parse_error"))
+        or "MISSING_CANONICAL_METADATA" in quote.get("quality_flags", [])
+        for quote in quotes
+    )
     event_classes = {
         str(event.get("class") or "")
         for event in normalized_snapshot.get("adapter_events", [])
@@ -654,7 +919,8 @@ def _public_response_contract(normalized_snapshot: dict[str, Any]) -> dict[str, 
         "empty": len(quotes) == 0,
         "partial": bool(ticker_missing or normalized_snapshot.get("fetch_errors")),
         "duplicate": bool(duplicate_instruments or duplicate_strikes),
-        "malformed": bool(malformed_quotes),
+        "malformed": bool(schema_malformed_quotes),
+        "quality_quarantined": bool(quarantined_quotes),
         "stale": normalized_snapshot["snapshot_age_sec"]
         > DEFAULT_QUALITY_LIMITS["market_data_max_age_sec"],
         "rate_limited": "rate_limit" in event_classes,
@@ -693,8 +959,10 @@ def _public_response_contract(normalized_snapshot: dict[str, Any]) -> dict[str, 
         "response_classes": response_classes,
         "duplicate_instruments": duplicate_instruments,
         "duplicate_strikes": duplicate_strikes,
+        "quarantined_quotes": quarantined_quotes,
         "fetch_errors": list(normalized_snapshot.get("fetch_errors", [])),
         "adapter_events": list(normalized_snapshot.get("adapter_events", [])),
+        "collection_scope": dict(normalized_snapshot["collection_scope"]),
     }
 
 
@@ -796,17 +1064,19 @@ def _vol_index_status(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
             "required_fields": required_fields,
             "reason_code": "VOL_INDEX_VALUE_MALFORMED",
         }
-    if age_sec > DEFAULT_QUALITY_LIMITS["market_data_max_age_sec"]:
+    if age_sec > VOL_INDEX_MAX_AGE_SEC:
         return {
             "status": "stale",
             "required_fields": required_fields,
             "age_sec": age_sec,
+            "max_age_sec": VOL_INDEX_MAX_AGE_SEC,
             "reason_code": "VOL_INDEX_STALE",
         }
     return {
         "status": "available",
         "required_fields": required_fields,
         "age_sec": age_sec,
+        "max_age_sec": VOL_INDEX_MAX_AGE_SEC,
         "index_name": str(payload.get("index_name")),
         "currency": currency,
         "volatility": volatility,
@@ -1009,13 +1279,15 @@ def _fetch_vol_index_feed(
 ) -> dict[str, Any]:
     """Fetch latest DVOL-like volatility index point for required feed coverage."""
     captured_ms = parse_timestamp_ms(captured_at)
-    # Prefer recent 2h window at 1h resolution; Deribit returns OHLC rows.
-    start_ms = max(0, captured_ms - 2 * 60 * 60 * 1000)
+    # A one-hour candle can be almost an hour old while the live feed is healthy.
+    # Request one-minute candles so the returned point can satisfy the bounded
+    # DVOL freshness contract used by the report quality gate.
+    start_ms = max(0, captured_ms - 10 * 60 * 1000)
     payload = _get_json(
         f"{base_url}/api/v2/public/get_volatility_index_data",
         {
             "currency": currency,
-            "resolution": 3600,
+            "resolution": 60,
             "start_timestamp": start_ms,
             "end_timestamp": captured_ms,
         },
@@ -1089,7 +1361,15 @@ def _jsonrpc_result(payload: Any, *, endpoint: str) -> Any:
 
 def _adapter_event_from_error(message: str) -> dict[str, Any]:
     lowered = message.lower()
-    if "429" in lowered or "rate" in lowered:
+    rate_limit_markers = (
+        "429",
+        "10028",
+        "too_many_requests",
+        "too many requests",
+        "rate_limit",
+        "rate limit",
+    )
+    if any(marker in lowered for marker in rate_limit_markers):
         event_class = "rate_limit"
     elif "network" in lowered or "timed out" in lowered or "timeout" in lowered:
         event_class = "transient_network"

@@ -37,22 +37,44 @@ Publishing on `127.0.0.1` is intentional. Put a same-origin reverse proxy in fro
 
 Production HTTP requests cannot select a fixture, account scenario, evaluation time, instrument limit, or live source. The safe default is a fail-closed no-market report.
 
-For refreshed data, capture a snapshot outside the web process:
+For refreshed data, run the public-market sidecar as a separate process. The web process still never performs a live fetch. Prime the operator-owned file once before starting the production API:
 
 ```powershell
-python -m crypto_options_report.cli pull-snapshot `
-  --instrument-limit 40 `
-  --output artifacts/snapshots/btc-chain.json `
-  --compact
+$sidecarOutput = "C:\service-data\crypto-options\snapshot.json"
+New-Item -ItemType Directory -Force -Path (Split-Path $sidecarOutput) | Out-Null
+python -m tools.refresh_market_snapshot `
+  --once `
+  --output $sidecarOutput `
+  --instrument-limit 20 `
+  --currency BTC
 ```
 
-Then restart the service with an operator-controlled snapshot:
+Point the web process at that exact file, then start it normally:
 
 ```powershell
-$env:CRYPTO_OPTIONS_API_SNAPSHOT_FIXTURE = "C:\service-data\btc-chain.json"
+$env:CRYPTO_OPTIONS_API_SNAPSHOT_FIXTURE = $sidecarOutput
+python -m crypto_options_report.api `
+  --runtime-profile production `
+  --host 127.0.0.1 `
+  --port 8000
 ```
 
-HTTP-triggered live fetch remains unsupported in the production profile. This prevents browser requests from creating unbounded external workload or altering report semantics.
+Run the continuous sidecar under a separate singleton service-manager unit:
+
+```powershell
+python -m tools.refresh_market_snapshot `
+  --output "C:\service-data\crypto-options\snapshot.json" `
+  --interval 10 `
+  --instrument-limit 20 `
+  --currency BTC `
+  --base-url https://www.deribit.com
+```
+
+The interval is measured from one completed refresh attempt to the next attempt. The default is 10 seconds so a healthy completed snapshot remains inside the report's 60-second freshness threshold even when collection itself takes time. Keep `--instrument-limit 20`; it is the public ticker request budget, not a request to collect the full venue universe.
+
+Each successful or fail-closed public collector result is written with a same-directory temporary file plus atomic replace. `collection_started_at` records when network collection began, `captured_at` records when the complete snapshot became available, and `collection_duration_ms` exposes the elapsed collection cost. Instrument metadata and DVOL requests run concurrently with the bounded ticker pool to avoid serial network latency. An unexpected collection/write exception leaves the previous file intact, emits a redacted structured JSON failure event, waits for the next interval, and retries. `Ctrl-C` emits a clean stop event and exits zero. Logs contain public operational metadata only; the sidecar has no private-account or order path.
+
+The API rereads the configured snapshot path for reports, so atomic sidecar updates become visible without browser-triggered fetches. Do not run multiple sidecars for the same output file. HTTP-triggered live fetch remains unsupported in production.
 
 ## Health and readiness
 
@@ -87,6 +109,7 @@ A blocked or absent market is still a service-ready, fail-closed report. It must
 
 ```powershell
 python -m compileall -q crypto_options_report tools
+python -m pytest -q tests/test_market_snapshot_sidecar.py
 python -m pytest -q
 python -m crypto_options_report.api --runtime-profile development --smoke
 python -m pip wheel --no-deps . -w dist

@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+from math import isfinite
 from typing import Any
 
 WALK_FORWARD_CALIBRATION_SCHEMA_VERSION = "walk_forward_calibration_report.v1"
+PERFORMANCE_METRIC_FIELDS = {
+    "calmar",
+    "max_drawdown",
+    "cvar_99",
+    "touch_rate",
+    "forced_exit_count",
+    "margin_breach_count",
+    "premium_to_cvar",
+    "recovery_days",
+}
 
 
 def build_walk_forward_calibration_report(
@@ -17,14 +28,17 @@ def build_walk_forward_calibration_report(
 ) -> dict[str, Any]:
     """Build a deterministic no-leakage calibration evidence report."""
 
-    baseline_metrics = (baseline_backtest or {}).get("metrics") or {}
-    baseline_mdd = _metric_value(baseline_metrics, "max_drawdown", default=-0.19)
-    baseline_cvar = abs(_metric_value(baseline_metrics, "cvar_99", default=-920.0))
-    forced_exit_count = 1
-    if position_management:
-        forced_exit_count = int((position_management.get("summary") or {}).get("forced_exit_count") or 0)
     model_registry = _model_registry(promotion_evidence or {})
-
+    comparison_status = {
+        "status": "not_run" if baseline_backtest is None else "insufficient_evidence",
+        "reason_code": (
+            "BACKTEST_NOT_RUN"
+            if baseline_backtest is None
+            else "BACKTEST_LEDGER_EVIDENCE_REQUIRED"
+        ),
+        "metrics_source": None,
+        "artifact_id": None,
+    }
     return {
         "schema_version": WALK_FORWARD_CALIBRATION_SCHEMA_VERSION,
         "generated_at": generated_at,
@@ -67,26 +81,11 @@ def build_walk_forward_calibration_report(
             "decision_bucket": "trade_half_or_spread",
         },
         "model_registry": model_registry,
-        "system_comparison": _comparison_rows(
-            baseline_mdd=baseline_mdd,
-            baseline_cvar=baseline_cvar,
-            forced_exit_count=forced_exit_count,
-            portfolio_final_action=(portfolio_risk or {}).get("final_action"),
-        ),
-        "slow_bull_acute_rally_windows": [
-            {
-                "window": "2023-10_to_2024-03",
-                "baseline_max_drawdown": -0.22,
-                "full_system_max_drawdown": -0.12,
-                "note": "Slow bull acute-rally window explicitly highlighted for OOS stress review.",
-            },
-            {
-                "window": "2024-10_to_2025-01",
-                "baseline_max_drawdown": -0.18,
-                "full_system_max_drawdown": -0.10,
-                "note": "Permission caps and forced-exit policy reduce rally drawdown.",
-            },
-        ],
+        "comparison_status": comparison_status,
+        # Performance rows must come from an immutable backtest ledger.  The
+        # deterministic calibration fixture does not contain that evidence.
+        "system_comparison": [],
+        "slow_bull_acute_rally_windows": [],
         "leakage_checks": [
             {
                 "surface": "standardization",
@@ -126,13 +125,51 @@ def validate_walk_forward_calibration_report(report: Any) -> list[str]:
     if (report.get("feature_standardization") or {}).get("future_data_used") is not False:
         errors.append("walk_forward_calibration standardization must not use future data")
     comparisons = report.get("system_comparison")
-    if not isinstance(comparisons, list) or {row.get("variant") for row in comparisons} != {
-        "baseline",
-        "regime_only",
-        "pricing_only",
-        "full_system",
+    comparison_status = report.get("comparison_status") or {}
+    if comparison_status.get("status") not in {
+        "not_run",
+        "insufficient_evidence",
+        "available",
     }:
-        errors.append("walk_forward_calibration must compare all four variants")
+        errors.append("walk_forward_calibration comparison_status is invalid")
+    if comparison_status.get("status") == "available":
+        expected_variants = {
+            "baseline",
+            "regime_only",
+            "pricing_only",
+            "full_system",
+        }
+        valid_rows = (
+            isinstance(comparisons, list)
+            and len(comparisons) == len(expected_variants)
+            and all(isinstance(row, dict) for row in comparisons)
+        )
+        if not valid_rows or {
+            row.get("variant") for row in comparisons
+        } != expected_variants:
+            errors.append("available calibration comparison must include all variants")
+        if comparison_status.get("metrics_source") != "immutable_backtest_ledger":
+            errors.append("available calibration comparison must name immutable ledger source")
+        artifact_id = comparison_status.get("artifact_id")
+        if not isinstance(artifact_id, str) or not artifact_id.strip():
+            errors.append(
+                "available calibration comparison must name immutable ledger artifact"
+            )
+        if valid_rows and any(
+            not PERFORMANCE_METRIC_FIELDS.issubset(row)
+            or any(
+                isinstance(row[field], bool)
+                or not isinstance(row[field], (int, float))
+                or not isfinite(float(row[field]))
+                for field in PERFORMANCE_METRIC_FIELDS.intersection(row)
+            )
+            for row in comparisons
+        ):
+            errors.append(
+                "available calibration comparison rows must include all performance metrics"
+            )
+    elif comparisons != []:
+        errors.append("unavailable calibration comparison must not expose performance rows")
     for check in report.get("leakage_checks") or []:
         if check.get("future_data_used") is not False:
             errors.append("walk_forward_calibration leakage checks must be false")
@@ -208,90 +245,3 @@ def _model_registry(promotion_evidence: dict[str, Any]) -> dict[str, Any]:
         "promotion_evidence": evidence,
         "blocking_reasons": blocking_reasons,
     }
-
-
-def _comparison_rows(
-    *,
-    baseline_mdd: float,
-    baseline_cvar: float,
-    forced_exit_count: int,
-    portfolio_final_action: str | None,
-) -> list[dict[str, Any]]:
-    baseline = _row(
-        "baseline",
-        calmar=0.48,
-        max_drawdown=baseline_mdd,
-        cvar_99=baseline_cvar,
-        touch_rate=0.42,
-        forced_exit_count=0,
-        margin_breach_count=3,
-        premium_to_cvar=0.38,
-        recovery_days=41,
-    )
-    regime = _row(
-        "regime_only",
-        calmar=0.66,
-        max_drawdown=baseline_mdd * 0.82,
-        cvar_99=baseline_cvar * 0.86,
-        touch_rate=0.34,
-        forced_exit_count=forced_exit_count,
-        margin_breach_count=2,
-        premium_to_cvar=0.45,
-        recovery_days=31,
-    )
-    pricing = _row(
-        "pricing_only",
-        calmar=0.71,
-        max_drawdown=baseline_mdd * 0.78,
-        cvar_99=baseline_cvar * 0.80,
-        touch_rate=0.31,
-        forced_exit_count=max(forced_exit_count, 1),
-        margin_breach_count=2,
-        premium_to_cvar=0.52,
-        recovery_days=28,
-    )
-    final_action_penalty = 0.02 if portfolio_final_action in {"halt_system", "close_all_and_pause"} else 0.0
-    full = _row(
-        "full_system",
-        calmar=0.94 - final_action_penalty,
-        max_drawdown=baseline_mdd * 0.58,
-        cvar_99=baseline_cvar * 0.62,
-        touch_rate=0.22,
-        forced_exit_count=max(forced_exit_count, 1),
-        margin_breach_count=0,
-        premium_to_cvar=0.71,
-        recovery_days=17,
-    )
-    return [baseline, regime, pricing, full]
-
-
-def _row(
-    variant: str,
-    *,
-    calmar: float,
-    max_drawdown: float,
-    cvar_99: float,
-    touch_rate: float,
-    forced_exit_count: int,
-    margin_breach_count: int,
-    premium_to_cvar: float,
-    recovery_days: int,
-) -> dict[str, Any]:
-    return {
-        "variant": variant,
-        "calmar": round(calmar, 6),
-        "max_drawdown": round(max_drawdown, 6),
-        "cvar_99": round(cvar_99, 6),
-        "touch_rate": round(touch_rate, 6),
-        "forced_exit_count": forced_exit_count,
-        "margin_breach_count": margin_breach_count,
-        "premium_to_cvar": round(premium_to_cvar, 6),
-        "recovery_days": recovery_days,
-    }
-
-
-def _metric_value(metrics: dict[str, Any], key: str, *, default: float) -> float:
-    value = (metrics.get(key) or {}).get("value")
-    if value is None:
-        return default
-    return float(value)
