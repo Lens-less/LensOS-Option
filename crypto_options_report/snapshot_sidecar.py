@@ -14,12 +14,17 @@ from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     DEFAULT_TICKER_REQUEST_BUDGET,
     advance_trust_evidence,
+    bound_snapshot_trust_evidence,
     fetch_deribit_option_chain_snapshot,
+    load_snapshot_fixture,
+    snapshot_trust_state_path,
     utc_timestamp,
     validate_deribit_base_url,
     validate_ticker_request_limit,
     write_snapshot_fixture,
+    write_snapshot_trust_state,
 )
+from .sidecar_auth import SidecarAuthUnavailable
 
 DEFAULT_REFRESH_INTERVAL_SECONDS = 10.0
 EXIT_OK = 0
@@ -133,13 +138,31 @@ def _refresh_once(
     if complete_feed_graph:
         fetch_kwargs["include_feed_graph"] = True
     snapshot = fetch_deribit_option_chain_snapshot(**fetch_kwargs)
+    trust_evidence: dict[str, Any] | None = None
     if complete_feed_graph:
         previous_snapshot = _read_previous_snapshot(output)
-        snapshot["trust_evidence"] = advance_trust_evidence(
+        trust_evidence = advance_trust_evidence(
             snapshot,
             previous_snapshot=previous_snapshot,
         )
     written = write_snapshot_fixture(output, snapshot)
+    trust_state_authenticated = False
+    if trust_evidence is not None:
+        try:
+            write_snapshot_trust_state(
+                written,
+                trust_evidence,
+                expected_snapshot=snapshot,
+            )
+        except SidecarAuthUnavailable:
+            snapshot_trust_state_path(written).unlink(missing_ok=True)
+        else:
+            trust_state_authenticated = True
+    else:
+        # A non-graph refresh must not leave an older promotion record beside a
+        # new snapshot.  Digest validation would already reject it; removing it
+        # keeps the operator-visible state unambiguous.
+        snapshot_trust_state_path(written).unlink(missing_ok=True)
     _log_json(
         "market_snapshot_written",
         output=str(written),
@@ -152,13 +175,12 @@ def _refresh_once(
         row_count=len(snapshot.get("rows") or []),
         fetch_error_count=len(snapshot.get("fetch_errors") or []),
         adapter_event_count=len(snapshot.get("adapter_events") or []),
-        feed_graph_complete=(snapshot.get("trust_evidence") or {}).get(
-            "feed_graph_complete"
-        ),
-        trust_evidence_status=(snapshot.get("trust_evidence") or {}).get("status"),
-        rolling_observation_count=(snapshot.get("trust_evidence") or {}).get(
+        feed_graph_complete=(trust_evidence or {}).get("feed_graph_complete"),
+        trust_evidence_status=(trust_evidence or {}).get("status"),
+        rolling_observation_count=(trust_evidence or {}).get(
             "rolling_observation_count"
         ),
+        trust_state_authenticated=trust_state_authenticated,
     )
 
 
@@ -166,10 +188,13 @@ def _read_previous_snapshot(output: Path) -> dict[str, Any] | None:
     if not output.exists():
         return None
     try:
-        payload = json.loads(output.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        payload = load_snapshot_fixture(output)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return None
-    return payload if isinstance(payload, dict) else None
+    evidence = bound_snapshot_trust_evidence(payload)
+    if evidence:
+        payload["trust_evidence"] = evidence
+    return payload
 
 
 def _validated_base_url(

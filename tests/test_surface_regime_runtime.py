@@ -4,13 +4,94 @@ from copy import deepcopy
 import json
 from math import log
 from pathlib import Path
+import tempfile
 import unittest
 
+from crypto_options_report.market_data import (
+    _rolling_observation_from_snapshot,
+    _sanitize_rolling_observations,
+    load_snapshot_fixture,
+    write_snapshot_fixture,
+    write_snapshot_trust_state,
+)
 from crypto_options_report.regime import build_regime_permission_state
 from crypto_options_report.surface import build_vol_surface_and_candidate_research
 
 
 class SurfaceRegimeRuntimeTests(unittest.TestCase):
+    def test_rolling_observation_respects_explicit_percent_point_iv_unit(self):
+        snapshot = {
+            "captured_at": "2026-07-14T00:00:00Z",
+            "source": "test",
+            "feeds": {
+                "index_spot": {"index_price": 100_000.0},
+                "vol_index": {"volatility": 0.5},
+                "funding_basis": {"funding_rate": 0.0001},
+            },
+            "rows": [
+                {
+                    "instrument_name": "BTC-31JUL26-100000-C",
+                    "ticker": {
+                        "instrument_name": "BTC-31JUL26-100000-C",
+                        "mark_iv": 4.0,
+                        "iv_unit": "percent_points",
+                        "underlying_price": 100_000.0,
+                    },
+                }
+            ],
+        }
+
+        observation = _rolling_observation_from_snapshot(snapshot)
+
+        self.assertIsNotNone(observation)
+        self.assertEqual(0.04, observation["atm_iv"])
+        self.assertEqual("fraction", observation["iv_unit"])
+
+    def test_rolling_observation_rejects_missing_or_conflicting_iv_units(self):
+        snapshot = {
+            "captured_at": "2026-07-14T00:00:00Z",
+            "source": "test",
+            "feeds": {
+                "index_spot": {"index_price": 100_000.0},
+                "vol_index": {"volatility": 0.5},
+                "funding_basis": {"funding_rate": 0.0001},
+            },
+            "rows": [
+                {
+                    "instrument_name": "BTC-31JUL26-100000-C",
+                    "iv_unit": "fraction",
+                    "ticker": {
+                        "instrument_name": "BTC-31JUL26-100000-C",
+                        "mark_iv": 4.0,
+                        "iv_unit": "percent_points",
+                        "underlying_price": 100_000.0,
+                    },
+                }
+            ],
+        }
+        self.assertIsNone(_rolling_observation_from_snapshot(snapshot))
+        del snapshot["rows"][0]["iv_unit"]
+        del snapshot["rows"][0]["ticker"]["iv_unit"]
+        self.assertIsNone(_rolling_observation_from_snapshot(snapshot))
+
+    def test_stored_rolling_observation_canonicalizes_declared_iv_unit(self):
+        base = {
+            "observed_at": "2026-07-14T00:00:00Z",
+            "index_price": 100_000.0,
+            "dvol": 0.5,
+            "atm_iv": 4.0,
+            "funding_rate": 0.0001,
+            "source": "test",
+        }
+
+        self.assertEqual(
+            0.04,
+            _sanitize_rolling_observations(
+                [{**base, "iv_unit": "percent_points"}]
+            )[0]["atm_iv"],
+        )
+        self.assertEqual([], _sanitize_rolling_observations([base]))
+
     def test_quadratic_smile_and_btc_premium_units_produce_research_candidates(self):
         snapshot = self._btc_smile_snapshot()
 
@@ -58,11 +139,11 @@ class SurfaceRegimeRuntimeTests(unittest.TestCase):
     def test_live_regime_without_rolling_history_is_explicitly_collecting(self):
         snapshot = self._btc_smile_snapshot()
         snapshot["feeds"].update(self._live_feeds())
-        snapshot["trust_evidence"] = {
+        snapshot = self._bind_trust_evidence(snapshot, {
             "status": "collecting",
             "consecutive_passes": 3,
             "rolling": {"observations": []},
-        }
+        })
         surface, _candidates = build_vol_surface_and_candidate_research(
             market_snapshot=snapshot,
             generated_at="2026-07-07T00:01:30Z",
@@ -90,7 +171,7 @@ class SurfaceRegimeRuntimeTests(unittest.TestCase):
     def test_rolling_market_evidence_drives_regime_without_default_scores(self):
         snapshot = self._btc_smile_snapshot()
         snapshot["feeds"].update(self._live_feeds())
-        snapshot["trust_evidence"] = {
+        snapshot = self._bind_trust_evidence(snapshot, {
             "status": "promoted",
             "consecutive_passes": 24,
             "rolling": {
@@ -99,14 +180,15 @@ class SurfaceRegimeRuntimeTests(unittest.TestCase):
                         "observed_at": f"2026-07-06T{hour:02d}:00:00Z",
                         "index_price": 97000.0 + (hour * 125.0),
                         "dvol": 0.35 + (hour * 0.005),
-                        "atm_iv": 35.0 + (hour * 0.2),
+                        "atm_iv": 0.35 + (hour * 0.002),
+                        "iv_unit": "fraction",
                         "funding_rate": 0.00002 + (hour * 0.000002),
                         "basis_rate": 0.0003 + (hour * 0.00001),
                     }
                     for hour in range(20)
                 ]
             },
-        }
+        })
         surface, _candidates = build_vol_surface_and_candidate_research(
             market_snapshot=snapshot,
             generated_at="2026-07-07T00:01:30Z",
@@ -132,6 +214,67 @@ class SurfaceRegimeRuntimeTests(unittest.TestCase):
         self.assertGreater(permission["volatility_inputs"]["dvol_percentile"], 0.0)
         self.assertFalse(permission["paper_trading_allowed"])
         self.assertFalse(permission["manual_execution_allowed"])
+
+    def test_unbound_rolling_evidence_cannot_promote_regime(self):
+        snapshot = self._btc_smile_snapshot()
+        snapshot["feeds"].update(self._live_feeds())
+        snapshot["trust_evidence"] = {
+            "status": "promoted",
+            "rolling": {
+                "observations": [
+                    {
+                        "index_price": 97_000.0 + (hour * 125.0),
+                        "dvol": 0.35 + (hour * 0.005),
+                        "atm_iv": 0.35 + (hour * 0.002),
+                        "iv_unit": "fraction",
+                        "funding_rate": 0.00002,
+                        "basis_rate": 0.0003,
+                    }
+                    for hour in range(20)
+                ]
+            },
+        }
+        surface, _candidates = build_vol_surface_and_candidate_research(
+            market_snapshot=snapshot,
+            generated_at="2026-07-07T00:01:30Z",
+            data_status={"status": "validated"},
+            pnl_evidence={"status": "pass"},
+        )
+
+        permission = build_regime_permission_state(
+            market_snapshot=snapshot,
+            data_status={"status": "validated"},
+            vol_surface_status=surface,
+        )
+
+        self.assertEqual("blocked", permission["status"])
+        self.assertEqual("collecting", permission["collection_status"])
+        self.assertEqual(0, permission["input_provenance"]["observation_count"])
+        self.assertIn("REGIME_TRUST_EVIDENCE_NOT_PROMOTED", permission["reason_codes"])
+
+    @staticmethod
+    def _bind_trust_evidence(snapshot, evidence):
+        evidence = {
+            "schema_version": "market_trust_evidence.v1",
+            "source_identity": f"{snapshot['source']}|{snapshot['currency']}",
+            **evidence,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            key_dir = Path(temp_dir) / "keys"
+            data_dir.mkdir()
+            key_dir.mkdir()
+            output = data_dir / "market-snapshot.json"
+            auth_key = key_dir / "sidecar.key"
+            auth_key.write_bytes(b"r" * 32)
+            write_snapshot_fixture(output, snapshot)
+            write_snapshot_trust_state(
+                output,
+                evidence,
+                expected_snapshot=snapshot,
+                auth_key_file=auth_key,
+            )
+            return load_snapshot_fixture(output, auth_key_file=auth_key)
 
     def _btc_smile_snapshot(self):
         path = Path(__file__).with_name("fixtures") / "deribit_btc_option_chain_snapshot.json"
@@ -159,6 +302,7 @@ class SurfaceRegimeRuntimeTests(unittest.TestCase):
             )
             ticker.update(
                 {
+                    "iv_unit": "percent_points",
                     "best_bid_price": bid,
                     "best_ask_price": ask,
                     "mark_price": mid,

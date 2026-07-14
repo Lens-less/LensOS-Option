@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 PORTFOLIO_RISK_SCHEMA_VERSION = "portfolio_risk_report.v1"
@@ -53,7 +54,11 @@ def build_portfolio_risk_report(
         signals,
         key=lambda signal: SEVERITY_ORDER[signal["severity"]],
     )
-    candidates = ev_candidate_scanner.get("ranked_candidates") or []
+    candidates = (
+        []
+        if final_signal["severity"] == "halt_system"
+        else ev_candidate_scanner.get("ranked_candidates") or []
+    )
     size_caps = [
         _candidate_size_cap(
             candidate=candidate,
@@ -110,14 +115,22 @@ def validate_portfolio_risk_report(report: Any) -> list[str]:
                     errors.append(f"portfolio_risk signal missing key: {key}")
             if signal.get("severity") not in SEVERITY_ORDER:
                 errors.append("portfolio_risk signal has unknown severity")
-    final_signal = report.get("final_signal", {})
-    if isinstance(final_signal, dict) and signals:
+    final_signal = report.get("final_signal")
+    if not isinstance(final_signal, dict):
+        errors.append("portfolio_risk.final_signal must be a dict")
+    elif signals:
         expected = max(
             signals,
             key=lambda signal: SEVERITY_ORDER.get(signal.get("severity"), -1),
         )
-        if final_signal.get("severity") != expected.get("severity"):
-            errors.append("portfolio_risk final_signal must use highest severity")
+        if final_signal != expected:
+            errors.append(
+                "portfolio_risk.final_signal must match the highest-severity signal"
+            )
+        if report.get("final_action") != final_signal.get("severity"):
+            errors.append(
+                "portfolio_risk.final_action must match final_signal.severity"
+            )
     if not isinstance(report.get("size_caps"), list):
         errors.append("portfolio_risk.size_caps must be a list")
     return errors
@@ -197,7 +210,23 @@ def _data_quality_signals(data_status: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _permission_signals(permission_state: dict[str, Any]) -> list[dict[str, Any]]:
-    sell_permission = float(permission_state.get("sell_permission") or 0.0)
+    if not isinstance(permission_state, dict):
+        return [_malformed_permission_signal()]
+
+    raw_sell_permission = permission_state.get("sell_permission")
+    naked_permission = permission_state.get("naked_permission")
+    spread_permission = permission_state.get("spread_permission")
+    if (
+        isinstance(raw_sell_permission, bool)
+        or not isinstance(raw_sell_permission, (int, float))
+        or not math.isfinite(raw_sell_permission)
+        or not 0.0 <= raw_sell_permission <= 1.0
+        or not isinstance(naked_permission, bool)
+        or not isinstance(spread_permission, bool)
+    ):
+        return [_malformed_permission_signal()]
+
+    sell_permission = float(raw_sell_permission)
     if sell_permission <= 0.0:
         return [
             _signal(
@@ -207,7 +236,9 @@ def _permission_signals(permission_state: dict[str, Any]) -> list[dict[str, Any]
                 reason_codes=list(permission_state.get("reason_codes") or ["PERMISSION_ZERO"]),
             )
         ]
-    if not permission_state.get("naked_permission") and permission_state.get("spread_permission"):
+    if not naked_permission and not spread_permission:
+        return [_malformed_permission_signal()]
+    if not naked_permission and spread_permission:
         return [
             _signal(
                 source="permission_cap",
@@ -226,51 +257,95 @@ def _permission_signals(permission_state: dict[str, Any]) -> list[dict[str, Any]
     ]
 
 
+def _malformed_permission_signal() -> dict[str, Any]:
+    return _signal(
+        source="permission_cap",
+        severity="halt_system",
+        reason="Permission state is malformed or internally inconsistent.",
+        reason_codes=["MALFORMED_PERMISSION_STATE"],
+    )
+
+
 def _mdd_signals(state: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not state:
+    if state is None:
         return [_signal(source="mdd_circuit", severity="allow_new", reason="No MDD circuit is active.", reason_codes=["MDD_CLEAR"])]
+    if not isinstance(state, dict):
+        return [_malformed_mdd_signal()]
     status = state.get("status")
+    if status == "clear":
+        return [_signal(source="mdd_circuit", severity="allow_new", reason="MDD circuit is clear.", reason_codes=["MDD_CLEAR"])]
     if status == "halt":
         return [_signal(source="mdd_circuit", severity="halt_system", reason="MDD circuit breaker is halted.", reason_codes=["MDD_HALT"], expires_at=state.get("expires_at"))]
     if status == "close_all_and_pause":
         return [_signal(source="mdd_circuit", severity="close_all_and_pause", reason="MDD circuit requires closing all risk and pausing.", reason_codes=["MDD_CLOSE_ALL_PAUSE"], expires_at=state.get("expires_at"))]
     if status == "close_batch":
         return [_signal(source="mdd_circuit", severity="close_batch", reason="MDD circuit requires closing the affected batch.", reason_codes=["MDD_CLOSE_BATCH"], expires_at=state.get("expires_at"))]
-    return [_signal(source="mdd_circuit", severity="allow_new", reason="MDD circuit is clear.", reason_codes=["MDD_CLEAR"])]
+    return [_malformed_mdd_signal()]
+
+
+def _malformed_mdd_signal() -> dict[str, Any]:
+    return _signal(
+        source="mdd_circuit",
+        severity="halt_system",
+        reason="MDD circuit state is missing a recognized status.",
+        reason_codes=["MDD_STATE_MALFORMED"],
+    )
 
 
 def _event_signals(state: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not state or state.get("status") in {None, "clear"}:
+    if state is None:
         return [_signal(source="event_risk", severity="allow_new", reason="No blocking event window is active.", reason_codes=["EVENT_CLEAR"])]
-    severity = "no_new_trades"
-    if state.get("status") == "high":
-        severity = "close_all_and_pause"
+    if not isinstance(state, dict):
+        return [_malformed_override_signal("event_risk", "EVENT_RISK_STATE_MALFORMED")]
+    status = state.get("status")
+    if status == "clear":
+        return [_signal(source="event_risk", severity="allow_new", reason="No blocking event window is active.", reason_codes=["EVENT_CLEAR"])]
+    if status not in {"active", "high"}:
+        return [_malformed_override_signal("event_risk", "EVENT_RISK_STATE_MALFORMED")]
+    severity = "close_all_and_pause" if status == "high" else "no_new_trades"
     return [_signal(source="event_risk", severity=severity, reason=str(state.get("reason") or "Event risk window is active."), reason_codes=[str(state.get("reason_code") or "EVENT_RISK_ACTIVE")], expires_at=state.get("expires_at"))]
 
 
 def _liquidity_signals(state: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not state or state.get("status") in {None, "normal"}:
+    if state is None:
         return [_signal(source="liquidity_state", severity="allow_new", reason="Liquidity state is normal.", reason_codes=["LIQUIDITY_NORMAL"])]
+    if not isinstance(state, dict):
+        return [_malformed_override_signal("liquidity_state", "LIQUIDITY_STATE_MALFORMED")]
     status = state.get("status")
+    if status == "normal":
+        return [_signal(source="liquidity_state", severity="allow_new", reason="Liquidity state is normal.", reason_codes=["LIQUIDITY_NORMAL"])]
     if status == "thin":
         severity = "reduce_size"
     elif status == "spread_only":
         severity = "spread_only"
-    else:
+    elif status == "blocked":
         severity = "no_new_trades"
+    else:
+        return [_malformed_override_signal("liquidity_state", "LIQUIDITY_STATE_MALFORMED")]
     return [_signal(source="liquidity_state", severity=severity, reason=str(state.get("reason") or "Liquidity state limits new risk."), reason_codes=[str(state.get("reason_code") or "LIQUIDITY_LIMIT")])]
 
 
 def _exchange_signals(state: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not state or state.get("status") in {None, "online"}:
+    if state is None:
         return [_signal(source="exchange_status", severity="allow_new", reason="Exchange status is online.", reason_codes=["EXCHANGE_ONLINE"])]
+    if not isinstance(state, dict):
+        return [_malformed_override_signal("exchange_status", "EXCHANGE_STATUS_MALFORMED")]
+    status = state.get("status")
+    if status == "online":
+        return [_signal(source="exchange_status", severity="allow_new", reason="Exchange status is online.", reason_codes=["EXCHANGE_ONLINE"])]
+    if status not in {"offline", "degraded", "maintenance"}:
+        return [_malformed_override_signal("exchange_status", "EXCHANGE_STATUS_MALFORMED")]
     return [_signal(source="exchange_status", severity="halt_system", reason=str(state.get("reason") or "Exchange status is not safe for research replay."), reason_codes=[str(state.get("reason_code") or "EXCHANGE_STATUS_BLOCK")], expires_at=state.get("expires_at"))]
 
 
 def _position_signals(state: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not state or state.get("state") in {None, "NORMAL"}:
+    if state is None:
         return [_signal(source="position_state", severity="allow_new", reason="No position-state blocker is active.", reason_codes=["POSITION_NORMAL"])]
+    if not isinstance(state, dict):
+        return [_malformed_override_signal("position_state", "POSITION_STATE_MALFORMED")]
     position_state = state.get("state")
+    if position_state == "NORMAL":
+        return [_signal(source="position_state", severity="allow_new", reason="No position-state blocker is active.", reason_codes=["POSITION_NORMAL"])]
     mapping = {
         "CAUTION": "reduce_size",
         "DEFENSE": "reduce_existing",
@@ -278,8 +353,19 @@ def _position_signals(state: dict[str, Any] | None) -> list[dict[str, Any]]:
         "FORCE_CLOSE": "close_batch",
         "PAUSED": "close_all_and_pause",
     }
-    severity = mapping.get(str(position_state), "reduce_existing")
+    severity = mapping.get(str(position_state))
+    if severity is None:
+        return [_malformed_override_signal("position_state", "POSITION_STATE_MALFORMED")]
     return [_signal(source="position_state", severity=severity, reason=str(state.get("reason") or f"Position state is {position_state}."), reason_codes=[str(state.get("reason_code") or f"POSITION_{position_state}")])]
+
+
+def _malformed_override_signal(source: str, reason_code: str) -> dict[str, Any]:
+    return _signal(
+        source=source,
+        severity="halt_system",
+        reason=f"{source} override is malformed or has an unknown state.",
+        reason_codes=[reason_code],
+    )
 
 
 def _candidate_size_cap(
@@ -290,7 +376,11 @@ def _candidate_size_cap(
 ) -> dict[str, Any]:
     snapshot = account_status.get("snapshot") or {}
     projected = account_status.get("projected_margin") or {}
-    nav = float(snapshot.get("nav_usd") or projected.get("nav_usd") or 100000.0)
+    # Risk-budget dimensions are USD-denominated. Never reinterpret a BTC (or
+    # unknown-currency) account equity value as USD when conversion evidence is
+    # absent. The action output is already zero without a promoted model; the
+    # shadow cap must remain zero rather than fabricate a USD NAV.
+    nav = float(snapshot.get("nav_usd") or projected.get("nav_usd") or 0.0)
     path_risk = candidate.get("path_risk") or {}
     margin = candidate.get("margin_snapshot") or {}
     liquidity_depth = _candidate_depth(candidate)
@@ -340,7 +430,11 @@ def _candidate_size_cap(
         "dimensions": all_dimensions,
         "research_only_reason": "Score calibration is not promoted into sizing, so final actionable size remains zero.",
         "size_output_allowed": False,
-        "reason_codes": ["RESEARCH_ONLY_SIZE_CAPS", "MISSING_PROMOTED_SCORE_MODEL"],
+        "reason_codes": [
+            "RESEARCH_ONLY_SIZE_CAPS",
+            "MISSING_PROMOTED_SCORE_MODEL",
+            *([] if nav > 0.0 else ["MISSING_USD_NAV_CONVERSION"]),
+        ],
     }
 
 

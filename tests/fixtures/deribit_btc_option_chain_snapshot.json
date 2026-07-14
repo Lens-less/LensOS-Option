@@ -28,6 +28,7 @@
       },
       "ticker": {
         "instrument_name": "BTC-25JUL26-90000-C",
+        "iv_unit": "percent_points",
         "timestamp": 1783382455000,
         "best_bid_price": 0.205,
         "best_ask_price": 0.215,
@@ -58,6 +59,7 @@
       },
       "ticker": {
         "instrument_name": "BTC-25JUL26-95000-C",
+        "iv_unit": "percent_points",
         "timestamp": 1783382455000,
         "best_bid_price": 0.182,
         "best_ask_price": 0.192,
@@ -88,6 +90,7 @@
       },
       "ticker": {
         "instrument_name": "BTC-25JUL26-100000-C",
+        "iv_unit": "percent_points",
         "timestamp": 1783382455000,
         "best_bid_price": 0.161,
         "best_ask_price": 0.171,
@@ -118,6 +121,7 @@
       },
       "ticker": {
         "instrument_name": "BTC-25JUL26-105000-C",
+        "iv_unit": "percent_points",
         "timestamp": 1783382455000,
         "best_bid_price": 0.141,
         "best_ask_price": 0.15,
@@ -148,6 +152,7 @@
       },
       "ticker": {
         "instrument_name": "BTC-25JUL26-110000-C",
+        "iv_unit": "percent_points",
         "timestamp": 1783382455000,
         "best_bid_price": 0.121,
         "best_ask_price": 0.13,
@@ -178,6 +183,7 @@
       },
       "ticker": {
         "instrument_name": "BTC-25JUL26-115000-C",
+        "iv_unit": "percent_points",
         "timestamp": 1783382455000,
         "best_bid_price": 0.103,
         "best_ask_price": 0.111,
@@ -208,6 +214,7 @@
       },
       "ticker": {
         "instrument_name": "BTC-25JUL26-120000-C",
+        "iv_unit": "percent_points",
         "timestamp": 1783382455000,
         "best_bid_price": 0.087,
         "best_ask_price": 0.094,
@@ -238,6 +245,7 @@
       },
       "ticker": {
         "instrument_name": "BTC-25JUL26-125000-C",
+        "iv_unit": "percent_points",
         "timestamp": 1783382455000,
         "best_bid_price": 0.073,
         "best_ask_price": 0.079,

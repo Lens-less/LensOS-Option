@@ -4,17 +4,45 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+import hashlib
 import json
 from math import isfinite
+import os
 from pathlib import Path
 import re
 from time import monotonic
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .storage import atomic_write_json
+from .storage import (
+    atomic_write_json,
+    read_json_object_from_regular_file,
+    read_json_object_from_stream,
+)
+from .sidecar_auth import (
+    ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV,
+    MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
+    MARKET_SNAPSHOT_TRUST_HMAC_DOMAIN,
+    SidecarAuthUnavailable,
+    require_separate_key_file,
+    sign_mapping,
+    verify_mapping,
+)
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = build_opener(_RejectRedirects())
+
+
+def urlopen(request: Request, *, timeout: int):
+    """Open one public-market request without following redirects."""
+    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
 
 DEFAULT_DERIBIT_BASE_URL = "https://www.deribit.com"
 ALLOWED_DERIBIT_BASE_URLS = frozenset(
@@ -32,6 +60,9 @@ DEFAULT_QUALITY_LIMITS = {
 }
 DEFAULT_TICKER_REQUEST_BUDGET = 20
 HTTP_MAX_INSTRUMENT_LIMIT = DEFAULT_TICKER_REQUEST_BUDGET
+MAX_MARKET_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
+MAX_MARKET_SNAPSHOT_BYTES = 16 * 1024 * 1024
+MAX_MARKET_TRUST_STATE_BYTES = 1024 * 1024
 RESEARCH_DTE_RANGE_DAYS = (7, 35)
 # Deribit returns DVOL as one-minute candles. The row timestamp is the candle
 # boundary, so a healthy latest row can be slightly older than 60 seconds at
@@ -61,6 +92,16 @@ PUBLIC_FEED_FUTURE_TOLERANCE_SEC = 5
 TRUST_MINIMUM_CONSECUTIVE_PASSES = 6
 TRUST_MINIMUM_OBSERVATION_SECONDS = 60
 TRUST_MAXIMUM_PASS_GAP_SECONDS = 60
+SNAPSHOT_TRUST_STATE_SCHEMA_VERSION = "market_snapshot_trust_state.v2"
+_BOUND_TRUST_EVIDENCE_KEY = "_bound_trust_evidence"
+
+
+class _BoundTrustEvidence(dict[str, Any]):
+    """Evidence admitted only after a separate state file binds it to a snapshot."""
+
+    def __init__(self, value: dict[str, Any], *, snapshot_sha256: str) -> None:
+        super().__init__(value)
+        self.snapshot_sha256 = snapshot_sha256
 
 SPREAD_SANITY_FLAGS = {
     "MISSING_BID",
@@ -118,11 +159,18 @@ def utc_timestamp() -> str:
 def parse_timestamp_ms(value: str | int | float | None) -> int:
     if value is None:
         raise ValueError("missing timestamp")
+    if isinstance(value, bool):
+        raise ValueError("timestamp must not be a boolean")
     if isinstance(value, (int, float)):
+        if not isfinite(float(value)):
+            raise ValueError("timestamp must be finite")
         return int(value)
-    return int(
-        datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000
-    )
+    if not isinstance(value, str):
+        raise ValueError("timestamp must be an ISO string or epoch milliseconds")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include a timezone")
+    return int(parsed.astimezone(timezone.utc).timestamp() * 1000)
 
 
 def resolve_snapshot_fixture_path(
@@ -157,16 +205,191 @@ def load_snapshot_fixture(
     path: str | Path,
     *,
     allowed_roots: Iterable[str | Path] | None = None,
+    auth_key_file: str | Path | None = None,
 ) -> dict[str, Any]:
     fixture_path = resolve_snapshot_fixture_path(path, allowed_roots=allowed_roots)
-    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    payload = read_json_object_from_regular_file(
+        fixture_path,
+        max_bytes=MAX_MARKET_SNAPSHOT_BYTES,
+        description="snapshot fixture",
+    )
+    # Trust is never accepted from the snapshot payload itself.  Only a
+    # separately persisted state record that hashes this exact payload may
+    # attach the private marker consumed by normalize_market_snapshot().
+    payload.pop("trust_evidence", None)
+    payload.pop(_BOUND_TRUST_EVIDENCE_KEY, None)
     if "rows" not in payload:
         raise ValueError("snapshot fixture is missing rows")
     payload.setdefault("source", f"fixture:{fixture_path.name}")
     payload.setdefault("currency", "BTC")
     if "captured_at" not in payload:
         raise ValueError("snapshot fixture is missing captured_at")
+    bound_evidence = _load_bound_snapshot_trust(
+        fixture_path,
+        payload,
+        auth_key_file=auth_key_file,
+    )
+    if bound_evidence:
+        payload[_BOUND_TRUST_EVIDENCE_KEY] = _BoundTrustEvidence(
+            bound_evidence,
+            snapshot_sha256=snapshot_payload_sha256(payload),
+        )
     return payload
+
+
+def snapshot_trust_state_path(snapshot_path: str | Path) -> Path:
+    snapshot = resolve_snapshot_fixture_path(snapshot_path)
+    return snapshot.with_name(f"{snapshot.name}.trust.json")
+
+
+def snapshot_payload_sha256(snapshot: dict[str, Any]) -> str:
+    payload = _snapshot_payload_without_trust(snapshot)
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def write_snapshot_trust_state(
+    snapshot_path: str | Path,
+    trust_evidence: dict[str, Any],
+    *,
+    expected_snapshot: dict[str, Any],
+    auth_key_file: str | Path | None = None,
+) -> Path:
+    snapshot_file = resolve_snapshot_fixture_path(snapshot_path)
+    payload = read_json_object_from_regular_file(
+        snapshot_file,
+        max_bytes=MAX_MARKET_SNAPSHOT_BYTES,
+        description="snapshot fixture",
+    )
+    payload = _snapshot_payload_without_trust(payload)
+    expected_payload = _snapshot_payload_without_trust(expected_snapshot)
+    payload_digest = snapshot_payload_sha256(payload)
+    if payload_digest != snapshot_payload_sha256(expected_payload):
+        raise ValueError("snapshot changed before trust state could be bound")
+    unsigned_state = {
+        "schema_version": SNAPSHOT_TRUST_STATE_SCHEMA_VERSION,
+        "snapshot_sha256": payload_digest,
+        "snapshot_captured_at": expected_payload.get("captured_at"),
+        "source_identity": _trust_source_identity(expected_payload),
+        "trust_evidence": dict(trust_evidence),
+        "research_only": True,
+    }
+    configured_key = _configured_market_key_file(auth_key_file)
+    separated_key = require_separate_key_file(
+        snapshot_file,
+        snapshot_trust_state_path(snapshot_file),
+        key_file=configured_key,
+        key_env=MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
+        conflicting_key_env=ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV,
+    )
+    state = {
+        **unsigned_state,
+        "hmac_sha256": sign_mapping(
+            unsigned_state,
+            domain=MARKET_SNAPSHOT_TRUST_HMAC_DOMAIN,
+            key_file=separated_key,
+        ),
+    }
+    return atomic_write_json(snapshot_trust_state_path(snapshot_file), state)
+
+
+def bound_snapshot_trust_evidence(snapshot: dict[str, Any]) -> dict[str, Any]:
+    evidence = snapshot.get(_BOUND_TRUST_EVIDENCE_KEY)
+    if not isinstance(evidence, _BoundTrustEvidence):
+        return {}
+    try:
+        if evidence.snapshot_sha256 != snapshot_payload_sha256(snapshot):
+            return {}
+    except (TypeError, ValueError):
+        return {}
+    return dict(evidence)
+
+
+def _load_bound_snapshot_trust(
+    snapshot_path: Path,
+    snapshot: dict[str, Any],
+    *,
+    auth_key_file: str | Path | None = None,
+) -> dict[str, Any]:
+    try:
+        state = read_json_object_from_regular_file(
+            snapshot_trust_state_path(snapshot_path),
+            max_bytes=MAX_MARKET_TRUST_STATE_BYTES,
+            description="market snapshot trust state",
+        )
+        evidence = state.get("trust_evidence")
+        expected_identity = _trust_source_identity(snapshot)
+        unsigned_state = {
+            key: state.get(key)
+            for key in (
+                "schema_version",
+                "snapshot_sha256",
+                "snapshot_captured_at",
+                "source_identity",
+                "trust_evidence",
+                "research_only",
+            )
+        }
+        configured_key = _configured_market_key_file(auth_key_file)
+        separated_key = require_separate_key_file(
+            snapshot_path,
+            snapshot_trust_state_path(snapshot_path),
+            key_file=configured_key,
+            key_env=MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
+            conflicting_key_env=ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV,
+        )
+        valid = (
+            set(state)
+            == {
+                "schema_version",
+                "snapshot_sha256",
+                "snapshot_captured_at",
+                "source_identity",
+                "trust_evidence",
+                "research_only",
+                "hmac_sha256",
+            }
+            and state.get("schema_version") == SNAPSHOT_TRUST_STATE_SCHEMA_VERSION
+            and state.get("snapshot_sha256") == snapshot_payload_sha256(snapshot)
+            and state.get("snapshot_captured_at") == snapshot.get("captured_at")
+            and state.get("source_identity") == expected_identity
+            and isinstance(evidence, dict)
+            and evidence.get("schema_version") == "market_trust_evidence.v1"
+            and evidence.get("source_identity") == expected_identity
+            and verify_mapping(
+                unsigned_state,
+                state.get("hmac_sha256"),
+                domain=MARKET_SNAPSHOT_TRUST_HMAC_DOMAIN,
+                key_file=separated_key,
+            )
+        )
+        return dict(evidence) if valid else {}
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _snapshot_payload_without_trust(snapshot: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(snapshot)
+    payload.pop("trust_evidence", None)
+    payload.pop(_BOUND_TRUST_EVIDENCE_KEY, None)
+    return payload
+
+
+def _configured_market_key_file(
+    auth_key_file: str | Path | None,
+) -> Path:
+    configured = auth_key_file or os.environ.get(MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV)
+    if not configured:
+        raise SidecarAuthUnavailable(
+            f"{MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV} must reference an operator-owned key file"
+        )
+    return Path(configured).expanduser().resolve()
 
 
 def validate_deribit_base_url(base_url: str) -> str:
@@ -203,7 +426,11 @@ def load_public_replay_fixture(
     scenario: str,
 ) -> dict[str, Any]:
     fixture_path = Path(path)
-    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    payload = read_json_object_from_regular_file(
+        fixture_path,
+        max_bytes=MAX_MARKET_SNAPSHOT_BYTES,
+        description="public replay fixture",
+    )
     scenarios = payload.get("scenarios") or {}
     if scenario not in scenarios:
         raise ValueError(f"public replay scenario {scenario!r} not found in {fixture_path}")
@@ -400,6 +627,10 @@ def fetch_deribit_option_chain_snapshot(
                 "summary": summary,
                 "ticker": tickers.get(row["instrument_name"]),
                 "instrument_name": row["instrument_name"],
+                # Deribit ticker IV fields are percentage-point values. Persist
+                # the venue unit explicitly so downstream surface code never
+                # guesses from magnitude on a live snapshot.
+                "iv_unit": "percent_points",
             }
         )
 
@@ -947,7 +1178,7 @@ def write_snapshot_fixture(path: str | Path, snapshot: dict[str, Any]) -> Path:
         target = (Path.cwd() / target).resolve()
     else:
         target = target.resolve()
-    payload = dict(snapshot)
+    payload = _snapshot_payload_without_trust(snapshot)
     payload.setdefault("captured_at", utc_timestamp())
     payload.setdefault("source", payload.get("source") or "snapshot_write")
     return atomic_write_json(target, payload)
@@ -1017,7 +1248,7 @@ def normalize_market_snapshot(
         "fetch_errors": list(snapshot.get("fetch_errors", [])),
         "adapter_events": list(snapshot.get("adapter_events", [])),
         "feeds": dict(snapshot.get("feeds") or {}),
-        "trust_evidence": dict(snapshot.get("trust_evidence") or {}),
+        "trust_evidence": bound_snapshot_trust_evidence(snapshot),
         "replay_scenario": snapshot.get("replay_scenario"),
         "collection_scope": _snapshot_collection_scope(snapshot, row_count=len(rows)),
     }
@@ -1875,51 +2106,22 @@ def _trust_evidence_payload(
     rolling_observations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     rolling = _sanitize_rolling_observations(rolling_observations)
-    soak_24h_complete = observation_seconds >= 86_400
-    continuous_7d_complete = observation_seconds >= 7 * 86_400
-    websocket_gap_resync_verified = False
-    production_reason_codes = []
-    if not websocket_gap_resync_verified:
-        production_reason_codes.append("MISSING_WS_GAP_RESYNC_EVIDENCE")
-    if not soak_24h_complete:
-        production_reason_codes.append("MISSING_24H_SOAK_EVIDENCE")
-    if not continuous_7d_complete:
-        production_reason_codes.append("MISSING_7D_CONTINUOUS_EVIDENCE")
-    production_ready = not production_reason_codes
     return {
         "schema_version": "market_trust_evidence.v1",
         "status": status,
         "consecutive_passes": consecutive_passes,
         "minimum_consecutive_passes": minimum_consecutive_passes,
-        "required_consecutive_passes": minimum_consecutive_passes,
         "first_pass_at": first_pass_at,
         "last_pass_at": last_pass_at,
         "observation_seconds": observation_seconds,
-        "observation_sec": observation_seconds,
         "minimum_observation_seconds": minimum_observation_seconds,
-        "required_observation_sec": minimum_observation_seconds,
         "reason_codes": sorted(set(str(item) for item in reason_codes if item)),
         "feed_graph_complete": bool(feed_graph_complete),
         "source_identity": source_identity,
         "rolling_observations": rolling,
-        "rolling": rolling,
         "rolling_observation_count": len(rolling),
         "minimum_rolling_observations": 20,
         "rolling_status": "ready" if len(rolling) >= 20 else "collecting",
-        # Snapshot-level trust is sufficient for research analytics only. The
-        # production gate remains separate so a short REST observation cannot
-        # masquerade as WebSocket gap/resync and multi-day soak evidence.
-        "production_gate": {
-            "schema_version": "market_production_trust_gate.v1",
-            "ready": production_ready,
-            "status": "ready" if production_ready else "collecting",
-            "websocket_gap_resync_verified": websocket_gap_resync_verified,
-            "soak_24h_complete": soak_24h_complete,
-            "continuous_7d_complete": continuous_7d_complete,
-            "minimum_soak_seconds": 86_400,
-            "minimum_continuous_seconds": 7 * 86_400,
-            "reason_codes": production_reason_codes,
-        },
         "research_only": True,
     }
 
@@ -1988,6 +2190,8 @@ def _rolling_observation_from_snapshot(
             continue
         ticker = row.get("ticker") or {}
         summary = row.get("summary") or row
+        if not isinstance(ticker, dict) or not isinstance(summary, dict):
+            continue
         mark_iv = _to_number(ticker.get("mark_iv"))
         underlying = _first_number(
             ticker.get("underlying_price"),
@@ -2003,15 +2207,19 @@ def _rolling_observation_from_snapshot(
             strike = _to_number(_parse_option_metadata(instrument_name)["strike"])
         except (TypeError, ValueError, KeyError):
             continue
+        normalized_iv = _canonical_fraction_iv(
+            mark_iv,
+            row.get("iv_unit"),
+            ticker.get("iv_unit"),
+            summary.get("iv_unit"),
+        )
         if (
-            mark_iv is None
-            or mark_iv <= 0
+            normalized_iv is None
             or underlying is None
             or underlying <= 0
             or strike is None
         ):
             continue
-        normalized_iv = mark_iv / 100.0 if mark_iv > 5.0 else mark_iv
         atm_candidates.append((abs(strike / underlying - 1.0), normalized_iv))
     if not atm_candidates:
         return None
@@ -2039,6 +2247,10 @@ def _sanitize_rolling_observations(value: Any) -> list[dict[str, Any]]:
         index_price = _to_number(item.get("index_price"))
         dvol = _to_number(item.get("dvol"))
         atm_iv = _to_number(item.get("atm_iv"))
+        normalized_atm_iv = _canonical_fraction_iv(
+            atm_iv,
+            item.get("iv_unit"),
+        )
         funding_rate = _to_number(item.get("funding_rate"))
         try:
             parse_timestamp_ms(observed_at)
@@ -2050,8 +2262,7 @@ def _sanitize_rolling_observations(value: Any) -> list[dict[str, Any]]:
             or index_price <= 0
             or dvol is None
             or dvol <= 0
-            or atm_iv is None
-            or atm_iv <= 0
+            or normalized_atm_iv is None
             or funding_rate is None
         ):
             continue
@@ -2061,7 +2272,7 @@ def _sanitize_rolling_observations(value: Any) -> list[dict[str, Any]]:
                 "observed_at": observed_at,
                 "index_price": index_price,
                 "dvol": dvol,
-                "atm_iv": atm_iv,
+                "atm_iv": normalized_atm_iv,
                 "iv_unit": "fraction",
                 "funding_rate": funding_rate,
                 "source": str(item.get("source") or "missing"),
@@ -2069,6 +2280,33 @@ def _sanitize_rolling_observations(value: Any) -> list[dict[str, Any]]:
         )
     sanitized.sort(key=lambda item: item["observed_at"])
     return sanitized[-288:]
+
+
+def _canonical_fraction_iv(value: Any, *declared_units: Any) -> float | None:
+    numeric = _to_number(value)
+    if numeric is None or numeric <= 0.0:
+        return None
+    normalized_units: set[str] = set()
+    for declared in declared_units:
+        if declared in (None, ""):
+            continue
+        normalized = str(declared).strip().lower().replace("-", "_")
+        if normalized in {"fraction", "decimal", "ratio"}:
+            normalized_units.add("fraction")
+        elif normalized in {
+            "percent",
+            "percentage_points",
+            "percent_points",
+            "pct",
+            "pct_points",
+        }:
+            normalized_units.add("percent_points")
+        else:
+            return None
+    if len(normalized_units) != 1:
+        return None
+    unit = normalized_units.pop()
+    return numeric / 100.0 if unit == "percent_points" else numeric
 
 
 def _vol_index_status(normalized_snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -2255,7 +2493,11 @@ def _get_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            return read_json_object_from_stream(
+                response,
+                max_bytes=MAX_MARKET_HTTP_RESPONSE_BYTES,
+                description="Deribit market response",
+            )
     except HTTPError as exc:
         raise ValueError(f"http {exc.code} {exc.reason}") from exc
     except URLError as exc:
@@ -2391,8 +2633,10 @@ def _fetch_vol_index_feed(
         raise ValueError("unrecognized volatility index row shape")
     if volatility is None or volatility <= 0:
         raise ValueError("invalid volatility index value")
-    # Deribit DVOL is often percent points (e.g. 55.2); fixtures use 0-1 fractions.
-    normalized = volatility / 100.0 if volatility > 5.0 else float(volatility)
+    # Deribit's volatility-index endpoint defines OHLC values in percentage
+    # points. Normalize from that documented venue unit unconditionally; value
+    # magnitude is never used to guess a unit.
+    normalized = float(volatility) / 100.0
     index_name = f"{currency} DVOL"
     try:
         timestamp = (
@@ -2409,8 +2653,10 @@ def _fetch_vol_index_feed(
         "timestamp": timestamp,
         "as_of": timestamp,
         "volatility": normalized,
+        "volatility_unit": "fraction",
         "source_endpoint": "public/get_volatility_index_data",
         "raw_close": volatility,
+        "raw_close_unit": "percent_points",
         "provenance": _feed_provenance(
             endpoint="public/get_volatility_index_data",
             observed_at=timestamp,

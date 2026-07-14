@@ -1,5 +1,6 @@
 import json
 import http.client
+import io
 import re
 import socket
 import subprocess
@@ -22,7 +23,7 @@ from crypto_options_report.api import (
     readiness_payload,
     serve,
 )
-from crypto_options_report.cli import build_parser
+from crypto_options_report.cli import build_parser, main as cli_main
 from crypto_options_report.contract import generate_research_report, report_shape
 from crypto_options_report.full_surface import (
     API_ROUTES,
@@ -40,8 +41,7 @@ class FullSystemSurfaceTests(unittest.TestCase):
             action for action in parser._actions if action.__class__.__name__ == "_SubParsersAction"
         )
 
-        for command in CLI_COMMANDS:
-            self.assertIn(command, subparsers.choices)
+        self.assertEqual(set(subparsers.choices), set(CLI_COMMANDS))
 
     def test_api_and_dashboard_descriptors_include_required_surfaces(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
@@ -59,8 +59,11 @@ class FullSystemSurfaceTests(unittest.TestCase):
         route_status = {
             item["route"]: item["status"] for item in surface["api"]["routes"]
         }
-        self.assertEqual("available", route_status["POST /backtest/run"])
-        self.assertEqual("available", route_status["GET /backtest/report/{id}"])
+        self.assertEqual("declared_not_probed", surface["status"])
+        self.assertEqual(
+            {"declared_not_probed"},
+            set(route_status.values()),
+        )
 
     def test_api_route_descriptors_match_runtime_routes(self):
         declared_routes = set(API_ROUTES)
@@ -73,9 +76,19 @@ class FullSystemSurfaceTests(unittest.TestCase):
         }
         expected_get_routes.update(f"GET {path}" for path in GET_SURFACE_PATHS)
         expected_get_routes.add("GET /backtest/report/{id}")
+        expected_get_routes.update(
+            {
+                "GET /backtest/jobs/{id}",
+                "GET /backtest/jobs/{id}/result",
+            }
+        )
         expected_post_routes = {f"POST {path}" for path in POST_SURFACE_PATHS}
+        expected_delete_routes = {"DELETE /backtest/jobs/{id}"}
 
-        self.assertEqual(expected_get_routes | expected_post_routes, declared_routes)
+        self.assertEqual(
+            expected_get_routes | expected_post_routes | expected_delete_routes,
+            declared_routes,
+        )
 
     def test_api_routes_return_shared_report_slices(self):
         self.assertEqual("ok", _payload_for_path("/health", "").get("status", "ok"))
@@ -374,7 +387,7 @@ class FullSystemSurfaceTests(unittest.TestCase):
         self.assertEqual(direct_projection["reason_codes"], dashboard_projection["reason_codes"])
 
     def test_cli_calibrate_and_recommend_commands_emit_json(self):
-        for command, expected_key in (("calibrate", "split_policy"), ("recommend", "mode_gate")):
+        for command in ("calibrate", "recommend"):
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -390,7 +403,68 @@ class FullSystemSurfaceTests(unittest.TestCase):
                 text=True,
             )
             payload = json.loads(completed.stdout)
-            self.assertIn(expected_key, payload)
+            if command == "calibrate":
+                self.assertEqual("not_implemented", payload["status"])
+                self.assertEqual("unavailable", payload["evidence_class"])
+                self.assertEqual("CALIBRATION_NOT_IMPLEMENTED", payload["reason_code"])
+                self.assertEqual([], payload["system_comparison"])
+            else:
+                self.assertIn("mode_gate", payload)
+
+    def test_cli_feature_commands_report_unavailable_calibration_honestly(self):
+        for command in ("build-features", "feature-status"):
+            with self.subTest(command=command):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "crypto_options_report.cli",
+                        command,
+                        "--generated-at",
+                        "2026-07-07T00:01:30Z",
+                        "--compact",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                payload = json.loads(completed.stdout)
+                calibration_features = payload["calibration_features"]
+                self.assertEqual("not_implemented", calibration_features["status"])
+                self.assertEqual(
+                    "unavailable", calibration_features["evidence_class"]
+                )
+                self.assertEqual(
+                    "CALIBRATION_NOT_IMPLEMENTED",
+                    calibration_features["reason_code"],
+                )
+                self.assertEqual([], calibration_features["features"])
+                self.assertNotIn("feature_standardization", calibration_features)
+
+    def test_cli_rejects_non_finite_json_instead_of_emitting_nan(self):
+        with patch(
+            "crypto_options_report.cli._build_report_from_args",
+            return_value={"non_finite": float("nan")},
+        ), patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = cli_main(["report", "--compact"])
+
+        self.assertEqual(1, exit_code)
+        error_payload = json.loads(stderr.getvalue())
+        self.assertEqual("ValueError", error_payload["type"])
+
+    def test_api_maps_non_finite_response_payload_to_structured_500(self):
+        with patch(
+            "crypto_options_report.api._payload_for_path",
+            return_value={"non_finite": float("nan")},
+        ):
+            status, headers, body = self._request("GET", "/report")
+
+        payload = json.loads(body)
+        self.assertEqual(500, status)
+        self.assertEqual("application/json; charset=utf-8", headers["content-type"])
+        self.assertEqual("response_serialization_failed", payload["error"])
+        self.assertEqual("NON_JSON_RESPONSE_PAYLOAD", payload["reason_code"])
+        self.assertTrue(payload["research_only"])
 
     def _request(
         self,

@@ -18,6 +18,7 @@
           "bid": 1840.0,
           "ask": 1900.0,
           "mark": 1870.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.58,
           "ask_iv": 0.59,
           "mark_iv": 0.585,
@@ -37,7 +38,8 @@
           "tick_size": 0.5,
           "delivery_price": 118000.0,
           "recorded_long_payoff": 10000.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         },
         {
           "vendor": "fixture_alpha",
@@ -49,6 +51,7 @@
           "bid": 1180.0,
           "ask": 1230.0,
           "mark": 1205.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.57,
           "ask_iv": 0.58,
           "mark_iv": 0.575,
@@ -68,7 +71,8 @@
           "tick_size": 0.5,
           "delivery_price": 118000.0,
           "recorded_long_payoff": 6000.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         },
         {
           "vendor": "fixture_alpha",
@@ -80,6 +84,7 @@
           "bid": 760.0,
           "ask": 800.0,
           "mark": 780.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.56,
           "ask_iv": 0.57,
           "mark_iv": 0.565,
@@ -99,7 +104,8 @@
           "tick_size": 0.5,
           "delivery_price": 118000.0,
           "recorded_long_payoff": 2000.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         },
         {
           "vendor": "fixture_alpha",
@@ -111,6 +117,7 @@
           "bid": 470.0,
           "ask": 510.0,
           "mark": 490.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.55,
           "ask_iv": 0.56,
           "mark_iv": 0.555,
@@ -130,7 +137,8 @@
           "tick_size": 0.5,
           "delivery_price": 118000.0,
           "recorded_long_payoff": 0.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         }
       ],
       "path": [
@@ -182,6 +190,7 @@
           "bid": 1530.0,
           "ask": 1590.0,
           "mark": 1560.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.58,
           "ask_iv": 0.59,
           "mark_iv": 0.585,
@@ -201,7 +210,8 @@
           "tick_size": 0.5,
           "delivery_price": 102000.0,
           "recorded_long_payoff": 0.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         },
         {
           "vendor": "fixture_alpha",
@@ -213,6 +223,7 @@
           "bid": 1010.0,
           "ask": 1050.0,
           "mark": 1030.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.57,
           "ask_iv": 0.58,
           "mark_iv": 0.575,
@@ -232,7 +243,8 @@
           "tick_size": 0.5,
           "delivery_price": 102000.0,
           "recorded_long_payoff": 0.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         },
         {
           "vendor": "fixture_alpha",
@@ -244,6 +256,7 @@
           "bid": 640.0,
           "ask": 680.0,
           "mark": 660.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.56,
           "ask_iv": 0.57,
           "mark_iv": 0.565,
@@ -263,7 +276,8 @@
           "tick_size": 0.5,
           "delivery_price": 102000.0,
           "recorded_long_payoff": 0.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         },
         {
           "vendor": "fixture_alpha",
@@ -275,6 +289,7 @@
           "bid": 390.0,
           "ask": 425.0,
           "mark": 407.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.55,
           "ask_iv": 0.56,
           "mark_iv": 0.555,
@@ -294,7 +309,8 @@
           "tick_size": 0.5,
           "delivery_price": 102000.0,
           "recorded_long_payoff": 0.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         }
       ],
       "path": [
@@ -345,6 +361,7 @@
           "bid": 1990.0,
           "ask": 2050.0,
           "mark": 2020.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.58,
           "ask_iv": 0.59,
           "mark_iv": 0.585,
@@ -364,7 +381,8 @@
           "tick_size": 0.5,
           "delivery_price": 104000.0,
           "recorded_long_payoff": 0.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         },
         {
           "vendor": "fixture_alpha",
@@ -376,6 +394,7 @@
           "bid": 1320.0,
           "ask": 1370.0,
           "mark": 1345.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.57,
           "ask_iv": 0.58,
           "mark_iv": 0.575,
@@ -395,7 +414,8 @@
           "tick_size": 0.5,
           "delivery_price": 104000.0,
           "recorded_long_payoff": 0.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         },
         {
           "vendor": "fixture_alpha",
@@ -407,6 +427,7 @@
           "bid": 840.0,
           "ask": 880.0,
           "mark": 860.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.56,
           "ask_iv": 0.57,
           "mark_iv": 0.565,
@@ -426,7 +447,8 @@
           "tick_size": 0.5,
           "delivery_price": 104000.0,
           "recorded_long_payoff": 0.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         },
         {
           "vendor": "fixture_alpha",
@@ -438,6 +460,7 @@
           "bid": 520.0,
           "ask": 555.0,
           "mark": 537.0,
+          "iv_unit": "fraction",
           "bid_iv": 0.55,
           "ask_iv": 0.56,
           "mark_iv": 0.555,
@@ -457,7 +480,8 @@
           "tick_size": 0.5,
           "delivery_price": 104000.0,
           "recorded_long_payoff": 0.0,
-          "surface_no_arb_error": 0.01
+          "surface_no_arb_error": 0.01,
+          "surface_no_arb_pass": true
         }
       ],
       "path": [

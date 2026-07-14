@@ -113,15 +113,19 @@ class DataQualityRemediationTests(unittest.TestCase):
         self.assertFalse(report["eligibility"]["backtest_allowed"])
         self.assertTrue(report["aggregate_eligibility"]["blocks_downstream"])
 
-    def test_calibration_report_contains_unpromoted_model_registry_gate(self):
+    def test_calibration_report_is_explicitly_unimplemented(self):
         report = build_walk_forward_calibration_report(
             generated_at="2026-07-07T00:01:30Z",
         )
 
         registry = report["model_registry"]
-        self.assertEqual("research_only_unpromoted", registry["promotion_status"])
+        self.assertEqual("not_implemented", report["status"])
+        self.assertEqual("unavailable", report["evidence_class"])
+        self.assertEqual("not_implemented", registry["promotion_status"])
+        self.assertIsNone(registry["model_version"])
+        self.assertIsNone(registry["artifact_id"])
         self.assertFalse(registry["promoted_for_sizing"])
-        self.assertIn("MISSING_EXTERNAL_PROMOTION_REVIEW", registry["blocking_reasons"])
+        self.assertEqual(["CALIBRATION_NOT_IMPLEMENTED"], registry["blocking_reasons"])
 
     def test_private_account_status_exposes_auth_safe_replay_contract(self):
         payload = load_account_scenario("green")
@@ -137,12 +141,12 @@ class DataQualityRemediationTests(unittest.TestCase):
         self.assertFalse(contract["live_order_submission_possible"])
         self.assertIn("private/get_account_summary", contract["source_endpoints"])
 
-    def test_paper_ledger_records_persistence_and_reconciliation_contract(self):
+    def test_paper_ledger_refuses_persistence_and_reconciliation_inputs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "paper-ledger.json"
             ledger = build_paper_proposal_ledger(
                 generated_at="2026-07-07T00:01:30Z",
-                report=self._paper_ready_report(),
+                report={"mode_gate": {"paper_manual_candidates_allowed": True}},
                 allow_paper=True,
                 storage_path=path,
                 review_decisions=[
@@ -157,58 +161,33 @@ class DataQualityRemediationTests(unittest.TestCase):
                 ],
             )
 
-            self.assertEqual("persistent_json", ledger["persistence"]["mode"])
-            self.assertTrue(ledger["persistence"]["idempotent"])
-            self.assertEqual("30_to_60_days_required", ledger["reconciliation"]["window"])
-            first = ledger["ledger_entries"][0]
-            self.assertIn("observed_fill_usdc", first)
-            self.assertIn("fee_delta_usdc", first)
+            self.assertEqual("unsupported", ledger["status"])
+            self.assertEqual("NO-GO", ledger["release_state"])
+            self.assertEqual([], ledger["proposals"])
+            self.assertEqual([], ledger["ledger_entries"])
             self.assertFalse(ledger["automatic_live_submission_possible"])
+            self.assertEqual("unsupported", ledger["persistence"]["mode"])
+            self.assertFalse(ledger["persistence"]["write_allowed"])
+            self.assertEqual("not_authorized", ledger["reconciliation"]["status"])
+            self.assertFalse(path.exists())
 
-            saved = json.loads(Path(ledger["persistence"]["storage_path"]).read_text())
-            self.assertEqual(ledger["schema_version"], saved["schema_version"])
-
-            second = build_paper_proposal_ledger(
-                generated_at="2026-07-08T00:01:30Z",
-                report={
-                    **self._paper_ready_report(),
-                    "ev_candidate_scanner": {
-                        "ranked_candidates": [
-                            self._candidate("candidate-2", "naked_short_call", 90.0)
-                        ]
-                    },
+    def test_caller_flags_cannot_authorize_paper_mode(self):
+        ledger = build_paper_proposal_ledger(
+            generated_at="2026-07-07T00:01:30Z",
+            report={
+                "mode_gate": {"paper_manual_candidates_allowed": True},
+                "walk_forward_calibration": {
+                    "status": "validated",
+                    "model_registry": {"promoted_for_sizing": True},
                 },
-                allow_paper=True,
-                storage_path=path,
-            )
-            saved = json.loads(path.read_text())
-            self.assertEqual(2, len(saved["ledger_entries"]))
-            self.assertTrue(second["persistence"]["history_preserved"])
-            self.assertEqual(1, second["persistence"]["prior_entry_count"])
-
-    def test_paper_ledger_blocks_unpromoted_or_missing_private_replay_evidence(self):
-        report = self._paper_ready_report()
-        report["walk_forward_calibration"]["model_registry"]["promoted_for_sizing"] = False
-
-        ledger = build_paper_proposal_ledger(
-            generated_at="2026-07-07T00:01:30Z",
-            report=report,
+            },
             allow_paper=True,
         )
 
-        self.assertEqual("blocked", ledger["status"])
-        self.assertIn("MISSING_PROMOTED_SCORE_MODEL", ledger["reason_codes"])
-
-        report = self._paper_ready_report()
-        report["account_status"]["private_adapter_contract"]["replay_fixture"] = False
-        ledger = build_paper_proposal_ledger(
-            generated_at="2026-07-07T00:01:30Z",
-            report=report,
-            allow_paper=True,
-        )
-
-        self.assertEqual("blocked", ledger["status"])
-        self.assertIn("MISSING_PRIVATE_ACCOUNT_REPLAY_EVIDENCE", ledger["reason_codes"])
+        self.assertEqual("unsupported", ledger["status"])
+        self.assertEqual("not_authorized", ledger["authorization_state"])
+        self.assertFalse(ledger["proposal_creation_allowed"])
+        self.assertIn("PAPER_MODE_NOT_AUTHORIZED", ledger["reason_codes"])
 
     def test_partial_ticker_and_missing_settlement_metadata_block_market_readiness(self):
         snapshot = self._base_snapshot()
@@ -229,22 +208,29 @@ class DataQualityRemediationTests(unittest.TestCase):
         self.assertEqual("partial", status["feed_coverage"]["feeds"]["ticker"]["status"])
         self.assertIn("ticker", status["feed_coverage"]["missing_feeds"])
 
-    def test_release_readiness_lists_evidence_driven_dqr_gates(self):
+    def test_release_readiness_exposes_only_external_authorization_gate(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
 
         readiness = report["full_system_surface"]["release_readiness"]
 
         self.assertEqual("NO-GO", readiness["status"])
-        for gate_name in (
-            "public_response_contract",
-            "public_feed_graph_complete",
-            "private_account_replay_contract",
-            "calibration_model_promoted",
-            "paper_ledger_persistence",
-            "paper_ledger_reconciliation",
-            "walk_forward_calibration",
-        ):
-            self.assertIn(gate_name, readiness["missing_prerequisites"])
+        self.assertFalse(readiness["paper_mode_allowed"])
+        self.assertFalse(readiness["manual_execution_allowed"])
+        self.assertEqual(
+            ["external_release_authorization"],
+            readiness["missing_prerequisites"],
+        )
+        self.assertEqual(1, len(readiness["prerequisites"]))
+        gate = readiness["prerequisites"][0]
+        self.assertEqual("external_release_authorization", gate["name"])
+        self.assertFalse(gate["satisfied"])
+        self.assertEqual("not_configured", gate["evidence_state"])
+        self.assertEqual("awaiting_external", gate["release_state"])
+        self.assertEqual("manual_external_authorization", gate["evidence_class"])
+        self.assertEqual(
+            ["EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED"],
+            gate["reason_codes"],
+        )
 
     def test_single_digit_expiry_parses_without_crash(self):
         snapshot = self._base_snapshot()
@@ -330,52 +316,6 @@ class DataQualityRemediationTests(unittest.TestCase):
         duplicated["ticker"]["mark_price"] = 0.19
         snapshot["rows"][1] = duplicated
         return snapshot
-
-    def _paper_ready_report(self):
-        return {
-            "mode_gate": {"paper_manual_candidates_allowed": True},
-            "walk_forward_calibration": {
-                "status": "validated",
-                "model_registry": {"promoted_for_sizing": True},
-            },
-            "data_status": {"status": "validated"},
-            "account_status": {
-                "trade_gate": "ALLOW_NEW",
-                "private_adapter_contract": {
-                    "auth_safe": True,
-                    "replay_fixture": True,
-                    "live_order_submission_possible": False,
-                },
-            },
-            "reason_codes": [],
-            "ev_candidate_scanner": {
-                "ranked_candidates": [
-                    self._candidate("candidate-1", "naked_short_call", 120.0)
-                ]
-            },
-        }
-
-    def _candidate(self, candidate_id, structure, credit):
-        return {
-            "candidate_id": candidate_id,
-            "structure_type": structure,
-            "action": "RESEARCH_ONLY",
-            "kill_conditions": [],
-            "instrument_name": f"{candidate_id}-BTC-25JUL26-120000-C",
-            "dte_days": 14,
-            "model_delta": 0.12,
-            "executable_credit_usdc": credit,
-            "ev_after_cost_usdc": 10.0,
-            "path_risk": {
-                "p_touch": 0.22,
-                "cvar_99_usdc": 300.0,
-                "stress_loss_usdc": 450.0,
-            },
-            "fee_usdc": 1.5,
-            "slippage_usdc": 2.0,
-            "reason_codes": [],
-        }
-
 
 if __name__ == "__main__":
     unittest.main()

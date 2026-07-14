@@ -1,15 +1,272 @@
 from contextlib import redirect_stderr
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
 from crypto_options_report import snapshot_sidecar as refresh_market_snapshot
+from crypto_options_report import market_data
+from crypto_options_report.market_data import (
+    MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
+    MAX_MARKET_HTTP_RESPONSE_BYTES,
+    MAX_MARKET_SNAPSHOT_BYTES,
+    MAX_MARKET_TRUST_STATE_BYTES,
+    bound_snapshot_trust_evidence,
+    load_snapshot_fixture,
+    snapshot_trust_state_path,
+    write_snapshot_fixture,
+    write_snapshot_trust_state,
+)
+from crypto_options_report.sidecar_auth import (
+    ACCOUNT_SIDECAR_AUTH_HMAC_DOMAIN,
+    SidecarAuthUnavailable,
+    sign_mapping,
+)
 
 
 class MarketSnapshotSidecarTests(unittest.TestCase):
+    def test_account_domain_signature_cannot_forge_market_trust_state(self):
+        snapshot = {
+            "captured_at": "2026-07-12T15:00:00Z",
+            "currency": "BTC",
+            "source": "deribit_live:https://www.deribit.com",
+            "rows": [],
+        }
+        evidence = {
+            "schema_version": "market_trust_evidence.v1",
+            "status": "collecting",
+            "source_identity": "deribit_live:https://www.deribit.com|BTC",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            key_dir = root / "keys"
+            data_dir.mkdir()
+            key_dir.mkdir()
+            output = data_dir / "snapshot.json"
+            key_file = key_dir / "shared.key"
+            key_file.write_bytes(b"s" * 32)
+            write_snapshot_fixture(output, snapshot)
+            state_path = write_snapshot_trust_state(
+                output,
+                evidence,
+                expected_snapshot=snapshot,
+                auth_key_file=key_file,
+            )
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            unsigned = {
+                key: value for key, value in state.items() if key != "hmac_sha256"
+            }
+            state["hmac_sha256"] = sign_mapping(
+                unsigned,
+                key_file=key_file,
+                domain=ACCOUNT_SIDECAR_AUTH_HMAC_DOMAIN,
+            )
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            forged = load_snapshot_fixture(output, auth_key_file=key_file)
+
+        self.assertEqual({}, bound_snapshot_trust_evidence(forged))
+
+    def test_market_key_environment_rejects_account_key_path_alias(self):
+        snapshot = {
+            "captured_at": "2026-07-12T15:00:00Z",
+            "currency": "BTC",
+            "source": "deribit_live:https://www.deribit.com",
+            "rows": [],
+        }
+        evidence = {
+            "schema_version": "market_trust_evidence.v1",
+            "status": "collecting",
+            "source_identity": "deribit_live:https://www.deribit.com|BTC",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            key_dir = root / "keys"
+            data_dir.mkdir()
+            key_dir.mkdir()
+            output = data_dir / "snapshot.json"
+            key_file = key_dir / "shared.key"
+            key_file.write_bytes(b"s" * 32)
+            write_snapshot_fixture(output, snapshot)
+            relative_alias = os.path.relpath(key_file, Path.cwd())
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV: str(key_file),
+                    "CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_HMAC_KEY_FILE": relative_alias,
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(
+                    SidecarAuthUnavailable,
+                    "distinct key files",
+                ):
+                    write_snapshot_trust_state(
+                        output,
+                        evidence,
+                        expected_snapshot=snapshot,
+                    )
+
+    def test_market_runtime_uses_only_its_domain_specific_hmac_key(self):
+        snapshot = {
+            "captured_at": "2026-07-12T15:00:00Z",
+            "currency": "BTC",
+            "source": "deribit_live:https://www.deribit.com",
+            "rows": [],
+        }
+        evidence = {
+            "schema_version": "market_trust_evidence.v1",
+            "status": "collecting",
+            "source_identity": "deribit_live:https://www.deribit.com|BTC",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            key_dir = root / "keys"
+            data_dir.mkdir()
+            key_dir.mkdir()
+            output = data_dir / "snapshot.json"
+            key_file = key_dir / "market.key"
+            key_file.write_bytes(b"m" * 32)
+            write_snapshot_fixture(output, snapshot)
+
+            with mock.patch.dict(
+                os.environ,
+                {"CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_HMAC_KEY_FILE": str(key_file)},
+                clear=True,
+            ):
+                with self.assertRaisesRegex(
+                    SidecarAuthUnavailable,
+                    MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
+                ):
+                    write_snapshot_trust_state(
+                        output,
+                        evidence,
+                        expected_snapshot=snapshot,
+                    )
+
+            with mock.patch.dict(
+                os.environ,
+                {MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV: str(key_file)},
+                clear=True,
+            ):
+                write_snapshot_trust_state(
+                    output,
+                    evidence,
+                    expected_snapshot=snapshot,
+                )
+                loaded = load_snapshot_fixture(output)
+            self.assertEqual(evidence, bound_snapshot_trust_evidence(loaded))
+
+    def test_snapshot_and_trust_state_reads_are_bounded(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            snapshot = root / "snapshot.json"
+            snapshot.write_bytes(b"{" + b" " * MAX_MARKET_SNAPSHOT_BYTES + b"}")
+            with self.assertRaisesRegex(ValueError, "exceeds"):
+                load_snapshot_fixture(snapshot)
+
+            valid = {
+                "captured_at": "2026-07-12T15:00:00Z",
+                "currency": "BTC",
+                "source": "fixture:test",
+                "rows": [],
+            }
+            write_snapshot_fixture(snapshot, valid)
+            snapshot_trust_state_path(snapshot).write_bytes(
+                b"{" + b" " * MAX_MARKET_TRUST_STATE_BYTES + b"}"
+            )
+            loaded = load_snapshot_fixture(snapshot)
+            self.assertEqual({}, bound_snapshot_trust_evidence(loaded))
+
+    def test_market_http_response_read_is_bounded_to_max_plus_one(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        response.read.return_value = b"x" * (MAX_MARKET_HTTP_RESPONSE_BYTES + 1)
+        with (
+            mock.patch.object(market_data, "urlopen", return_value=response),
+            self.assertRaisesRegex(ValueError, "response exceeds"),
+        ):
+            market_data._get_json("https://www.deribit.com/api/v2/test", {}, 1)
+        response.read.assert_called_once_with(MAX_MARKET_HTTP_RESPONSE_BYTES + 1)
+
+    def test_trust_state_is_separate_and_bound_to_exact_snapshot_content(self):
+        snapshot = {
+            "captured_at": "2026-07-12T15:00:00Z",
+            "currency": "BTC",
+            "source": "deribit_live:https://www.deribit.com",
+            "rows": [],
+            "trust_evidence": {"status": "promoted", "consecutive_passes": 999},
+        }
+        evidence = {
+            "schema_version": "market_trust_evidence.v1",
+            "status": "promoted",
+            "source_identity": "deribit_live:https://www.deribit.com|BTC",
+            "consecutive_passes": 999,
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            key_dir = Path(temp_dir) / "keys"
+            data_dir.mkdir()
+            key_dir.mkdir()
+            output = data_dir / "current-snapshot.json"
+            auth_key = key_dir / "sidecar.key"
+            auth_key.write_bytes(b"k" * 32)
+            write_snapshot_fixture(output, snapshot)
+
+            unbound = load_snapshot_fixture(output)
+            self.assertEqual({}, bound_snapshot_trust_evidence(unbound))
+            self.assertNotIn("trust_evidence", json.loads(output.read_text()))
+
+            write_snapshot_trust_state(
+                output,
+                evidence,
+                expected_snapshot=snapshot,
+                auth_key_file=auth_key,
+            )
+            bound = load_snapshot_fixture(output, auth_key_file=auth_key)
+            self.assertEqual(evidence, bound_snapshot_trust_evidence(bound))
+
+            bound["rows"].append({"instrument_name": "mutated-after-load"})
+            self.assertEqual({}, bound_snapshot_trust_evidence(bound))
+
+            forged_state = json.loads(
+                snapshot_trust_state_path(output).read_text(encoding="utf-8")
+            )
+            forged_state["hmac_sha256"] = "0" * 64
+            snapshot_trust_state_path(output).write_text(
+                json.dumps(forged_state), encoding="utf-8"
+            )
+            forged = load_snapshot_fixture(output, auth_key_file=auth_key)
+            self.assertEqual({}, bound_snapshot_trust_evidence(forged))
+            write_snapshot_trust_state(
+                output,
+                evidence,
+                expected_snapshot=snapshot,
+                auth_key_file=auth_key,
+            )
+
+            raw = json.loads(output.read_text(encoding="utf-8"))
+            raw["captured_at"] = "2026-07-12T15:00:01Z"
+            output.write_text(json.dumps(raw), encoding="utf-8")
+            tampered = load_snapshot_fixture(output, auth_key_file=auth_key)
+            self.assertEqual({}, bound_snapshot_trust_evidence(tampered))
+            with self.assertRaisesRegex(ValueError, "changed before trust state"):
+                write_snapshot_trust_state(
+                    output,
+                    evidence,
+                    expected_snapshot=snapshot,
+                    auth_key_file=auth_key,
+                )
+
     def test_once_writes_public_snapshot_atomically_with_safe_structured_log(self):
         snapshot = {
             "captured_at": "2026-07-12T15:00:00Z",

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -10,7 +11,10 @@ from crypto_options_report.market_data import (
     advance_trust_evidence,
     build_market_data_status,
     fetch_deribit_option_chain_snapshot,
+    load_snapshot_fixture,
     parse_timestamp_ms,
+    write_snapshot_fixture,
+    write_snapshot_trust_state,
 )
 
 
@@ -192,21 +196,12 @@ class PublicFeedGraphRuntimeTests(unittest.TestCase):
 
         self.assertEqual("promoted", previous["trust_evidence"]["status"])
         self.assertEqual(20, previous["trust_evidence"]["consecutive_passes"])
-        self.assertGreaterEqual(previous["trust_evidence"]["observation_sec"], 60)
+        self.assertGreaterEqual(previous["trust_evidence"]["observation_seconds"], 60)
         self.assertTrue(previous["trust_evidence"]["feed_graph_complete"])
         self.assertEqual([], previous["trust_evidence"]["reason_codes"])
         self.assertEqual("ready", previous["trust_evidence"]["rolling_status"])
         self.assertEqual(20, previous["trust_evidence"]["rolling_observation_count"])
-        production_gate = previous["trust_evidence"]["production_gate"]
-        self.assertFalse(production_gate["ready"])
-        self.assertIn(
-            "MISSING_WS_GAP_RESYNC_EVIDENCE",
-            production_gate["reason_codes"],
-        )
-        self.assertIn(
-            "MISSING_24H_SOAK_EVIDENCE",
-            production_gate["reason_codes"],
-        )
+        self.assertNotIn("production_gate", previous["trust_evidence"])
         self.assertEqual(
             {"observed_at", "index_price", "dvol", "atm_iv", "iv_unit", "funding_rate", "source"},
             set(previous["trust_evidence"]["rolling_observations"][-1]),
@@ -280,15 +275,16 @@ class PublicFeedGraphRuntimeTests(unittest.TestCase):
         self.assertEqual("blocked", status["status"])
         self.assertEqual("reset", evidence["status"])
 
-    def test_snapshot_cannot_lower_canonical_trust_thresholds(self):
+    def test_snapshot_cannot_self_attest_trust_even_with_canonical_thresholds(self):
         captured_ms = parse_timestamp_ms(CAPTURED_AT)
         snapshot = _complete_live_snapshot(captured_ms)
         snapshot["trust_evidence"] = {
             "status": "promoted",
-            "consecutive_passes": 1,
-            "minimum_consecutive_passes": 1,
-            "observation_seconds": 1,
-            "minimum_observation_seconds": 1,
+            "schema_version": "market_trust_evidence.v1",
+            "consecutive_passes": 999,
+            "minimum_consecutive_passes": 6,
+            "observation_seconds": 999,
+            "minimum_observation_seconds": 60,
             "source_identity": "deribit_live:https://www.deribit.com|BTC",
             "first_pass_at": CAPTURED_AT,
             "last_pass_at": CAPTURED_AT,
@@ -297,10 +293,47 @@ class PublicFeedGraphRuntimeTests(unittest.TestCase):
         status = build_market_data_status(snapshot, now_ms=captured_ms)
         evidence = status["trust_evidence"]
 
-        self.assertEqual("reset", evidence["status"])
+        self.assertEqual("collecting", evidence["status"])
         self.assertEqual(6, evidence["minimum_consecutive_passes"])
         self.assertEqual(60, evidence["minimum_observation_seconds"])
-        self.assertIn("TRUST_EVIDENCE_CLAIM_INVALID", evidence["reason_codes"])
+        self.assertEqual(0, evidence["consecutive_passes"])
+        self.assertIn("TRUST_EVIDENCE_NOT_OBSERVED", evidence["reason_codes"])
+
+    def test_bound_sidecar_state_can_promote_the_exact_live_snapshot(self):
+        previous = None
+        base_ms = parse_timestamp_ms(CAPTURED_AT)
+        for offset_seconds in range(0, 70, 10):
+            snapshot = _complete_live_snapshot(base_ms + offset_seconds * 1000)
+            evidence = advance_trust_evidence(
+                snapshot,
+                previous_snapshot=previous,
+            )
+            snapshot["trust_evidence"] = evidence
+            previous = snapshot
+
+        self.assertEqual("promoted", evidence["status"])
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            key_dir = Path(tmp) / "keys"
+            data_dir.mkdir()
+            key_dir.mkdir()
+            path = data_dir / "snapshot.json"
+            auth_key = key_dir / "sidecar.key"
+            auth_key.write_bytes(b"k" * 32)
+            write_snapshot_fixture(path, snapshot)
+            write_snapshot_trust_state(
+                path,
+                evidence,
+                expected_snapshot=snapshot,
+                auth_key_file=auth_key,
+            )
+            loaded = load_snapshot_fixture(path, auth_key_file=auth_key)
+
+        status = build_market_data_status(
+            loaded,
+            now_ms=parse_timestamp_ms(snapshot["captured_at"]),
+        )
+        self.assertEqual("promoted", status["trust_evidence"]["status"])
 
     def test_legacy_fixture_without_evidence_remains_compatible_and_collecting(self):
         snapshot = json.loads(

@@ -2887,8 +2887,6 @@
       const readiness = ((report.full_system_surface || {}).release_readiness || {});
       const currentPublicData = hasCurrentPublicData(data, meta);
       const trustedCurrent = currentPublicData && trust.verdict === "trusted";
-      const productionTrust = ((data.trust_evidence || {}).production_gate || {});
-      const productionMarketReady = productionTrust.ready === true;
 
       setBoundary(
         "service-boundary",
@@ -2904,16 +2902,12 @@
         "market-evidence-state",
         meta.fallback || !currentPublicData
           ? "市场证据不可用"
-          : trustedCurrent && productionMarketReady
-          ? "市场证据生产就绪"
           : trustedCurrent
           ? "研究证据可信"
           : "证据采集中",
         "market-evidence-note",
         meta.fallback || !currentPublicData
           ? "需要当前、合约有效且未过期的公共市场快照。"
-          : trustedCurrent && productionMarketReady
-          ? "质量、feed 图、WebSocket gap/resync 与连续观察证据均已通过。"
           : trustedCurrent
           ? "当前快照可用于研究；生产发布仍需 WebSocket gap/resync、24 小时 soak 与连续 7 天证据。"
           : "当前快照质量通过，正在累计连续合格观察证据。",

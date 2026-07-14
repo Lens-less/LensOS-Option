@@ -270,7 +270,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit_json(report, compact=args.compact)
             return EXIT_OK
     except Exception as exc:  # noqa: BLE001 - CLI hard-error mapping
-        print(json.dumps({"error": str(exc), "type": type(exc).__name__}), file=sys.stderr)
+        print(
+            json.dumps(
+                {"error": str(exc), "type": type(exc).__name__},
+                allow_nan=False,
+            ),
+            file=sys.stderr,
+        )
         return EXIT_HARD_ERROR
 
     parser.error(f"unsupported command: {args.command}")
@@ -423,12 +429,19 @@ def _surface_payload(command: str, report: dict) -> dict:
     if command in {"fit-surface", "surface-status"}:
         return report["vol_surface_status"]
     if command in {"build-features", "feature-status"}:
+        calibration = report["walk_forward_calibration"]
         return {
             "schema_version": "feature_status.v1",
             "regime": report["permission_state"],
-            "calibration_features": report["walk_forward_calibration"][
-                "feature_standardization"
-            ],
+            "calibration_features": {
+                "status": calibration.get("status", "unavailable"),
+                "evidence_class": calibration.get("evidence_class", "unavailable"),
+                "reason_code": calibration.get(
+                    "reason_code", "CALIBRATION_EVIDENCE_UNAVAILABLE"
+                ),
+                "policy_doc": calibration.get("policy_doc"),
+                "features": calibration.get("feature_standardization") or [],
+            },
         }
     if command == "calibrate":
         return report["walk_forward_calibration"]
@@ -448,7 +461,12 @@ def _emit_json(
     output: str | None = None,
     quiet: bool = False,
 ) -> None:
-    text = json.dumps(payload, indent=None if compact else 2, sort_keys=True)
+    text = json.dumps(
+        payload,
+        indent=None if compact else 2,
+        sort_keys=True,
+        allow_nan=False,
+    )
     if output:
         path = Path(output)
         path.parent.mkdir(parents=True, exist_ok=True)

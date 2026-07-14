@@ -13,10 +13,13 @@ import json
 import math
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+from .pnl import inverse_long_call_settlement_coin
 
 HISTORICAL_REPORT_SCHEMA_VERSION = "historical_reconciliation_report.v1"
 FAILURE_CODES = {
@@ -43,6 +46,7 @@ DEFAULT_RECONCILIATION_CONFIG = {
     "default_tick_size": 0.5,
     "default_contract_size": 1.0,
 }
+RECONCILIATION_CONFIG_FIELDS = frozenset(DEFAULT_RECONCILIATION_CONFIG)
 
 MONTHS = {
     "JAN": 1,
@@ -127,6 +131,7 @@ class CanonicalHistoricalQuote:
     ask_iv: float
     mark_iv: float
     model_iv: float | None
+    iv_unit: str
     underlying_price: float
     underlying_index: str
     open_interest: float
@@ -159,6 +164,7 @@ class CanonicalHistoricalQuote:
             "ask_iv": self.ask_iv,
             "mark_iv": self.mark_iv,
             "model_iv": self.model_iv,
+            "iv_unit": self.iv_unit,
             "underlying_price": self.underlying_price,
             "underlying_index": self.underlying_index,
             "open_interest": self.open_interest,
@@ -340,7 +346,7 @@ def build_historical_reconciliation_report(
         "blocks_downstream": decision != "ELIGIBLE",
     }
 
-    return {
+    report = {
         "schema_version": HISTORICAL_REPORT_SCHEMA_VERSION,
         "generated_at": report_generated_at,
         "raw_data_provenance": {
@@ -386,6 +392,8 @@ def build_historical_reconciliation_report(
         },
         "failures": failures,
     }
+    _assert_finite_json_numbers(report)
+    return report
 
 
 def query_eligible_canonical_quotes(
@@ -434,16 +442,89 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout,
         indent=None if args.compact else 2,
         sort_keys=True,
+        allow_nan=False,
     )
     sys.stdout.write("\n")
     return 0
 
 
-def _merge_config(config: dict[str, Any] | None) -> dict[str, Any]:
-    merged = dict(DEFAULT_RECONCILIATION_CONFIG)
-    if config:
-        merged.update(config)
-    return merged
+def _merge_config(config: dict[str, Any] | None) -> dict[str, float]:
+    if config is not None and not isinstance(config, Mapping):
+        raise ValueError("config must be a mapping")
+    supplied_config: Mapping[Any, Any] = config or {}
+    unknown_fields = set(supplied_config) - RECONCILIATION_CONFIG_FIELDS
+    if unknown_fields:
+        raise ValueError(
+            "unknown reconciliation config fields: "
+            + ", ".join(sorted(str(field) for field in unknown_fields))
+        )
+
+    merged: dict[str, Any] = dict(DEFAULT_RECONCILIATION_CONFIG)
+    merged.update(supplied_config)
+    validated = {
+        "timestamp_alignment_seconds": _strict_config_nonnegative_float(
+            merged["timestamp_alignment_seconds"],
+            "timestamp_alignment_seconds",
+        ),
+        "min_iv": _strict_config_nonnegative_float(
+            merged["min_iv"],
+            "min_iv",
+        ),
+        "max_iv": _strict_config_positive_float(
+            merged["max_iv"],
+            "max_iv",
+        ),
+        "default_tick_size": _strict_config_positive_float(
+            merged["default_tick_size"],
+            "default_tick_size",
+        ),
+        "default_contract_size": _strict_config_positive_float(
+            merged["default_contract_size"],
+            "default_contract_size",
+        ),
+    }
+    for field_name in (
+        "max_mark_mid_drift_ratio",
+        "max_vendor_mid_diff_ratio",
+        "max_surface_no_arb_error",
+        "max_payoff_bps_error",
+        "quantity_tolerance_contracts",
+    ):
+        validated[field_name] = _strict_config_nonnegative_float(
+            merged[field_name],
+            field_name,
+        )
+    if validated["max_surface_no_arb_error"] > 1.0:
+        raise ValueError("max_surface_no_arb_error must not exceed 1")
+    if validated["max_payoff_bps_error"] > 10000.0:
+        raise ValueError("max_payoff_bps_error must not exceed 10000")
+    if validated["min_iv"] > validated["max_iv"]:
+        raise ValueError("min_iv must not exceed max_iv")
+    return validated
+
+
+def _strict_config_nonnegative_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be finite and non-negative")
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{field_name} must be finite and non-negative") from exc
+    if not math.isfinite(number) or number < 0.0:
+        raise ValueError(f"{field_name} must be finite and non-negative")
+    return number
+
+
+def _strict_config_positive_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be finite and positive")
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{field_name} must be finite and positive") from exc
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError(f"{field_name} must be finite and positive")
+    return number
 
 
 def _quote_id(row: dict[str, Any], index: int) -> str:
@@ -530,11 +611,21 @@ def _canonicalize_option_row(
     bid = _non_negative_float(row.get("bid"), "bid")
     ask = _non_negative_float(row.get("ask"), "ask")
     mark = _non_negative_float(row.get("mark"), "mark")
-    bid_iv = _normalize_iv(row.get("bid_iv"), "bid_iv")
-    ask_iv = _normalize_iv(row.get("ask_iv"), "ask_iv")
-    mark_iv = _normalize_iv(row.get("mark_iv", row.get("mark_iv", (bid_iv + ask_iv) / 2.0)), "mark_iv")
+    iv_unit = _canonical_iv_unit(row.get("iv_unit"))
+    bid_iv = _normalize_iv(row.get("bid_iv"), "bid_iv", iv_unit=iv_unit)
+    ask_iv = _normalize_iv(row.get("ask_iv"), "ask_iv", iv_unit=iv_unit)
+    mark_iv_value = row.get("mark_iv")
+    mark_iv = (
+        (bid_iv + ask_iv) / 2.0
+        if mark_iv_value is None
+        else _normalize_iv(mark_iv_value, "mark_iv", iv_unit=iv_unit)
+    )
     model_iv_value = row.get("model_iv")
-    model_iv = None if model_iv_value is None else _normalize_iv(model_iv_value, "model_iv")
+    model_iv = (
+        None
+        if model_iv_value is None
+        else _normalize_iv(model_iv_value, "model_iv", iv_unit=iv_unit)
+    )
     mid = _mid_price(row.get("mid"), bid, ask)
     open_interest = _normalize_contract_quantity(
         row.get("open_interest", row.get("oi")),
@@ -574,6 +665,7 @@ def _canonicalize_option_row(
         ask_iv=ask_iv,
         mark_iv=mark_iv,
         model_iv=model_iv,
+        iv_unit="fraction",
         underlying_price=underlying_price,
         underlying_index=str(row.get("underlying_index", "DERIBIT_INDEX")),
         open_interest=open_interest,
@@ -661,8 +753,8 @@ def _record_row_level_failures(
             detail="recorded payoff does not match replayed settlement payoff",
         )
 
-    surface_no_arb_error = raw.get("surface_no_arb_error")
-    if surface_no_arb_error is not None and float(surface_no_arb_error) > config["max_surface_no_arb_error"]:
+    surface_no_arb_failure = _surface_no_arb_failure_detail(raw, config)
+    if surface_no_arb_failure is not None:
         _record_failure(
             failures,
             quote_failures,
@@ -670,21 +762,34 @@ def _record_row_level_failures(
             code="SURFACE_NO_ARB_FAILED",
             scope="snapshot",
             quote=quote,
-            detail="surface no-arb error exceeds threshold",
+            detail=surface_no_arb_failure,
         )
         quarantined_snapshots.add(quote.snapshot_key)
 
-    if raw.get("surface_no_arb_pass") is False:
-        _record_failure(
-            failures,
-            quote_failures,
-            quarantined_quotes,
-            code="SURFACE_NO_ARB_FAILED",
-            scope="snapshot",
-            quote=quote,
-            detail="surface no-arb flag is false",
-        )
-        quarantined_snapshots.add(quote.snapshot_key)
+
+def _surface_no_arb_failure_detail(
+    raw: dict[str, Any],
+    config: dict[str, Any],
+) -> str | None:
+    surface_no_arb_error = raw.get("surface_no_arb_error")
+    if isinstance(surface_no_arb_error, bool) or not isinstance(
+        surface_no_arb_error,
+        (int, float),
+    ):
+        return "surface no-arb error must be finite numeric"
+    if not math.isfinite(float(surface_no_arb_error)):
+        return "surface no-arb error must be finite numeric"
+    if float(surface_no_arb_error) < 0.0:
+        return "surface no-arb error must be finite and non-negative"
+    if float(surface_no_arb_error) > config["max_surface_no_arb_error"]:
+        return "surface no-arb error exceeds threshold"
+
+    surface_no_arb_pass = raw.get("surface_no_arb_pass")
+    if not isinstance(surface_no_arb_pass, bool):
+        return "surface no-arb flag must be boolean true"
+    if not surface_no_arb_pass:
+        return "surface no-arb flag is false"
+    return None
 
 
 def _record_group_level_failures(
@@ -848,7 +953,7 @@ def _parse_timestamp_object(value: str) -> datetime:
     normalized = value.replace("Z", "+00:00")
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        raise ValueError("timestamp must include an explicit timezone")
     return parsed.astimezone(timezone.utc)
 
 
@@ -856,11 +961,24 @@ def _isoformat(value: datetime) -> str:
     return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _normalize_iv(value: Any, field_name: str) -> float:
+def _canonical_iv_unit(value: Any) -> str:
+    if not isinstance(value, str):
+        raise HistoricalNormalizationError(
+            "IV_SANITY_FAILED",
+            "iv_unit must explicitly declare fraction or percent_points",
+        )
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized not in {"fraction", "percent_points"}:
+        raise HistoricalNormalizationError(
+            "IV_SANITY_FAILED",
+            "iv_unit must explicitly declare fraction or percent_points",
+        )
+    return normalized
+
+
+def _normalize_iv(value: Any, field_name: str, *, iv_unit: str) -> float:
     iv = _non_negative_float(value, field_name)
-    if iv > 5.0:
-        iv = iv / 100.0
-    return iv
+    return iv if iv_unit == "fraction" else iv / 100.0
 
 
 def _normalize_contract_quantity(
@@ -893,7 +1011,13 @@ def _normalize_contract_quantity(
 
 def _mid_price(raw_mid: Any, bid: float, ask: float) -> float:
     if raw_mid is None:
-        return (bid + ask) / 2.0
+        midpoint = (bid / 2.0) + (ask / 2.0)
+        if not math.isfinite(midpoint):
+            raise HistoricalNormalizationError(
+                "METADATA_MAPPING_FAILED",
+                "mid must remain finite",
+            )
+        return midpoint
     return _non_negative_float(raw_mid, "mid")
 
 
@@ -923,9 +1047,14 @@ def _float(value: Any, field_name: str) -> float:
             "METADATA_MAPPING_FAILED",
             f"{field_name} is required",
         )
+    if isinstance(value, bool):
+        raise HistoricalNormalizationError(
+            "METADATA_MAPPING_FAILED",
+            f"{field_name} must be numeric, not boolean",
+        )
     try:
         number = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise HistoricalNormalizationError(
             "METADATA_MAPPING_FAILED",
             f"{field_name} must be numeric",
@@ -945,11 +1074,27 @@ def _validate_expected_contract_mapping(
 ) -> bool:
     tolerance = config["quantity_tolerance_contracts"]
     expected_oi = raw.get("expected_open_interest_contracts")
-    if expected_oi is not None and abs(float(expected_oi) - quote.open_interest) > tolerance:
-        return False
+    if expected_oi is not None:
+        try:
+            normalized_expected_oi = _float(
+                expected_oi,
+                "expected_open_interest_contracts",
+            )
+        except HistoricalNormalizationError:
+            return False
+        if abs(normalized_expected_oi - quote.open_interest) > tolerance:
+            return False
     expected_volume = raw.get("expected_volume_contracts")
-    if expected_volume is not None and abs(float(expected_volume) - quote.volume_24h) > tolerance:
-        return False
+    if expected_volume is not None:
+        try:
+            normalized_expected_volume = _float(
+                expected_volume,
+                "expected_volume_contracts",
+            )
+        except HistoricalNormalizationError:
+            return False
+        if abs(normalized_expected_volume - quote.volume_24h) > tolerance:
+            return False
     return True
 
 
@@ -963,20 +1108,64 @@ def _validate_payoff_replay(
     if delivery_price_raw is None or recorded_long_payoff_raw is None:
         return True
 
-    delivery_price = float(delivery_price_raw)
-    recorded_long_payoff = float(recorded_long_payoff_raw)
+    try:
+        delivery_price = _float(delivery_price_raw, "delivery_price")
+        recorded_long_payoff = _float(
+            recorded_long_payoff_raw,
+            "recorded_long_payoff",
+        )
+    except HistoricalNormalizationError:
+        return False
+    if delivery_price <= 0.0 or recorded_long_payoff < 0.0:
+        return False
     intrinsic = max(delivery_price - quote.strike, 0.0)
     if quote.settlement_currency == quote.currency:
-        expected_long_payoff = intrinsic / delivery_price if delivery_price > 0 else 0.0
+        expected_long_payoff = inverse_long_call_settlement_coin(
+            quote.strike,
+            delivery_price,
+        )
+        tolerance = max(1e-10, 1e-7 * abs(expected_long_payoff))
     else:
         expected_long_payoff = intrinsic
-
-    tolerance = (
-        config["max_payoff_bps_error"]
-        / 10000.0
-        * max(quote.strike, delivery_price, 1.0)
+        tolerance = (
+            config["max_payoff_bps_error"]
+            / 10000.0
+            * max(quote.strike, delivery_price, 1.0)
+        )
+    error = abs(recorded_long_payoff - expected_long_payoff)
+    return (
+        math.isfinite(expected_long_payoff)
+        and math.isfinite(tolerance)
+        and math.isfinite(error)
+        and error <= tolerance
     )
-    return abs(recorded_long_payoff - expected_long_payoff) <= tolerance
+
+
+def _assert_finite_json_numbers(
+    value: Any,
+    *,
+    path: str = "historical reconciliation report",
+) -> None:
+    if isinstance(value, bool) or value is None:
+        return
+    if isinstance(value, (int, float)):
+        try:
+            finite = math.isfinite(float(value))
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError(
+                "historical reconciliation report contains non-finite number "
+                f"at {path}"
+            )
+        return
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            _assert_finite_json_numbers(nested, path=f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            _assert_finite_json_numbers(nested, path=f"{path}[{index}]")
 
 
 if __name__ == "__main__":

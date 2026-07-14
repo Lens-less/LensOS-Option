@@ -5,7 +5,7 @@ from crypto_options_report.full_surface import build_full_system_surface_report
 
 
 class FullSurfaceAccountEvidenceTests(unittest.TestCase):
-    def test_fresh_live_account_evidence_is_ready_while_portfolio_stays_blocked(self):
+    def test_fresh_live_account_evidence_does_not_imply_release_authorization(self):
         generated_at = "2026-07-14T00:00:30Z"
         account_status = build_account_status(
             generated_at=generated_at,
@@ -58,28 +58,18 @@ class FullSurfaceAccountEvidenceTests(unittest.TestCase):
                 },
             },
         )
-        gates = {
-            gate["name"]: gate
-            for gate in surface["release_readiness"]["prerequisites"]
-        }
-
-        account_gate = gates["private_account_replay_contract"]
-        self.assertTrue(account_gate["satisfied"])
-        self.assertEqual("ready", account_gate["release_state"])
-        self.assertEqual("verified_local", account_gate["evidence_state"])
-        self.assertEqual("live_read_only", account_gate["evidence_class"])
-        self.assertEqual([], account_gate["reason_codes"])
-
-        portfolio_gate = gates["portfolio_risk"]
-        self.assertFalse(portfolio_gate["satisfied"])
-        self.assertEqual("awaiting_external", portfolio_gate["release_state"])
-        self.assertIn(
-            "portfolio_risk",
-            surface["release_readiness"]["missing_prerequisites"],
-        )
-        self.assertNotIn(
-            "private_account_replay_contract",
-            surface["release_readiness"]["missing_prerequisites"],
+        readiness = surface["release_readiness"]
+        self.assertEqual("NO-GO", readiness["status"])
+        self.assertFalse(readiness["paper_mode_allowed"])
+        self.assertFalse(readiness["manual_execution_allowed"])
+        self.assertEqual(1, len(readiness["prerequisites"]))
+        gate = readiness["prerequisites"][0]
+        self.assertEqual("external_release_authorization", gate["name"])
+        self.assertFalse(gate["satisfied"])
+        self.assertEqual("awaiting_external", gate["release_state"])
+        self.assertEqual(
+            ["external_release_authorization"],
+            readiness["missing_prerequisites"],
         )
 
 

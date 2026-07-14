@@ -1,4 +1,5 @@
 import json
+import math
 import subprocess
 import sys
 import unittest
@@ -62,6 +63,179 @@ class HistoricalReconciliationTests(unittest.TestCase):
             "quality_status",
         }
         self.assertTrue(required_quote_keys.issubset(quote))
+
+    def test_surface_no_arb_evidence_is_explicit_finite_and_fail_closed(self):
+        cases = (
+            (
+                "surface_no_arb_error=false",
+                lambda row: row.__setitem__("surface_no_arb_error", False),
+            ),
+            (
+                "surface_no_arb_error=nan",
+                lambda row: row.__setitem__("surface_no_arb_error", float("nan")),
+            ),
+            (
+                "surface_no_arb_error=-inf",
+                lambda row: row.__setitem__("surface_no_arb_error", float("-inf")),
+            ),
+            (
+                "surface_no_arb_error=negative",
+                lambda row: row.__setitem__("surface_no_arb_error", -0.01),
+            ),
+            (
+                "surface_no_arb_error=string",
+                lambda row: row.__setitem__("surface_no_arb_error", "0.01"),
+            ),
+            (
+                "surface_no_arb_error=missing",
+                lambda row: row.pop("surface_no_arb_error", None),
+            ),
+            (
+                "surface_no_arb_pass=false",
+                lambda row: row.__setitem__("surface_no_arb_pass", False),
+            ),
+            (
+                "surface_no_arb_pass=zero",
+                lambda row: row.__setitem__("surface_no_arb_pass", 0),
+            ),
+            (
+                "surface_no_arb_pass=one",
+                lambda row: row.__setitem__("surface_no_arb_pass", 1),
+            ),
+            (
+                "surface_no_arb_pass=string",
+                lambda row: row.__setitem__("surface_no_arb_pass", "true"),
+            ),
+            (
+                "surface_no_arb_pass=missing",
+                lambda row: row.pop("surface_no_arb_pass", None),
+            ),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label):
+                payload = load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")
+                for row in payload["rows"]:
+                    row["surface_no_arb_error"] = 0.01
+                    row["surface_no_arb_pass"] = True
+                    mutate(row)
+
+                report = build_historical_reconciliation_report(payload["rows"])
+
+                self.assertEqual("INELIGIBLE", report["eligibility"]["decision"])
+                self.assertFalse(report["eligibility"]["training_allowed"])
+                self.assertFalse(report["eligibility"]["backtest_allowed"])
+                self.assertEqual(0, report["summary"]["eligible_quotes"])
+                self.assertIn(
+                    "SURFACE_NO_ARB_FAILED",
+                    report["summary"]["failure_counts"],
+                )
+
+    def test_reconciliation_config_is_strict_finite_and_semantically_bounded(self):
+        invalid_configs = (
+            ([], "config must be a mapping"),
+            ({"unknown_threshold": 1.0}, "unknown reconciliation config fields"),
+            ({"timestamp_alignment_seconds": True}, "timestamp_alignment_seconds must be finite and non-negative"),
+            ({"min_iv": "0.01"}, "min_iv must be finite and non-negative"),
+            ({"max_iv": float("nan")}, "max_iv must be finite and positive"),
+            ({"max_mark_mid_drift_ratio": float("inf")}, "max_mark_mid_drift_ratio must be finite and non-negative"),
+            ({"max_vendor_mid_diff_ratio": -0.01}, "max_vendor_mid_diff_ratio must be finite and non-negative"),
+            ({"max_surface_no_arb_error": float("nan")}, "max_surface_no_arb_error must be finite and non-negative"),
+            ({"max_surface_no_arb_error": 1e308}, "max_surface_no_arb_error must not exceed 1"),
+            ({"max_payoff_bps_error": -1.0}, "max_payoff_bps_error must be finite and non-negative"),
+            ({"max_payoff_bps_error": 1e308}, "max_payoff_bps_error must not exceed 10000"),
+            ({"quantity_tolerance_contracts": False}, "quantity_tolerance_contracts must be finite and non-negative"),
+            ({"default_tick_size": 0.0}, "default_tick_size must be finite and positive"),
+            ({"default_contract_size": -1.0}, "default_contract_size must be finite and positive"),
+            ({"min_iv": 2.0, "max_iv": 1.0}, "min_iv must not exceed max_iv"),
+        )
+        rows = load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")["rows"]
+
+        for config, expected_message in invalid_configs:
+            with self.subTest(config=config):
+                with self.assertRaisesRegex(ValueError, expected_message):
+                    build_historical_reconciliation_report(rows, config=config)
+
+    def test_every_reconciliation_config_field_rejects_coercive_values(self):
+        nonnegative_fields = (
+            "timestamp_alignment_seconds",
+            "min_iv",
+            "max_mark_mid_drift_ratio",
+            "max_vendor_mid_diff_ratio",
+            "max_surface_no_arb_error",
+            "max_payoff_bps_error",
+            "quantity_tolerance_contracts",
+        )
+        positive_fields = (
+            "max_iv",
+            "default_tick_size",
+            "default_contract_size",
+        )
+        nonnegative_invalid_values = (
+            False,
+            True,
+            "0.1",
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            -0.1,
+        )
+        positive_invalid_values = (*nonnegative_invalid_values, 0.0)
+        rows = load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")["rows"]
+
+        for field_name in nonnegative_fields:
+            for invalid_value in nonnegative_invalid_values:
+                with self.subTest(
+                    field_name=field_name,
+                    invalid_value=invalid_value,
+                ):
+                    with self.assertRaises(ValueError):
+                        build_historical_reconciliation_report(
+                            rows,
+                            config={field_name: invalid_value},
+                        )
+        for field_name in positive_fields:
+            for invalid_value in positive_invalid_values:
+                with self.subTest(
+                    field_name=field_name,
+                    invalid_value=invalid_value,
+                ):
+                    with self.assertRaises(ValueError):
+                        build_historical_reconciliation_report(
+                            rows,
+                            config={field_name: invalid_value},
+                        )
+
+        report = build_historical_reconciliation_report(
+            rows,
+            config={
+                "timestamp_alignment_seconds": 0.0,
+                "min_iv": 0.0,
+                "max_iv": 5.0,
+                "max_mark_mid_drift_ratio": 0.0,
+                "max_vendor_mid_diff_ratio": 0.0,
+                "max_surface_no_arb_error": 0.0,
+                "max_payoff_bps_error": 0.0,
+                "quantity_tolerance_contracts": 0.0,
+                "default_tick_size": 0.5,
+                "default_contract_size": 1.0,
+            },
+        )
+        json.dumps(report, allow_nan=False)
+
+    def test_large_finite_quotes_use_overflow_safe_midpoints_and_strict_json(self):
+        rows = load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")["rows"]
+        for row in rows:
+            row["bid"] = 1e308
+            row["ask"] = 1e308
+            row["mark"] = 1e308
+
+        report = build_historical_reconciliation_report(rows)
+
+        self.assertEqual("ELIGIBLE", report["eligibility"]["decision"])
+        mids = [quote["mid"] for quote in report["canonical_data"]["eligible_quotes"]]
+        self.assertEqual([1e308, 1e308], mids)
+        self.assertTrue(all(math.isfinite(mid) for mid in mids))
+        json.dumps(report, allow_nan=False)
 
     def test_failure_fixtures_cover_each_reconciliation_code(self):
         scenarios = load_historical_fixture(FIXTURE_DIR / "failure_fixtures.json")["scenarios"]

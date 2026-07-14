@@ -68,32 +68,59 @@ jobs:
           docker run --rm crypto-options-research-console:ci \
             python -m crypto_options_report.snapshot_sidecar --help >/dev/null
           docker run --detach --name crypto-options-research-console-ci \
+            --env CRYPTO_OPTIONS_API_ALLOW_REMOTE=1 \
             --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
             --publish 127.0.0.1:18000:8000 \
-            crypto-options-research-console:ci
+            crypto-options-research-console:ci \
+            python -m crypto_options_report.api --runtime-profile production \
+              --host 0.0.0.0 --port 8000
           trap 'docker logs crypto-options-research-console-ci; docker rm --force crypto-options-research-console-ci' EXIT
 
-          ready=false
+          alive=false
           for attempt in {1..30}; do
-            if curl --fail --silent --show-error http://127.0.0.1:18000/readyz >ready.json; then
-              ready=true
+            if curl --fail --silent --show-error http://127.0.0.1:18000/livez >/dev/null; then
+              alive=true
               break
             fi
             sleep 1
           done
-          test "$ready" = true
+          test "$alive" = true
+          ready_status="$(curl --silent --show-error --output ready.json --write-out '%{http_code}' http://127.0.0.1:18000/readyz)"
+          test "$ready_status" = 503
           python - <<'PY'
           import json
 
           with open("ready.json", encoding="utf-8") as handle:
               ready = json.load(handle)
-          assert ready == {
-              "live_order_adapter_available": False,
-              "product_release": "NO-GO",
-              "research_only": True,
-              "runtime_profile": "production",
-              "service_ready": True,
+
+          assert ready["runtime_profile"] == "production"
+          assert ready["service_ready"] is True
+          assert ready["research_only"] is True
+          assert ready["product_release"] == "NO-GO"
+          assert ready["live_order_adapter_available"] is False
+
+          fail_closed_fields = {
+              "ready",
+              "dependencies_ready",
+              "market_provider_ready",
+              "last_trusted_snapshot_ready",
+              "market_data_ready",
+              "account_data_ready",
+              "store_ready",
+              "queue_ready",
+              "model_ready",
           }
+          assert all(ready.get(field) is False for field in fail_closed_fields)
+
+          required_reasons = {
+              "MARKET_PROVIDER_NOT_READY",
+              "MARKET_DATA_NOT_READY",
+              "ACCOUNT_DATA_NOT_READY",
+              "BACKTEST_STORE_NOT_READY",
+              "BACKTEST_QUEUE_NOT_READY",
+              "MODEL_NOT_READY",
+          }
+          assert required_reasons.issubset(set(ready["reason_codes"]))
           PY
           curl --fail --silent --show-error http://127.0.0.1:18000/dashboard.html >/dev/null
           healthy=false

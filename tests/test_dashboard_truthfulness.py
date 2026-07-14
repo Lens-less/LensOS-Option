@@ -36,6 +36,20 @@ class DashboardTruthfulnessTests(unittest.TestCase):
         self.assertIn("scrollbar-width: none", html)
         self.assertIn(".nav::-webkit-scrollbar", html)
 
+    def test_research_trust_never_claims_production_market_evidence(self):
+        html = dashboard_page_html()
+
+        self.assertIn("研究证据可信", html)
+        self.assertIn(
+            "生产发布仍需 WebSocket gap/resync、24 小时 soak 与连续 7 天证据。",
+            html,
+        )
+        self.assertNotIn("市场证据生产就绪", html)
+        self.assertNotIn(
+            "WebSocket gap/resync 与连续观察证据均已通过",
+            html,
+        )
+
     def test_operational_boundary_separates_service_market_release_and_policy(self):
         report = self._report()
         report["data_trust"] = {

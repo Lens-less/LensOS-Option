@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 from crypto_options_report.api import build_api_report, smoke_once
 from crypto_options_report.contract import (
@@ -34,6 +35,36 @@ class ResearchReportContractTests(unittest.TestCase):
         self.assertEqual("HALT", report["risk_state"])
         self.assertEqual("pass", report["pnl_evidence"]["status"])
 
+    def test_contract_rejects_non_finite_account_projection_values(self):
+        report = generate_research_report(
+            generated_at="2026-07-07T00:00:00Z",
+            account_scenario="green",
+        )
+        report["account_status"]["projected_margin"]["nav_usd"] = float("nan")
+
+        self.assertIn(
+            "account_status.projected_margin.nav_usd must be finite numeric or null",
+            validate_report_contract(report),
+        )
+
+    def test_contract_rejects_ev_summary_that_disagrees_with_ranked_candidates(self):
+        report = generate_research_report(generated_at="2026-07-07T00:00:00Z")
+        summary = report["ev_candidate_scanner"]["summary"]
+        summary.update(
+            {
+                "candidates_scanned": 999,
+                "review_candidates": 999,
+                "top_candidate_id": "fake",
+                "top_candidate_action": "REVIEW",
+            }
+        )
+
+        errors = validate_report_contract(report)
+        self.assertIn(
+            "ev_candidate_scanner.summary must reconcile with ranked_candidates",
+            errors,
+        )
+
     def test_unavailable_and_pending_prerequisites_have_distinct_reason_codes(self):
         report = generate_research_report(generated_at="2026-07-07T00:00:00Z")
 
@@ -48,7 +79,7 @@ class ResearchReportContractTests(unittest.TestCase):
             report["account_status"]["reason_code"],
         )
         self.assertEqual(
-            "CALIBRATION_PROMOTION_PENDING",
+            "CALIBRATION_NOT_IMPLEMENTED",
             report["calibration_status"]["reason_code"],
         )
         self.assertEqual("BACKTEST_NOT_RUN", report["backtest_status"]["reason_code"])
@@ -93,7 +124,7 @@ class ResearchReportContractTests(unittest.TestCase):
         self.assertIn("backtest_status.status must be not_run or completed", errors)
         self.assertIn("completed backtest_status must name its artifact", errors)
 
-    def test_validator_rejects_forbidden_actionable_aliases(self):
+    def test_validator_allows_domain_fields_but_rejects_execution_payloads(self):
         report = generate_research_report(generated_at="2026-07-07T00:00:00Z")
         report["candidate_preview"] = {
             "symbol": "BTC",
@@ -104,6 +135,14 @@ class ResearchReportContractTests(unittest.TestCase):
             "expiry": "2026-07-31",
         }
 
+        self.assertEqual([], validate_report_contract(report))
+
+        report["candidate_preview"]["order_instructions"] = {
+            "side": "sell",
+            "quantity": 1,
+            "limit_price": 10,
+        }
+        report["candidate_preview"]["recommended_size"] = 1
         errors = validate_report_contract(report)
 
         self.assertTrue(errors)
@@ -322,17 +361,24 @@ class ResearchReportContractTests(unittest.TestCase):
             len(report["candidate_research"]["call_credit_spreads"]["eligible"]),
             0,
         )
-        self.assertEqual("validated", report["ev_candidate_scanner"]["status"])
-        self.assertGreater(
-            len(report["ev_candidate_scanner"]["ranked_candidates"]),
-            0,
+        self.assertEqual("unavailable", report["ev_candidate_scanner"]["status"])
+        self.assertEqual(
+            "MISSING_VALIDATED_PATH_RISK",
+            report["ev_candidate_scanner"]["reason_code"],
         )
-        self.assertEqual("validated", report["permission_state"]["status"])
+        self.assertEqual([], report["ev_candidate_scanner"]["ranked_candidates"])
+        self.assertEqual("blocked", report["permission_state"]["status"])
+        self.assertEqual("collecting", report["permission_state"]["collection_status"])
+        self.assertEqual(0.0, report["permission_state"]["sell_permission"])
+        self.assertIn(
+            "REGIME_TRUST_EVIDENCE_NOT_PROMOTED",
+            report["permission_state"]["reason_codes"],
+        )
         self.assertTrue(report["permission_state"]["label_is_report_only"])
         self.assertIn("primary_regime_label", report["permission_state"])
         self.assertIn("regime_scores", report["permission_state"])
 
-    def test_ev_candidate_scanner_ranks_research_only_candidates_without_trade_outputs(self):
+    def test_ev_candidate_scanner_is_unavailable_without_validated_path_artifact(self):
         report = generate_research_report(
             generated_at="2026-07-07T00:01:30Z",
             market_snapshot=self._load_fixture(),
@@ -341,125 +387,16 @@ class ResearchReportContractTests(unittest.TestCase):
 
         scanner = report["ev_candidate_scanner"]
         self.assertEqual([], validate_report_contract(report))
-        self.assertEqual("validated", scanner["status"])
-        self.assertEqual("UNCALIBRATED_RESEARCH_ONLY", scanner["score_status"])
+        self.assertEqual("unavailable", scanner["status"])
+        self.assertEqual("MISSING_VALIDATED_PATH_RISK", scanner["reason_code"])
+        self.assertEqual("UNAVAILABLE", scanner["score_status"])
+        self.assertFalse(scanner["path_risk_evidence"]["validated"])
+        self.assertIsNone(scanner["path_risk_evidence"]["artifact_id"])
         self.assertFalse(scanner["recommended_size_allowed"])
         self.assertFalse(scanner["trade_instruction_allowed"])
-        ranked = scanner["ranked_candidates"]
-        self.assertGreater(len(ranked), 0)
-        self.assertEqual(
-            sorted(
-                [candidate["ranking_score"] for candidate in ranked],
-                reverse=True,
-            ),
-            [candidate["ranking_score"] for candidate in ranked],
-        )
-        first = ranked[0]
-        self.assertIn(first["action"], {"RESEARCH_ONLY", "REVIEW", "REJECT"})
-        self.assertIn("p_touch", first["path_risk"])
-        self.assertIn("fair_physical_iv", first["fair_iv_diagnostics"])
-        self.assertNotIn("recommended_size", first)
-        self.assertNotIn("trade_instruction", first)
-
-    def test_ev_candidate_scanner_kills_non_positive_ev(self):
-        report = generate_research_report(
-            generated_at="2026-07-07T00:01:30Z",
-            market_snapshot=self._load_fixture(),
-            account_scenario="green",
-        )
-
-        candidate = report["ev_candidate_scanner"]["ranked_candidates"][0]
-        self.assertIn("NON_POSITIVE_EV", candidate["kill_conditions"])
-        self.assertEqual("REJECT", candidate["action"])
-
-    def test_ev_candidate_scanner_kills_bid_iv_below_fair_physical_iv(self):
-        snapshot = self._load_fixture()
-        row = snapshot["rows"][6]
-        row["ticker"]["bid_iv"] = 20.0
-
-        report = generate_research_report(
-            generated_at="2026-07-07T00:01:30Z",
-            market_snapshot=snapshot,
-            account_scenario="green",
-        )
-
-        candidate = next(
-            item
-            for item in report["ev_candidate_scanner"]["ranked_candidates"]
-            if item["candidate_id"] == "BTC-25JUL26-120000-C:naked"
-        )
-        self.assertIn("BID_IV_BELOW_FAIR_PHYSICAL_IV", candidate["kill_conditions"])
-        self.assertEqual("REJECT", candidate["action"])
-
-    def test_ev_candidate_scanner_kills_insufficient_depth(self):
-        snapshot = self._load_fixture()
-        row = snapshot["rows"][6]
-        row["ticker"]["best_bid_amount"] = 1.0
-        row["ticker"]["best_ask_amount"] = 1.0
-
-        report = generate_research_report(
-            generated_at="2026-07-07T00:01:30Z",
-            market_snapshot=snapshot,
-            account_scenario="green",
-        )
-
-        candidate = next(
-            item
-            for item in report["ev_candidate_scanner"]["ranked_candidates"]
-            if item["candidate_id"] == "BTC-25JUL26-120000-C:naked"
-        )
-        self.assertIn("INSUFFICIENT_DEPTH", candidate["kill_conditions"])
-
-    def test_ev_candidate_scanner_kills_breakout_state(self):
-        report = self._report_with_regime_inputs(
-            bear_trend_score=0.86,
-            range_score=0.24,
-            squeeze_score=0.18,
-            slow_bull_score=0.20,
-            fast_bull_breakout_score=0.74,
-            event_score=0.05,
-            dvol_percentile=0.46,
-            atm_iv_percentile=0.44,
-        )
-
-        candidate = report["ev_candidate_scanner"]["ranked_candidates"][0]
-        self.assertIn("BREAKOUT_KILL", candidate["kill_conditions"])
-        self.assertEqual("REJECT", candidate["action"])
-
-    def test_ev_candidate_scanner_kills_yellow_account_new_trades(self):
-        report = generate_research_report(
-            generated_at="2026-07-07T00:01:30Z",
-            market_snapshot=self._load_fixture(),
-            account_scenario="yellow",
-        )
-
-        candidate = report["ev_candidate_scanner"]["ranked_candidates"][0]
-        self.assertIn("YELLOW_NO_NEW_TRADES", candidate["kill_conditions"])
-        self.assertEqual("REJECT", candidate["action"])
-
-    def test_ev_candidate_scanner_kills_settlement_window_for_short_dated_candidates(self):
-        snapshot = self._load_fixture()
-        snapshot["captured_at"] = "2026-07-07T07:44:40Z"
-        # Keep required vol_index feed fresh relative to the mutated capture time.
-        feeds = snapshot.setdefault("feeds", {})
-        vol_index = dict(feeds.get("vol_index") or {})
-        vol_index["timestamp"] = "2026-07-07T07:44:30Z"
-        feeds["vol_index"] = vol_index
-        for row in snapshot["rows"]:
-            row["summary"]["creation_timestamp"] = 1783410280000
-            row["ticker"]["timestamp"] = 1783410280000
-
-        report = generate_research_report(
-            generated_at="2026-07-07T07:45:00Z",
-            market_snapshot=snapshot,
-            account_scenario="green",
-        )
-
-        self.assertEqual("validated", report["data_status"]["status"])
-        self.assertTrue(report["ev_candidate_scanner"]["ranked_candidates"])
-        candidate = report["ev_candidate_scanner"]["ranked_candidates"][0]
-        self.assertIn("SETTLEMENT_WINDOW_ACTIVE", candidate["kill_conditions"])
-        self.assertIn("PLACEHOLDER_PATH_RISK", candidate["kill_conditions"])
+        self.assertFalse(scanner["paper_manual_candidates_allowed"])
+        self.assertEqual([], scanner["ranked_candidates"])
+        self.assertEqual(0, scanner["summary"]["candidates_scanned"])
 
     def test_regime_scores_include_all_issue_008_dimensions(self):
         report = self._report_with_regime_inputs(
@@ -951,12 +888,28 @@ class ResearchReportContractTests(unittest.TestCase):
 
     def _report_with_regime_inputs(self, **regime_inputs):
         snapshot = self._load_fixture()
-        snapshot["regime_inputs"] = regime_inputs
-        return generate_research_report(
-            generated_at="2026-07-07T00:01:30Z",
-            market_snapshot=snapshot,
-            account_scenario="green",
-        )
+        # Exercise the cap/state engine with already-verified derived inputs.
+        # Production never reads handwritten regime_inputs from a snapshot; it
+        # reaches this branch only after authenticated rolling-history checks.
+        with (
+            patch(
+                "crypto_options_report.regime.bound_snapshot_trust_evidence",
+                return_value={"status": "promoted"},
+            ),
+            patch(
+                "crypto_options_report.regime._rolling_market_observations",
+                return_value=[{} for _ in range(20)],
+            ),
+            patch(
+                "crypto_options_report.regime._derive_rolling_regime_inputs",
+                return_value=(regime_inputs, []),
+            ),
+        ):
+            return generate_research_report(
+                generated_at="2026-07-07T00:01:30Z",
+                market_snapshot=snapshot,
+                account_scenario="green",
+            )
 
     def _forbidden_keys(self, value):
         if isinstance(value, dict):

@@ -34,6 +34,7 @@ DEFAULT_SURFACE_LIMITS = {
 }
 
 _NORMAL = NormalDist()
+_CANONICAL_SURFACE_IV_UNIT = "percent_points"
 
 
 def build_vol_surface_and_candidate_research(
@@ -53,8 +54,23 @@ def build_vol_surface_and_candidate_research(
     )
 
     expiry_groups: dict[str, list[dict[str, Any]]] = {}
-    for quote in normalized["quotes"]:
-        expiry_groups.setdefault(quote["expiry_date"], []).append(quote)
+    try:
+        iv_unit_hints = _surface_iv_unit_hints(market_snapshot)
+        for quote in normalized["quotes"]:
+            canonical_quote = _canonicalize_surface_quote_iv(
+                quote,
+                unit_hint=iv_unit_hints.get(
+                    str(quote.get("instrument_name") or "")
+                ),
+            )
+            expiry_groups.setdefault(canonical_quote["expiry_date"], []).append(
+                canonical_quote
+            )
+    except ValueError:
+        return (
+            _blocked_surface_status(reason_code="AMBIGUOUS_IV_UNIT"),
+            _blocked_candidate_research(reason_code="AMBIGUOUS_IV_UNIT"),
+        )
 
     expiries: list[dict[str, Any]] = []
     eligible_expiries: list[dict[str, Any]] = []
@@ -171,6 +187,96 @@ def _missing_surface_status() -> dict[str, Any]:
     }
 
 
+def _blocked_surface_status(*, reason_code: str) -> dict[str, Any]:
+    status = _missing_surface_status()
+    status.update(
+        status="blocked",
+        reason_code=reason_code,
+    )
+    return status
+
+
+def _surface_iv_unit_hints(
+    market_snapshot: dict[str, Any],
+) -> dict[str, str]:
+    hints: dict[str, str] = {}
+    for row in market_snapshot.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        ticker = row.get("ticker") or {}
+        summary = row.get("summary") or {}
+        instrument_name = str(
+            row.get("instrument_name")
+            or ticker.get("instrument_name")
+            or summary.get("instrument_name")
+            or ""
+        )
+        declared_units = {
+            _normalize_surface_iv_unit(unit)
+            for unit in (
+                row.get("iv_unit"),
+                ticker.get("iv_unit"),
+                summary.get("iv_unit"),
+            )
+            if unit not in (None, "")
+        }
+        if instrument_name and len(declared_units) == 1:
+            hints[instrument_name] = declared_units.pop()
+        elif instrument_name and declared_units:
+            hints[instrument_name] = "conflicting"
+    return hints
+
+
+def _canonicalize_surface_quote_iv(
+    quote: dict[str, Any],
+    *,
+    unit_hint: str | None,
+) -> dict[str, Any]:
+    canonical = dict(quote)
+    input_unit, provenance_source = _resolve_surface_iv_unit(
+        quote,
+        unit_hint=unit_hint,
+    )
+    multiplier = 100.0 if input_unit == "fraction" else 1.0
+    for field_name in ("bid_iv", "ask_iv", "mark_iv"):
+        value = quote.get(field_name)
+        if value is not None:
+            canonical[field_name] = float(value) * multiplier
+    canonical["iv_unit"] = _CANONICAL_SURFACE_IV_UNIT
+    canonical["iv_unit_provenance"] = {
+        "input_unit": input_unit,
+        "canonical_unit": _CANONICAL_SURFACE_IV_UNIT,
+        "source": provenance_source,
+    }
+    return canonical
+
+
+def _resolve_surface_iv_unit(
+    quote: dict[str, Any],
+    *,
+    unit_hint: str | None,
+) -> tuple[str, str]:
+    declared = quote.get("iv_unit") or unit_hint
+    if declared not in (None, ""):
+        return _normalize_surface_iv_unit(declared), "declared"
+    raise ValueError("surface IV unit is required")
+
+
+def _normalize_surface_iv_unit(declared: Any) -> str:
+    normalized = str(declared).strip().lower().replace("-", "_")
+    if normalized in {"fraction", "decimal", "ratio"}:
+        return "fraction"
+    if normalized in {
+        "percent",
+        "percentage_points",
+        "percent_points",
+        "pct",
+        "pct_points",
+    }:
+        return "percent_points"
+    raise ValueError(f"unsupported surface IV unit: {declared!r}")
+
+
 def _missing_candidate_research() -> dict[str, Any]:
     return _blocked_candidate_research(reason_code="MISSING_VALIDATED_MARKET_DATA")
 
@@ -224,12 +330,12 @@ def _build_expiry_surface(
         }
 
     fit = _fit_quadratic_iv_surface(valid_quotes)
-    no_arb = _evaluate_no_arb(valid_quotes)
-    fit_pass = fit["fit_quality_score"] >= DEFAULT_SURFACE_LIMITS["fit_quality_threshold"]
-    no_arb_pass = (
-        no_arb["passed"]
-        and no_arb["error"] <= DEFAULT_SURFACE_LIMITS["max_no_arb_error"]
+    no_arb = _evaluate_no_arb(
+        valid_quotes,
+        max_error=DEFAULT_SURFACE_LIMITS["max_no_arb_error"],
     )
+    fit_pass = fit["fit_quality_score"] >= DEFAULT_SURFACE_LIMITS["fit_quality_threshold"]
+    no_arb_pass = no_arb["passed"]
     reason_codes: list[str] = []
     if not fit_pass:
         reason_codes.append("SURFACE_FIT_QUALITY_TOO_LOW")
@@ -360,7 +466,11 @@ def _surface_iv(fit: dict[str, Any], log_moneyness: float) -> float:
     return _evaluate_quadratic(fit["coefficients"], scaled)
 
 
-def _evaluate_no_arb(valid_quotes: list[dict[str, Any]]) -> dict[str, Any]:
+def _evaluate_no_arb(
+    valid_quotes: list[dict[str, Any]],
+    *,
+    max_error: float,
+) -> dict[str, Any]:
     monotonic_errors = []
     convexity_errors = []
     reason_codes: list[str] = []
@@ -390,7 +500,7 @@ def _evaluate_no_arb(valid_quotes: list[dict[str, Any]]) -> dict[str, Any]:
     error = round(max(monotonic_errors + convexity_errors + [0.0]), 6)
     if error > 0 and not reason_codes:
         reason_codes.append("SURFACE_NO_ARBITRAGE_FAIL")
-    return {"passed": error <= 0.0, "error": error, "reason_codes": reason_codes}
+    return {"passed": error <= max_error, "error": error, "reason_codes": reason_codes}
 
 
 def _append_unique(values: list[str], value: str) -> None:
@@ -447,6 +557,8 @@ def _build_surface_point(
         "market_bid_iv": quote["bid_iv"],
         "market_ask_iv": quote["ask_iv"],
         "market_mark_iv": quote["mark_iv"],
+        "iv_unit": quote["iv_unit"],
+        "iv_unit_provenance": dict(quote["iv_unit_provenance"]),
         "premium_currency": premium_currency,
         "premium_unit": premium_unit,
         "settlement_currency": canonical_metadata.get("settlement_currency"),

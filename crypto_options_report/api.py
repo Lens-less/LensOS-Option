@@ -6,6 +6,7 @@ import argparse
 import http.client
 import ipaddress
 import json
+import math
 import os
 import re
 import socket
@@ -22,7 +23,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from .account_risk import AVAILABLE_ACCOUNT_SCENARIOS
+from .account_risk import (
+    AVAILABLE_ACCOUNT_SCENARIOS,
+    build_account_status,
+)
 from .contract import generate_research_report
 from .evidence_store import (
     BacktestIdempotencyConflict,
@@ -37,10 +41,18 @@ from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     HTTP_MAX_INSTRUMENT_LIMIT,
     default_http_fixture_roots,
+    build_market_data_status,
     fetch_deribit_option_chain_snapshot,
     load_snapshot_fixture,
     validate_deribit_base_url,
+    utc_timestamp as market_utc_timestamp,
 )
+from .sidecar_auth import (
+    authenticate_sidecar_payload,
+    authenticated_projection,
+    is_authenticated_sidecar_payload,
+)
+from .storage import read_json_object_from_regular_file
 
 REPORT_PATH = "/research/report"
 REPORT_ALIASES = {REPORT_PATH, "/report"}
@@ -61,6 +73,11 @@ GET_SURFACE_PATHS = {
 POST_SURFACE_PATHS = {"/backtest/run"}
 LIVENESS_PATHS = {"/health", "/livez"}
 READINESS_PATH = "/readyz"
+ALLOWED_HOSTS_ENV = "CRYPTO_OPTIONS_API_ALLOWED_HOSTS"
+TRUSTED_ORIGINS_ENV = "CRYPTO_OPTIONS_API_TRUSTED_ORIGINS"
+DERIBIT_POSITION_KINDS = frozenset(
+    {"future", "option", "spot", "future_combo", "option_combo"}
+)
 BACKTEST_REPORT_PREFIX = "/backtest/report/"
 BACKTEST_JOB_PREFIX = "/backtest/jobs/"
 BACKTEST_REQUEST_SCHEMA_VERSION = "backtest_run_request.v1"
@@ -175,7 +192,7 @@ class RuntimeConfig:
     def access_logging(self) -> bool:
         return self.production if self.access_log is None else self.access_log
 
-    def validate(self) -> "RuntimeConfig":
+    def validate(self, *, check_inputs: bool = True) -> "RuntimeConfig":
         if self.profile not in {"development", "production"}:
             raise ValueError("runtime profile must be development or production")
         if isinstance(self.max_workers, bool) or not 1 <= self.max_workers <= 64:
@@ -188,9 +205,9 @@ class RuntimeConfig:
             raise ValueError(
                 "production HTTP live fetch is unsupported; capture a snapshot with the CLI"
             )
-        if self.snapshot_fixture:
+        if check_inputs and self.snapshot_fixture:
             load_snapshot_fixture(self.snapshot_fixture)
-        if self.account_snapshot_fixture:
+        if check_inputs and self.account_snapshot_fixture:
             _load_account_snapshot(self.account_snapshot_fixture)
         if self.historical_fixture and not Path(self.historical_fixture).expanduser().is_file():
             raise ValueError("historical_fixture not found")
@@ -217,6 +234,11 @@ class ResearchHTTPServer(ThreadingHTTPServer):
     ) -> None:
         self.runtime = (runtime or RuntimeConfig()).validate()
         self._worker_slots = threading.BoundedSemaphore(self.runtime.max_workers)
+        try:
+            if ipaddress.ip_address(server_address[0]).version == 6:
+                self.address_family = socket.AF_INET6
+        except ValueError:
+            pass
         super().__init__(server_address, handler_class)
         self.backtest_jobs = (
             BacktestJobService(
@@ -394,7 +416,8 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         return self.server_version
 
     def do_GET(self) -> None:
-        self._start_request()
+        if not self._start_request():
+            return
         parsed = urlparse(self.path)
         if parsed.path in DASHBOARD_PAGE_ALIASES:
             self._write_html(HTTPStatus.OK, dashboard_page_html())
@@ -404,8 +427,11 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.OK, payload)
             return
         if parsed.path == READINESS_PATH:
-            payload = readiness_payload(self._runtime())
-            status = HTTPStatus.OK if payload["service_ready"] else HTTPStatus.SERVICE_UNAVAILABLE
+            payload = readiness_payload(
+                self._runtime(),
+                job_service=getattr(self.server, "backtest_jobs", None),
+            )
+            status = HTTPStatus.OK if payload["ready"] else HTTPStatus.SERVICE_UNAVAILABLE
             self._write_json(status, payload)
             return
         job_route = _parse_backtest_job_path(parsed.path)
@@ -434,6 +460,9 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             except (FileNotFoundError, ValueError):
                 self._write_json(HTTPStatus.NOT_FOUND, {"error": "backtest_job_not_found"})
                 return
+            except OSError as exc:
+                self._write_job_store_unavailable(exc)
+                return
             self._write_json(status, payload)
             return
         backtest_lookup = _is_backtest_report_path(parsed.path)
@@ -457,6 +486,9 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         except FileNotFoundError:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "backtest_report_not_found"})
             return
+        except OSError as exc:
+            self._write_job_store_unavailable(exc)
+            return
         except Exception as exc:  # noqa: BLE001 - map unexpected failures to JSON 500
             _log_json(
                 "request_error",
@@ -470,7 +502,8 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         self._write_json(HTTPStatus.OK, payload)
 
     def do_POST(self) -> None:
-        self._start_request()
+        if not self._start_request():
+            return
         parsed = urlparse(self.path)
         if parsed.path not in POST_SURFACE_PATHS:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
@@ -562,6 +595,9 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        except OSError as exc:
+            self._write_job_store_unavailable(exc)
+            return
         if (
             job.get("status") == "failed"
             and job.get("reason_code") == "BACKTEST_JOB_SUBMISSION_FAILED"
@@ -588,7 +624,8 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         self._method_not_allowed()
 
     def do_DELETE(self) -> None:
-        self._start_request()
+        if not self._start_request():
+            return
         parsed = urlparse(self.path)
         route = _parse_backtest_job_path(parsed.path)
         if route is None or route[1] or parsed.query:
@@ -602,6 +639,9 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             payload = service.cancel(route[0])
         except FileNotFoundError:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "backtest_job_not_found"})
+            return
+        except OSError as exc:
+            self._write_job_store_unavailable(exc)
             return
         except (RuntimeError, ValueError) as exc:
             self._write_json(HTTPStatus.CONFLICT, {"error": str(exc)})
@@ -621,12 +661,49 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         *,
         extra_headers: dict[str, str] | None = None,
     ) -> None:
-        body = json.dumps(payload, sort_keys=True).encode("utf-8")
+        try:
+            body = json.dumps(
+                payload,
+                sort_keys=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            _log_json(
+                "response_serialization_failed",
+                request_id=self._request_id,
+                error_type=type(exc).__name__,
+            )
+            status = HTTPStatus.INTERNAL_SERVER_ERROR
+            body = json.dumps(
+                {
+                    "error": "response_serialization_failed",
+                    "reason_code": "NON_JSON_RESPONSE_PAYLOAD",
+                    "research_only": True,
+                },
+                sort_keys=True,
+                allow_nan=False,
+            ).encode("utf-8")
         self._write_response(
             status,
             body,
             content_type="application/json; charset=utf-8",
             extra_headers=extra_headers,
+        )
+
+    def _write_job_store_unavailable(self, exc: OSError) -> None:
+        _log_json(
+            "backtest_job_store_unavailable",
+            request_id=self._request_id,
+            error_type=type(exc).__name__,
+        )
+        self._write_json(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            {
+                "error": "backtest_job_store_unavailable",
+                "reason_code": "BACKTEST_JOB_STORE_UNAVAILABLE",
+                "research_only": True,
+            },
+            extra_headers={"Retry-After": "1"},
         )
 
     def _write_html(self, status: HTTPStatus, body: str) -> None:
@@ -719,7 +796,8 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         return _validate_backtest_request(value)
 
     def _method_not_allowed(self, *, write_body: bool = True) -> None:
-        self._start_request()
+        if not self._start_request():
+            return
         body = json.dumps({"error": "method_not_allowed"}, sort_keys=True).encode("utf-8")
         self._write_response(
             HTTPStatus.METHOD_NOT_ALLOWED,
@@ -731,9 +809,28 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
     def _runtime(self) -> RuntimeConfig:
         return getattr(self.server, "runtime", RuntimeConfig())
 
-    def _start_request(self) -> None:
+    def _start_request(self) -> bool:
         self._request_id = uuid.uuid4().hex
         self._request_started_at = time.monotonic()
+        host_header = self.headers.get("Host")
+        if not _request_host_allowed(host_header):
+            self._write_json(
+                HTTPStatus.MISDIRECTED_REQUEST,
+                {"error": "untrusted_host"},
+            )
+            return False
+        origin = self.headers.get("Origin")
+        if (
+            self.command in {"POST", "DELETE"}
+            and origin
+            and not _origin_matches_host(origin, host_header)
+        ):
+            self._write_json(
+                HTTPStatus.FORBIDDEN,
+                {"error": "cross_origin_request_rejected"},
+            )
+            return False
+        return True
 
     def _ensure_request_context(self) -> None:
         if not hasattr(self, "_request_id"):
@@ -762,12 +859,13 @@ def serve(
     runtime = (runtime or RuntimeConfig()).validate()
     if runtime.production and port == 0:
         raise SystemExit("production requires an explicit non-zero port")
-    if not _is_loopback_host(host) and not _remote_bind_allowed():
+    bind_host, loopback_bind = _bind_target(host)
+    if not loopback_bind and not _remote_bind_allowed():
         raise SystemExit(
             "refusing non-loopback bind without CRYPTO_OPTIONS_API_ALLOW_REMOTE=1 "
             f"(got host={host!r})"
         )
-    if not _is_loopback_host(host):
+    if not loopback_bind:
         print(
             "warning: binding research API on non-loopback interface; "
             "fixture sandbox and live-fetch controls still apply",
@@ -778,7 +876,7 @@ def serve(
             "production runtime preflight failed: dashboard/report is not ready"
         )
     server = ResearchHTTPServer(
-        (host, port),
+        (bind_host, port),
         ResearchReportHandler,
         runtime=runtime,
     )
@@ -786,7 +884,7 @@ def serve(
         _log_json(
             "startup",
             profile=runtime.profile,
-            host=host,
+            host=bind_host,
             port=server.server_port,
             max_workers=runtime.max_workers,
             request_timeout=runtime.request_timeout,
@@ -806,35 +904,341 @@ def dashboard_page_html() -> str:
     )
 
 
-def readiness_payload(runtime: RuntimeConfig) -> dict[str, Any]:
+def readiness_payload(
+    runtime: RuntimeConfig,
+    *,
+    job_service: BacktestJobService | Any | None = None,
+) -> dict[str, Any]:
+    service_ready = False
+    market_provider_ready = False
+    last_trusted_snapshot_ready = False
+    market_data_ready = False
+    account_data_ready = False
+    store_ready = False
+    queue_ready = False
+    model_ready = False
+    reason_codes: list[str] = []
     try:
-        runtime.validate()
+        runtime.validate(check_inputs=False)
         dashboard_page_html()
-        report = build_api_report(
-            mode="research_only",
-            snapshot_fixture=runtime.snapshot_fixture,
-            account_snapshot_fixture=runtime.account_snapshot_fixture,
-            backtest_artifact_dir=runtime.backtest_artifact_dir,
-            paper_ledger_path=runtime.paper_ledger_path,
-            manual_approval_runbook_path=runtime.manual_approval_runbook_path,
-        )
-        ready = (
-            report.get("schema_version") == "research_report.v1"
-            and report.get("effective_mode") == "research_only"
-            and report.get("mode_gate", {}).get("order_instructions_allowed") is False
-        )
-    # Readiness is an availability boundary: unexpected validation failures must
-    # become a structured 503 contract instead of dropping the HTTP connection.
+        service_ready = True
     except Exception as exc:
         _log_json("readiness_check_failed", error=type(exc).__name__)
-        ready = False
+        reason_codes.append("SERVICE_VALIDATION_FAILED")
+
+    generated_at = market_utc_timestamp()
+    if runtime.snapshot_fixture:
+        try:
+            snapshot = load_snapshot_fixture(runtime.snapshot_fixture)
+            market_status = build_market_data_status(snapshot)
+            trust_evidence = market_status.get("trust_evidence") or {}
+            market_provider_ready = market_status.get("status") == "validated"
+            last_trusted_snapshot_ready = (
+                market_provider_ready
+                and trust_evidence.get("status") == "promoted"
+            )
+            market_data_ready = (
+                market_provider_ready and last_trusted_snapshot_ready
+            )
+        except Exception as exc:
+            _log_json("market_readiness_check_failed", error=type(exc).__name__)
+            reason_codes.append("MARKET_DATA_CHECK_FAILED")
+
+    if runtime.account_snapshot_fixture:
+        try:
+            account_payload = _load_account_snapshot(
+                runtime.account_snapshot_fixture
+            )
+            account_status = build_account_status(
+                generated_at=generated_at,
+                account_payload=account_payload,
+            )
+            account_data_ready = _account_dependency_ready(
+                account_payload,
+                account_status,
+            )
+        except Exception as exc:
+            _log_json("account_readiness_check_failed", error=type(exc).__name__)
+            reason_codes.append("ACCOUNT_DATA_CHECK_FAILED")
+    job_readiness = _job_service_readiness(job_service)
+    store_ready = _store_dependency_ready(
+        runtime,
+        job_service=job_service,
+        job_readiness=job_readiness,
+    )
+    queue_ready = _queue_dependency_ready(
+        job_service,
+        job_readiness=job_readiness,
+    )
+    model_ready = _model_dependency_ready(runtime)
+
+    if not market_provider_ready:
+        reason_codes.append("MARKET_PROVIDER_NOT_READY")
+    if market_provider_ready and not last_trusted_snapshot_ready:
+        reason_codes.append("TRUSTED_MARKET_SNAPSHOT_NOT_READY")
+    if not market_data_ready:
+        reason_codes.append("MARKET_DATA_NOT_READY")
+    if not account_data_ready:
+        reason_codes.append("ACCOUNT_DATA_NOT_READY")
+    if not store_ready:
+        reason_codes.append("BACKTEST_STORE_NOT_READY")
+    if not queue_ready:
+        reason_codes.append("BACKTEST_QUEUE_NOT_READY")
+    if not model_ready:
+        reason_codes.append("MODEL_NOT_READY")
+    dependencies_ready = all(
+        (
+            market_data_ready,
+            account_data_ready,
+            store_ready,
+            queue_ready,
+            model_ready,
+        )
+    )
+    ready = service_ready and (dependencies_ready if runtime.production else True)
     return {
-        "service_ready": ready,
+        "ready": ready,
+        "service_ready": service_ready,
+        "dependencies_ready": dependencies_ready,
+        "market_provider_ready": market_provider_ready,
+        "last_trusted_snapshot_ready": last_trusted_snapshot_ready,
+        "market_data_ready": market_data_ready,
+        "account_data_ready": account_data_ready,
+        "store_ready": store_ready,
+        "queue_ready": queue_ready,
+        "model_ready": model_ready,
+        "reason_codes": list(dict.fromkeys(reason_codes)),
         "research_only": True,
         "product_release": "NO-GO",
         "live_order_adapter_available": False,
         "runtime_profile": runtime.profile,
     }
+
+
+def _account_dependency_ready(
+    account_payload: dict[str, Any],
+    account_status: dict[str, Any],
+) -> bool:
+    account = account_payload.get("account") or {}
+    replay = account_payload.get("replay_metadata") or {}
+    private_contract = account_status.get("private_adapter_contract") or {}
+    data_age_ms = account_status.get("data_age_ms")
+    freshness_limit_ms = account_status.get("freshness_limit_ms")
+    source_endpoints = set(account_payload.get("source_endpoints") or [])
+    return (
+        is_authenticated_sidecar_payload(account_payload)
+        and _account_snapshot_shape_ready(account_payload)
+        and account_payload.get("schema_version") == "deribit_account_snapshot.v1"
+        and account_status.get("status") == "available"
+        and account.get("source") == "deribit_live_private_read_only"
+        and replay.get("source") == "live_deribit_private_read_only"
+        and replay.get("captured_shape_only") is False
+        and {
+            "private/get_account_summary",
+            "private/get_positions",
+            "private/get_open_orders_by_currency",
+        }.issubset(source_endpoints)
+        and private_contract.get("schema_version")
+        == "private_account_adapter_contract.v1"
+        and private_contract.get("source") == "deribit_live_private_read_only"
+        and private_contract.get("auth_safe") is True
+        and private_contract.get("replay_fixture") is False
+        and private_contract.get("live_order_submission_possible") is False
+        and isinstance(data_age_ms, (int, float))
+        and not isinstance(data_age_ms, bool)
+        and isinstance(freshness_limit_ms, (int, float))
+        and not isinstance(freshness_limit_ms, bool)
+        and 0 <= data_age_ms <= freshness_limit_ms
+    )
+
+
+def _account_snapshot_shape_ready(payload: dict[str, Any]) -> bool:
+    account = payload.get("account")
+    positions = payload.get("positions")
+    open_orders = payload.get("open_orders")
+    if (
+        not isinstance(account, dict)
+        or not isinstance(positions, list)
+        or not isinstance(open_orders, list)
+    ):
+        return False
+    if not isinstance(account.get("currency"), str) or not account["currency"].strip():
+        return False
+    if any(
+        not _finite_economic_number(account.get(field))
+        for field in (
+            "equity",
+            "balance",
+            "margin_balance",
+            "available_funds",
+            "initial_margin",
+            "maintenance_margin",
+        )
+    ):
+        return False
+    if (
+        float(account["equity"]) <= 0.0
+        or float(account["balance"]) <= 0.0
+        or float(account["margin_balance"]) <= 0.0
+        or any(
+            float(account[field]) < 0.0
+            for field in ("available_funds", "initial_margin", "maintenance_margin")
+        )
+    ):
+        return False
+    for position in positions:
+        if not isinstance(position, dict):
+            return False
+        if any(
+            not isinstance(position.get(field), str)
+            or not str(position[field]).strip()
+            or str(position[field]).strip().lower() == "unknown"
+            for field in ("instrument_name", "kind", "direction")
+        ):
+            return False
+        if str(position["kind"]).strip().lower() not in DERIBIT_POSITION_KINDS:
+            return False
+        if str(position["direction"]).strip().lower() not in {"buy", "sell"}:
+            return False
+        if any(
+            not _finite_economic_number(position.get(field))
+            for field in (
+                "size",
+                "mark_price",
+                "index_price",
+                "floating_pnl",
+                "initial_margin",
+                "maintenance_margin",
+                "delta",
+            )
+        ):
+            return False
+        if (
+            float(position["size"]) <= 0.0
+            or float(position["mark_price"]) <= 0.0
+            or float(position["index_price"]) <= 0.0
+            or float(position["initial_margin"]) < 0.0
+            or float(position["maintenance_margin"]) < 0.0
+            or not -1.0 <= float(position["delta"]) <= 1.0
+        ):
+            return False
+    for order in open_orders:
+        if not isinstance(order, dict):
+            return False
+        if any(
+            not isinstance(order.get(field), str)
+            or not str(order[field]).strip()
+            or str(order[field]).strip().lower() == "unknown"
+            for field in (
+                "instrument_name",
+                "direction",
+                "order_state",
+                "order_type",
+            )
+        ):
+            return False
+        if str(order["direction"]).strip().lower() not in {"buy", "sell"}:
+            return False
+        if any(
+            not _finite_economic_number(order.get(field))
+            for field in ("amount", "filled_amount", "price")
+        ) or any(
+            not isinstance(order.get(field), int)
+            or isinstance(order.get(field), bool)
+            for field in ("creation_timestamp", "last_update_timestamp")
+        ):
+            return False
+        if (
+            float(order["amount"]) <= 0.0
+            or not 0.0
+            <= float(order["filled_amount"])
+            <= float(order["amount"])
+            or float(order["price"]) < 0.0
+            or int(order["creation_timestamp"]) < 0
+            or int(order["last_update_timestamp"]) < 0
+        ):
+            return False
+    return True
+
+
+def _finite_economic_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _store_dependency_ready(
+    runtime: RuntimeConfig,
+    *,
+    job_service: BacktestJobService | Any | None,
+    job_readiness: dict[str, bool] | None = None,
+) -> bool:
+    if not runtime.historical_fixture or not runtime.backtest_artifact_dir:
+        return False
+    try:
+        historical = Path(runtime.historical_fixture).expanduser().resolve()
+        artifacts = Path(runtime.backtest_artifact_dir).expanduser().resolve()
+        return (
+            historical.is_file()
+            and artifacts.is_dir()
+            and (
+                job_readiness is None
+                or job_readiness.get("store_ready") is True
+            )
+            and (
+                job_service is None
+                or Path(job_service.jobs_dir).is_dir()
+            )
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
+def _queue_dependency_ready(
+    job_service: BacktestJobService | Any | None,
+    *,
+    job_readiness: dict[str, bool] | None = None,
+) -> bool:
+    try:
+        return (
+            job_service is not None
+            and getattr(job_service, "_closed", True) is False
+            and Path(job_service.jobs_dir).is_dir()
+            and (
+                job_readiness is None
+                or job_readiness.get("queue_ready") is True
+            )
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
+def _job_service_readiness(
+    job_service: BacktestJobService | Any | None,
+) -> dict[str, bool] | None:
+    if job_service is None or not callable(
+        getattr(job_service, "readiness_status", None)
+    ):
+        return None
+    try:
+        result = job_service.readiness_status()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return {"store_ready": False, "queue_ready": False}
+    if not isinstance(result, dict):
+        return {"store_ready": False, "queue_ready": False}
+    return {
+        "store_ready": result.get("store_ready") is True,
+        "queue_ready": result.get("queue_ready") is True,
+    }
+
+
+def _model_dependency_ready(runtime: RuntimeConfig) -> bool:
+    # The Fable review removed fabricated calibration/model evidence. Until a
+    # content-addressed promoted model artifact exists, production readiness is
+    # deliberately false rather than inferred from fixture constants.
+    return False
 
 
 def _payload_for_path(
@@ -894,7 +1298,7 @@ def _report_options_from_query(
     *,
     runtime: RuntimeConfig | None = None,
 ) -> dict[str, Any]:
-    runtime = (runtime or RuntimeConfig()).validate()
+    runtime = (runtime or RuntimeConfig()).validate(check_inputs=False)
     params = parse_qs(query)
     if runtime.production:
         rejected = sorted(set(params) - PRODUCTION_ALLOWED_QUERY_KEYS)
@@ -1168,17 +1572,19 @@ def _is_backtest_report_path(path: str) -> bool:
 
 def _load_account_snapshot(path: str | Path) -> dict[str, Any]:
     candidate = Path(path).expanduser().resolve()
-    if not candidate.is_file():
-        raise ValueError("account_snapshot_fixture not found")
-    if candidate.stat().st_size > 4 * 1024 * 1024:
-        raise ValueError("account_snapshot_fixture exceeds 4194304 bytes")
     try:
-        value = json.loads(candidate.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        value = read_json_object_from_regular_file(
+            candidate,
+            max_bytes=4 * 1024 * 1024,
+            description="account_snapshot_fixture",
+        )
+    except (OSError, UnicodeError, ValueError) as exc:
         raise ValueError("account_snapshot_fixture must be valid JSON") from exc
-    if not isinstance(value, dict):
-        raise ValueError("account_snapshot_fixture must be a JSON object")
-    payload = value.get("account_snapshot", value.get("payload", value))
+    authenticated_value = authenticate_sidecar_payload(candidate, value)
+    payload = authenticated_value.get(
+        "account_snapshot",
+        authenticated_value.get("payload", authenticated_value),
+    )
     if not isinstance(payload, dict):
         raise ValueError("account_snapshot_fixture payload must be a JSON object")
     normalized = dict(payload)
@@ -1187,7 +1593,43 @@ def _load_account_snapshot(path: str | Path) -> dict[str, Any]:
         account["status"] = "missing"
         account["source"] = "not_configured"
         normalized["account"] = account
-    return normalized
+    if (
+        not is_authenticated_sidecar_payload(authenticated_value)
+        and str(account.get("status") or "").lower() != "missing"
+    ):
+        normalized = {
+            "schema_version": "deribit_account_snapshot.v1",
+            "captured_at": normalized.get("captured_at"),
+            "source_endpoints": [],
+            "account": {
+                "status": "auth_failed",
+                "configuration_status": "configured",
+                "source": "unauthenticated_account_snapshot",
+                "source_endpoint": "private/get_account_summary",
+                "reason_code": "AUTH_FAILED_ACCOUNT_API",
+                "currency": "UNKNOWN",
+                "margin_model": "unknown",
+            },
+            "positions": [],
+            "open_orders": [],
+            "simulation": {
+                "status": "auth_failed",
+                "attempted": False,
+                "reason_code": "AUTH_FAILED_SIMULATION_API",
+                "source_endpoint": "private/simulate_portfolio",
+            },
+            "replay_metadata": {
+                "source": "unauthenticated_account_snapshot",
+                "captured_shape_only": True,
+                "credentials_persisted": False,
+                "raw_identifiers_persisted": False,
+                "sidecar_authenticated": False,
+            },
+        }
+    return authenticated_projection(
+        normalized,
+        authenticated_source=authenticated_value,
+    )
 
 
 def _remote_bind_allowed() -> bool:
@@ -1218,21 +1660,109 @@ def _log_json(event: str, **fields: Any) -> None:
 
 
 def _is_loopback_host(host: str) -> bool:
+    return _bind_target(host)[1]
+
+
+def _bind_target(host: str) -> tuple[str, bool]:
     candidate = (host or "").strip().lower()
-    if candidate in {"127.0.0.1", "localhost", "::1"}:
-        return True
+    if candidate == "localhost":
+        # Never resolve an attacker-controlled hostname on the trust path. A
+        # literal localhost request is pinned to IPv4 loopback before bind, so
+        # DNS/hosts-file changes cannot race the authorization check.
+        return "127.0.0.1", True
     try:
-        infos = socket.getaddrinfo(candidate, None)
-    except socket.gaierror:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return candidate, False
+    return str(address), address.is_loopback
+
+
+def _request_host_allowed(value: str | None) -> bool:
+    hostname = _header_hostname(value)
+    if hostname is None:
         return False
-    for info in infos:
-        address = info[4][0]
-        try:
-            if not ipaddress.ip_address(address).is_loopback:
-                return False
-        except ValueError:
-            return False
-    return bool(infos)
+    allowed = {"127.0.0.1", "::1", "localhost"}
+    for configured in os.environ.get(ALLOWED_HOSTS_ENV, "").split(","):
+        candidate = _header_hostname(configured.strip())
+        if candidate is not None:
+            allowed.add(candidate)
+    return hostname in allowed
+
+
+def _origin_matches_host(origin: str, host_header: str | None) -> bool:
+    origin_authority = _origin_authority(origin)
+    host_authority = _header_authority(host_header)
+    if (
+        origin_authority is None
+        or host_authority is None
+        or origin_authority[1:] != host_authority
+    ):
+        return False
+    if origin_authority[0] == "http" and origin_authority[1] in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }:
+        return True
+    return origin_authority in _trusted_origins()
+
+
+def _origin_authority(value: str) -> tuple[str, str, int | None] | None:
+    try:
+        parsed = urlparse(value)
+        origin_port = parsed.port
+    except ValueError:
+        return None
+    if (
+        not parsed.scheme
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.hostname is None
+        or parsed.path
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return parsed.scheme.lower(), parsed.hostname.lower(), origin_port
+
+
+def _trusted_origins() -> frozenset[tuple[str, str, int | None]]:
+    trusted: set[tuple[str, str, int | None]] = set()
+    for configured in os.environ.get(TRUSTED_ORIGINS_ENV, "").split(","):
+        candidate = _origin_authority(configured.strip())
+        if candidate is not None and (
+            candidate[0] == "https"
+            or candidate[1] in {"127.0.0.1", "::1", "localhost"}
+        ):
+            trusted.add(candidate)
+    return frozenset(trusted)
+
+
+def _header_hostname(value: str | None) -> str | None:
+    authority = _header_authority(value)
+    return authority[0] if authority is not None else None
+
+
+def _header_authority(value: str | None) -> tuple[str, int | None] | None:
+    raw = str(value or "").strip()
+    if not raw or any(character in raw for character in ",/@?#"):
+        return None
+    try:
+        parsed = urlparse(f"//{raw}")
+        _ = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return parsed.hostname.lower(), parsed.port
 
 
 def _request_json(port: int, path: str, *, timeout: float) -> dict[str, Any]:

@@ -2,8 +2,7 @@ FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    CRYPTO_OPTIONS_RUNTIME_PROFILE=production \
-    CRYPTO_OPTIONS_API_ALLOW_REMOTE=1
+    CRYPTO_OPTIONS_RUNTIME_PROFILE=production
 
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app
@@ -15,6 +14,6 @@ USER app
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["python", "-c", "import json,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)); raise SystemExit(0 if data.get('service_ready') else 1)"]
+  CMD ["python", "-c", "import json,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/livez', timeout=3)); raise SystemExit(0 if data.get('status') == 'alive' else 1)"]
 
-CMD ["python", "-m", "crypto_options_report.api", "--runtime-profile", "production", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "crypto_options_report.api", "--runtime-profile", "production", "--host", "127.0.0.1", "--port", "8000"]

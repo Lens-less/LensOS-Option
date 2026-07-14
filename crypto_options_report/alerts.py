@@ -15,13 +15,28 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import uuid4
 
 from .storage import atomic_write_json
 
 ALERT_EVENT_SCHEMA = "alert_event.v1"
 ALERT_EVAL_SCHEMA = "alert_evaluation.v1"
 ALERT_STATE_SCHEMA = "alert_state.v1"
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = build_opener(_RejectRedirects())
+
+
+def urlopen(request: Request, *, timeout: int):
+    """Open one webhook request without following redirects."""
+    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+
 
 # Risk-degradation rules only for default product policy.
 DEFAULT_RULE_IDS = (
@@ -174,6 +189,8 @@ def deliver_webhook(
     parsed_url = urlparse(url)
     if parsed_url.scheme != "https" or not parsed_url.netloc:
         raise ValueError("webhook URL must use https")
+    if parsed_url.username is not None or parsed_url.password is not None:
+        raise ValueError("webhook URL must not include userinfo")
     if timeout <= 0:
         raise ValueError("webhook timeout must be positive")
     payload = {
@@ -188,7 +205,9 @@ def deliver_webhook(
     if dry_run:
         return {
             "status": "dry_run",
-            "url": url,
+            # Webhook providers commonly encode the credential in the path.
+            # Dry-run output exposes only the destination origin.
+            "url": f"{parsed_url.scheme}://{parsed_url.netloc}",
             "bytes": len(body),
             "event_count": len(payload["events"]),
         }
@@ -197,8 +216,23 @@ def deliver_webhook(
         "User-Agent": "crypto-options-report-alerts/0.1",
         "X-Research-Only": "1",
     }
+    delivery_timestamp = str(int(datetime.now(timezone.utc).timestamp()))
+    delivery_id = str(uuid4())
+    headers["X-Webhook-Timestamp"] = delivery_timestamp
+    headers["X-Webhook-Delivery-Id"] = delivery_id
     if secret:
-        digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        signed_message = (
+            delivery_timestamp.encode("ascii")
+            + b"."
+            + delivery_id.encode("ascii")
+            + b"."
+            + body
+        )
+        digest = hmac.new(
+            secret.encode("utf-8"),
+            signed_message,
+            hashlib.sha256,
+        ).hexdigest()
         headers["X-Signature-SHA256"] = digest
     request = Request(url, data=body, headers=headers, method="POST")
     try:

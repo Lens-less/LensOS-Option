@@ -12,6 +12,7 @@
       "bid": 1180.0,
       "ask": 1230.0,
       "mark": 1205.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.69,
       "ask_iv": 0.71,
       "mark_iv": 0.70,
@@ -29,7 +30,8 @@
       "depth_ask_5": 17,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "entry-a-113k",
@@ -42,6 +44,7 @@
       "bid": 820.0,
       "ask": 860.0,
       "mark": 840.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.69,
       "ask_iv": 0.71,
       "mark_iv": 0.70,
@@ -59,7 +62,8 @@
       "depth_ask_5": 17,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "entry-a-114k",
@@ -72,6 +76,7 @@
       "bid": 650.0,
       "ask": 690.0,
       "mark": 670.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.69,
       "ask_iv": 0.71,
       "mark_iv": 0.70,
@@ -89,7 +94,8 @@
       "depth_ask_5": 17,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "entry-a-115k",
@@ -102,6 +108,7 @@
       "bid": 500.0,
       "ask": 540.0,
       "mark": 520.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.69,
       "ask_iv": 0.71,
       "mark_iv": 0.70,
@@ -119,7 +126,8 @@
       "depth_ask_5": 17,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "mtm-a-114k",
@@ -132,6 +140,7 @@
       "bid": 220.0,
       "ask": 260.0,
       "mark": 240.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.67,
       "ask_iv": 0.69,
       "mark_iv": 0.68,
@@ -149,7 +158,8 @@
       "depth_ask_5": 15,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "expiry-a-114k",
@@ -162,6 +172,7 @@
       "bid": 5.0,
       "ask": 10.0,
       "mark": 7.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.66,
       "ask_iv": 0.68,
       "mark_iv": 0.67,
@@ -181,7 +192,8 @@
       "tick_size": 0.5,
       "delivery_price": 111000.0,
       "recorded_long_payoff": 0.0,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "entry-b-118k",
@@ -194,6 +206,7 @@
       "bid": 1500.0,
       "ask": 1550.0,
       "mark": 1525.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.64,
       "ask_iv": 0.66,
       "mark_iv": 0.65,
@@ -211,7 +224,8 @@
       "depth_ask_5": 20,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "entry-b-120k",
@@ -224,6 +238,7 @@
       "bid": 1100.0,
       "ask": 1150.0,
       "mark": 1125.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.64,
       "ask_iv": 0.66,
       "mark_iv": 0.65,
@@ -241,7 +256,8 @@
       "depth_ask_5": 20,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "entry-b-122k",
@@ -254,6 +270,7 @@
       "bid": 780.0,
       "ask": 830.0,
       "mark": 805.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.64,
       "ask_iv": 0.66,
       "mark_iv": 0.65,
@@ -271,7 +288,8 @@
       "depth_ask_5": 20,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "entry-b-124k",
@@ -284,6 +302,7 @@
       "bid": 540.0,
       "ask": 590.0,
       "mark": 565.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.64,
       "ask_iv": 0.66,
       "mark_iv": 0.65,
@@ -301,7 +320,8 @@
       "depth_ask_5": 20,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     },
     {
       "quote_id": "close-b-124k",
@@ -314,6 +334,7 @@
       "bid": 1550.0,
       "ask": 1650.0,
       "mark": 1600.0,
+      "iv_unit": "fraction",
       "bid_iv": 0.67,
       "ask_iv": 0.69,
       "mark_iv": 0.68,
@@ -331,7 +352,8 @@
       "depth_ask_5": 16,
       "contract_size": 1,
       "tick_size": 0.5,
-      "surface_no_arb_error": 0.01
+      "surface_no_arb_error": 0.01,
+      "surface_no_arb_pass": true
     }
   ]
 }

@@ -55,6 +55,154 @@ class PortfolioRiskReportTests(unittest.TestCase):
         self.assertEqual("halt_system", portfolio["final_action"])
         self.assertEqual("mdd_circuit", portfolio["final_signal"]["source"])
 
+    def test_malformed_permission_state_halts_instead_of_allowing_new_risk(self):
+        malformed_states = [
+            {
+                "sell_permission": float("nan"),
+                "naked_permission": False,
+                "spread_permission": False,
+            },
+            {
+                "sell_permission": "not-a-number",
+                "naked_permission": False,
+                "spread_permission": True,
+            },
+            {
+                "sell_permission": True,
+                "naked_permission": True,
+                "spread_permission": True,
+            },
+            {
+                "sell_permission": 1.01,
+                "naked_permission": True,
+                "spread_permission": True,
+            },
+            {
+                "sell_permission": 1.0,
+                "naked_permission": False,
+                "spread_permission": False,
+            },
+            {
+                "sell_permission": 1.0,
+                "naked_permission": "false",
+                "spread_permission": True,
+            },
+        ]
+
+        for permission_state in malformed_states:
+            with self.subTest(permission_state=permission_state):
+                portfolio = self._portfolio(permission_state=permission_state)
+                self.assertEqual("halt_system", portfolio["final_action"])
+                self.assertIn(
+                    "MALFORMED_PERMISSION_STATE",
+                    portfolio["summary"]["reason_codes"],
+                )
+
+    def test_halt_system_suppresses_shadow_size_cap_evaluation(self):
+        base = self._report()
+        portfolio = build_portfolio_risk_report(
+            generated_at=base["generated_at"],
+            data_status=base["data_status"],
+            account_status=base["account_status"],
+            permission_state={
+                "sell_permission": "malformed",
+                "naked_permission": False,
+                "spread_permission": False,
+            },
+            ev_candidate_scanner={
+                "ranked_candidates": [
+                    {"candidate_id": "must-not-be-sized", "model_delta": "bad"}
+                ]
+            },
+        )
+
+        self.assertEqual("halt_system", portfolio["final_action"])
+        self.assertEqual([], portfolio["size_caps"])
+        self.assertEqual(0, portfolio["summary"]["candidate_caps_evaluated"])
+
+    def test_malformed_or_unknown_mdd_state_halts_instead_of_clearing(self):
+        for mdd_state in ({}, {"status": "halt_systm"}, "clear"):
+            with self.subTest(mdd_state=mdd_state):
+                portfolio = self._portfolio(
+                    risk_overrides={"mdd_circuit": mdd_state}
+                )
+                self.assertEqual("halt_system", portfolio["final_action"])
+                self.assertIn(
+                    "MDD_STATE_MALFORMED",
+                    portfolio["summary"]["reason_codes"],
+                )
+
+    def test_explicit_clear_mdd_state_is_accepted(self):
+        portfolio = self._portfolio(
+            risk_overrides={"mdd_circuit": {"status": "clear"}}
+        )
+
+        mdd_signal = next(
+            signal
+            for signal in portfolio["signals"]
+            if signal["source"] == "mdd_circuit"
+        )
+        self.assertEqual("allow_new", mdd_signal["severity"])
+        self.assertEqual(["MDD_CLEAR"], mdd_signal["reason_codes"])
+
+    def test_final_action_tamper_is_rejected_by_component_and_whole_contract(self):
+        report = self._report()
+        portfolio = report["portfolio_risk"]
+        self.assertNotEqual("allow_new", portfolio["final_signal"]["severity"])
+        portfolio["final_action"] = "allow_new"
+
+        component_errors = validate_portfolio_risk_report(portfolio)
+        contract_errors = validate_report_contract(report)
+
+        self.assertIn(
+            "portfolio_risk.final_action must match final_signal.severity",
+            component_errors,
+        )
+        self.assertIn(
+            "portfolio_risk.final_action must match final_signal.severity",
+            contract_errors,
+        )
+
+    def test_explicit_malformed_risk_override_states_halt(self):
+        override_fields = {
+            "event_risk": "EVENT_RISK_STATE_MALFORMED",
+            "liquidity_state": "LIQUIDITY_STATE_MALFORMED",
+            "exchange_status": "EXCHANGE_STATUS_MALFORMED",
+            "position_state": "POSITION_STATE_MALFORMED",
+        }
+        for field_name, reason_code in override_fields.items():
+            for malformed_state in ({}, {"status": "unknown"}, "clear"):
+                with self.subTest(
+                    field_name=field_name, malformed_state=malformed_state
+                ):
+                    portfolio = self._portfolio(
+                        risk_overrides={field_name: malformed_state}
+                    )
+                    self.assertEqual("halt_system", portfolio["final_action"])
+                    self.assertIn(
+                        reason_code,
+                        portfolio["summary"]["reason_codes"],
+                    )
+
+    def test_explicit_known_clear_risk_override_states_are_accepted(self):
+        clear_states = {
+            "event_risk": {"status": "clear"},
+            "liquidity_state": {"status": "normal"},
+            "exchange_status": {"status": "online"},
+            "position_state": {"state": "NORMAL"},
+        }
+        for field_name, clear_state in clear_states.items():
+            with self.subTest(field_name=field_name):
+                portfolio = self._portfolio(
+                    risk_overrides={field_name: clear_state}
+                )
+                signal = next(
+                    item
+                    for item in portfolio["signals"]
+                    if item["source"] == field_name
+                )
+                self.assertEqual("allow_new", signal["severity"])
+
     def test_yellow_margin_blocks_new_trades(self):
         report = self._report(account_scenario="yellow")
 
@@ -66,48 +214,49 @@ class PortfolioRiskReportTests(unittest.TestCase):
             report["portfolio_risk"]["summary"]["reason_codes"],
         )
 
-    def test_size_caps_include_all_dimensions_and_missing_score_reason(self):
+    def test_unavailable_ev_evidence_produces_no_size_caps(self):
         report = self._report()
-        cap = report["portfolio_risk"]["size_caps"][0]
+        portfolio = report["portfolio_risk"]
 
-        self.assertEqual(
-            {
-                "cvar",
-                "stress",
-                "delta",
-                "margin",
-                "liquidity",
-                "score_placeholder",
-                "permission",
-                "volatility",
-                "inverse_multiplier",
-            },
-            {item["dimension"] for item in cap["dimensions"]},
-        )
-        self.assertEqual(0.0, cap["final_cap_units"])
-        self.assertFalse(cap["size_output_allowed"])
-        self.assertIn("score calibration", cap["research_only_reason"].lower())
+        self.assertEqual("unavailable", report["ev_candidate_scanner"]["status"])
+        self.assertEqual([], report["ev_candidate_scanner"]["ranked_candidates"])
+        self.assertEqual([], portfolio["size_caps"])
+        self.assertEqual(0, portfolio["summary"]["candidate_caps_evaluated"])
+        self.assertFalse(portfolio["summary"]["trade_sizing_allowed"])
+        self.assertIn("MISSING_PROMOTED_SCORE_MODEL", portfolio["summary"]["reason_codes"])
 
-    def test_volatility_cap_reduces_shadow_size(self):
+    def test_regime_changes_do_not_conjure_shadow_size_without_ev_evidence(self):
         normal = self._report_with_regime(dvol_percentile=0.52, atm_iv_percentile=0.48)
         stressed = self._report_with_regime(dvol_percentile=0.97, atm_iv_percentile=0.91)
 
-        normal_vol_cap = self._dimension(normal, "volatility")
-        stressed_vol_cap = self._dimension(stressed, "volatility")
-
-        self.assertEqual(1.0, normal_vol_cap)
-        self.assertEqual(0.2, stressed_vol_cap)
-        self.assertLess(stressed_vol_cap, normal_vol_cap)
-
-    def _dimension(self, report, name):
-        cap = report["portfolio_risk"]["size_caps"][0]
-        return next(item["cap_units"] for item in cap["dimensions"] if item["dimension"] == name)
+        for report in (normal, stressed):
+            self.assertEqual("unavailable", report["ev_candidate_scanner"]["status"])
+            self.assertEqual([], report["ev_candidate_scanner"]["ranked_candidates"])
+            self.assertEqual([], report["portfolio_risk"]["size_caps"])
+            self.assertFalse(
+                report["portfolio_risk"]["summary"]["trade_sizing_allowed"]
+            )
 
     def _report(self, account_scenario="green"):
         return generate_research_report(
             generated_at="2026-07-07T00:01:30Z",
             market_snapshot=load_snapshot_fixture(self._fixture_path()),
             account_scenario=account_scenario,
+        )
+
+    def _portfolio(self, *, permission_state=None, risk_overrides=None):
+        base = self._report()
+        return build_portfolio_risk_report(
+            generated_at=base["generated_at"],
+            data_status=base["data_status"],
+            account_status=base["account_status"],
+            permission_state=(
+                base["permission_state"]
+                if permission_state is None
+                else permission_state
+            ),
+            ev_candidate_scanner=base["ev_candidate_scanner"],
+            risk_overrides=risk_overrides,
         )
 
     def _report_with_regime(self, *, dvol_percentile, atm_iv_percentile):

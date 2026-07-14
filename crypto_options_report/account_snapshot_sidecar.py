@@ -15,21 +15,42 @@ import sys
 import time
 from typing import Any, Mapping, Sequence
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     utc_timestamp,
     validate_deribit_base_url,
 )
-from .storage import atomic_write_json
+from .storage import atomic_write_json, read_json_object_from_stream
+from .sidecar_auth import (
+    SidecarAuthUnavailable,
+    sidecar_auth_state_path,
+    write_sidecar_auth_state,
+)
 
 
 DEFAULT_REFRESH_INTERVAL_SECONDS = 15.0
+MAX_ACCOUNT_HTTP_RESPONSE_BYTES = 4 * 1024 * 1024
 EXIT_OK = 0
 EXIT_REFRESH_FAILED = 1
 REQUIRED_SCOPES = ("account:read", "trade:read")
+DERIBIT_POSITION_KINDS = frozenset(
+    {"future", "option", "spot", "future_combo", "option_combo"}
+)
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = build_opener(_RejectRedirects())
+
+
+def urlopen(request: Request, *, timeout: int):
+    """Open one Deribit request without following redirects."""
+    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,12 +99,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     client_secret = os.environ.get("DERIBIT_CLIENT_SECRET", "").strip()
     if not client_id or not client_secret:
         payload = _not_configured_snapshot(currency=currency, base_url=base_url)
-        atomic_write_json(output, payload)
+        authenticated = _persist_snapshot(output, payload)
         _log_json(
             "account_snapshot_not_configured",
             output=str(output),
             currency=currency,
             reason_code="MISSING_ACCOUNT_API_SNAPSHOT",
+            sidecar_authenticated=authenticated,
         )
         return EXIT_OK
 
@@ -98,7 +120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             except Exception as exc:  # noqa: BLE001 - redact and fail closed
                 payload = _failed_snapshot(currency=currency, base_url=base_url)
-                atomic_write_json(output, payload)
+                authenticated = _persist_snapshot(output, payload)
                 _log_json(
                     "account_snapshot_refresh_failed",
                     output=str(output),
@@ -106,11 +128,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     reason_code="AUTH_FAILED_ACCOUNT_API",
                     error_type=type(exc).__name__,
                     retrying=not args.once,
+                    sidecar_authenticated=authenticated,
                 )
                 if args.once:
                     return EXIT_REFRESH_FAILED
             else:
-                atomic_write_json(output, payload)
+                authenticated = _persist_snapshot(output, payload)
                 _log_json(
                     "account_snapshot_written",
                     output=str(output),
@@ -118,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     captured_at=payload.get("captured_at"),
                     position_count=len(payload.get("positions") or []),
                     open_order_count=len(payload.get("open_orders") or []),
+                    sidecar_authenticated=authenticated,
                 )
                 if args.once:
                     return EXIT_OK
@@ -145,7 +169,7 @@ def fetch_deribit_account_snapshot(
     if not client_id or not client_secret:
         raise ValueError("read-only Deribit credentials are required")
 
-    auth = _rpc_get(
+    auth = _rpc_post(
         safe_base,
         "public/auth",
         {
@@ -168,29 +192,35 @@ def fetch_deribit_account_snapshot(
     if granted_tokens != set(REQUIRED_SCOPES):
         raise ValueError("authentication must grant the exact read-only scopes")
 
-    common = {"access_token": access_token}
-    account_result = _rpc_get(
+    account_result = _rpc_post(
         safe_base,
         "private/get_account_summary",
-        {**common, "currency": normalized_currency, "extended": "false"},
+        {"currency": normalized_currency, "extended": "false"},
         timeout,
+        access_token=access_token,
     )
-    positions_result = _rpc_get(
+    positions_result = _rpc_post(
         safe_base,
         "private/get_positions",
-        {**common, "currency": normalized_currency},
+        {"currency": normalized_currency},
         timeout,
+        access_token=access_token,
     )
-    orders_result = _rpc_get(
+    orders_result = _rpc_post(
         safe_base,
         "private/get_open_orders_by_currency",
-        {**common, "currency": normalized_currency, "kind": "option"},
+        {"currency": normalized_currency, "kind": "option"},
         timeout,
+        access_token=access_token,
     )
     if not isinstance(account_result, dict):
         raise ValueError("account summary result must be an object")
     if not isinstance(positions_result, list) or not isinstance(orders_result, list):
         raise ValueError("positions and open orders results must be lists")
+    if any(not isinstance(item, Mapping) for item in positions_result):
+        raise ValueError("positions result contains a non-object entry")
+    if any(not isinstance(item, Mapping) for item in orders_result):
+        raise ValueError("open orders result contains a non-object entry")
 
     observed_at = utc_timestamp()
     return {
@@ -206,8 +236,8 @@ def fetch_deribit_account_snapshot(
             currency=normalized_currency,
             observed_at=observed_at,
         ),
-        "positions": [_sanitize_position(item) for item in positions_result if isinstance(item, dict)],
-        "open_orders": [_sanitize_open_order(item) for item in orders_result if isinstance(item, dict)],
+        "positions": [_sanitize_position(item) for item in positions_result],
+        "open_orders": [_sanitize_open_order(item) for item in orders_result],
         "simulation": {
             "status": "not_requested",
             "attempted": False,
@@ -230,6 +260,14 @@ def _sanitize_account_summary(
     currency: str,
     observed_at: str,
 ) -> dict[str, Any]:
+    response_currency = _required_text(payload, "currency", context="account summary")
+    if response_currency.upper() != currency:
+        raise ValueError("account summary currency must match the requested currency")
+    portfolio_margining_enabled = payload.get("portfolio_margining_enabled")
+    if not isinstance(portfolio_margining_enabled, bool):
+        raise ValueError(
+            "account summary portfolio_margining_enabled is required as a boolean"
+        )
     result = {
         "status": "available",
         "configuration_status": "configured",
@@ -239,7 +277,7 @@ def _sanitize_account_summary(
         "currency": currency,
         "margin_model": (
             "portfolio_margin"
-            if payload.get("portfolio_margining_enabled") is True
+            if portfolio_margining_enabled
             else "standard_margin"
         ),
     }
@@ -251,43 +289,107 @@ def _sanitize_account_summary(
         "initial_margin",
         "maintenance_margin",
     ):
-        result[field] = _safe_number(payload.get(field))
+        result[field] = _required_finite_number(
+            payload,
+            field,
+            context="account summary",
+        )
+    if result["equity"] <= 0.0 or result["balance"] <= 0.0 or result["margin_balance"] <= 0.0:
+        raise ValueError("account summary equity and balances must be positive")
+    if any(
+        result[field] < 0.0
+        for field in ("available_funds", "initial_margin", "maintenance_margin")
+    ):
+        raise ValueError("account summary funds and margins must be non-negative")
     return result
 
 
 def _sanitize_position(payload: Mapping[str, Any]) -> dict[str, Any]:
+    floating_pnl_field = (
+        "floating_profit_loss"
+        if "floating_profit_loss" in payload
+        else "floating_pnl"
+    )
+    kind = _required_position_kind(payload, context="position")
+    direction = _required_direction(payload, context="position")
+    size = _required_finite_number(payload, "size", context="position")
+    mark_price = _required_finite_number(payload, "mark_price", context="position")
+    index_price = _required_finite_number(payload, "index_price", context="position")
+    initial_margin = _required_finite_number(
+        payload, "initial_margin", context="position"
+    )
+    maintenance_margin = _required_finite_number(
+        payload, "maintenance_margin", context="position"
+    )
+    delta = _required_finite_number(payload, "delta", context="position")
+    if size <= 0.0:
+        raise ValueError("position size must be positive")
+    if mark_price <= 0.0 or index_price <= 0.0:
+        raise ValueError("position mark_price and index_price must be positive")
+    if initial_margin < 0.0 or maintenance_margin < 0.0:
+        raise ValueError("position margins must be non-negative")
+    if not -1.0 <= delta <= 1.0:
+        raise ValueError("position delta must be within [-1, 1]")
     return {
-        "instrument_name": str(payload.get("instrument_name") or "unknown"),
-        "kind": str(payload.get("kind") or "unknown"),
-        "direction": str(payload.get("direction") or "unknown"),
-        "size": _safe_number(payload.get("size")),
-        "mark_price": _safe_number(payload.get("mark_price")),
-        "index_price": _safe_number(payload.get("index_price")),
-        "floating_pnl": _safe_number(
-            payload.get("floating_profit_loss", payload.get("floating_pnl"))
+        "instrument_name": _required_text(
+            payload, "instrument_name", context="position"
         ),
-        "initial_margin": _safe_number(payload.get("initial_margin")),
-        "maintenance_margin": _safe_number(payload.get("maintenance_margin")),
-        "delta": _safe_number(payload.get("delta")),
-        "gamma": _safe_number(payload.get("gamma")),
-        "theta": _safe_number(payload.get("theta")),
-        "vega": _safe_number(payload.get("vega")),
+        "kind": kind,
+        "direction": direction,
+        "size": size,
+        "mark_price": mark_price,
+        "index_price": index_price,
+        "floating_pnl": _required_finite_number(
+            payload,
+            floating_pnl_field,
+            context="position",
+        ),
+        "initial_margin": initial_margin,
+        "maintenance_margin": maintenance_margin,
+        "delta": delta,
+        "gamma": _optional_finite_number(payload, "gamma", context="position"),
+        "theta": _optional_finite_number(payload, "theta", context="position"),
+        "vega": _optional_finite_number(payload, "vega", context="position"),
         "source_endpoint": "private/get_positions",
     }
 
 
 def _sanitize_open_order(payload: Mapping[str, Any]) -> dict[str, Any]:
     # Deliberately omit order_id, label, account identifiers and API metadata.
+    direction = _required_direction(payload, context="open order")
+    amount = _required_finite_number(payload, "amount", context="open order")
+    filled_amount = _required_finite_number(
+        payload, "filled_amount", context="open order"
+    )
+    price = _required_finite_number(payload, "price", context="open order")
+    creation_timestamp = _required_integer(
+        payload, "creation_timestamp", context="open order"
+    )
+    last_update_timestamp = _required_integer(
+        payload, "last_update_timestamp", context="open order"
+    )
+    if amount <= 0.0:
+        raise ValueError("open order amount must be positive")
+    if not 0.0 <= filled_amount <= amount:
+        raise ValueError("open order filled_amount must be between zero and amount")
+    if price < 0.0:
+        raise ValueError("open order price must be non-negative")
+    if creation_timestamp < 0 or last_update_timestamp < 0:
+        raise ValueError("open order timestamps must be non-negative")
     return {
-        "instrument_name": str(payload.get("instrument_name") or "unknown"),
-        "direction": str(payload.get("direction") or "unknown"),
-        "amount": _safe_number(payload.get("amount")),
-        "filled_amount": _safe_number(payload.get("filled_amount")),
-        "price": _safe_number(payload.get("price")),
-        "order_state": str(payload.get("order_state") or "unknown"),
-        "order_type": str(payload.get("order_type") or "unknown"),
-        "creation_timestamp": _safe_integer(payload.get("creation_timestamp")),
-        "last_update_timestamp": _safe_integer(payload.get("last_update_timestamp")),
+        "instrument_name": _required_text(
+            payload, "instrument_name", context="open order"
+        ),
+        "direction": direction,
+        "amount": amount,
+        "filled_amount": filled_amount,
+        "price": price,
+        "order_state": _required_text(
+            payload, "order_state", context="open order"
+        ),
+        "order_type": _required_text(payload, "order_type", context="open order"),
+        "creation_timestamp": creation_timestamp,
+        "last_update_timestamp": last_update_timestamp,
         "source_endpoint": "private/get_open_orders_by_currency",
     }
 
@@ -359,28 +461,60 @@ def _failed_snapshot(*, currency: str, base_url: str) -> dict[str, Any]:
     }
 
 
-def _rpc_get(
+def _rpc_post(
     base_url: str,
     method: str,
     params: Mapping[str, Any],
     timeout: int,
+    *,
+    access_token: str | None = None,
 ) -> Any:
-    request = Request(
-        f"{base_url}/api/v2/{method}?{urlencode(params)}",
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "codex-option-research-account/0.1",
+    request_id = 1
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": dict(params),
         },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": "codex-option-research-account/0.1",
+    }
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    request = Request(
+        f"{base_url}/api/v2",
+        data=body,
+        headers=headers,
+        method="POST",
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            payload = read_json_object_from_stream(
+                response,
+                max_bytes=MAX_ACCOUNT_HTTP_RESPONSE_BYTES,
+                description="Deribit account response",
+            )
     except HTTPError as exc:
         raise ValueError(f"deribit http status {exc.code}") from exc
     except URLError as exc:
         raise ValueError("deribit network failure") from exc
     if not isinstance(payload, dict):
         raise ValueError("Deribit response is not a JSON object")
+    if payload.get("jsonrpc") != "2.0":
+        raise ValueError("Deribit response JSON-RPC version mismatch")
+    response_id = payload.get("id")
+    if (
+        not isinstance(response_id, int)
+        or isinstance(response_id, bool)
+        or response_id != request_id
+    ):
+        raise ValueError("Deribit response request id mismatch")
     if payload.get("error"):
         error = payload["error"]
         code = error.get("code") if isinstance(error, dict) else "unknown"
@@ -391,22 +525,200 @@ def _rpc_get(
 
 
 def _safe_number(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
+    number = float(value)
     return number if isfinite(number) else None
 
 
-def _safe_integer(value: Any) -> int | None:
-    if value is None or isinstance(value, bool):
+def _required_text(
+    payload: Mapping[str, Any],
+    field: str,
+    *,
+    context: str,
+) -> str:
+    value = payload.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{context} {field} is required as non-empty text")
+    return value.strip()
+
+
+def _optional_text(payload: Mapping[str, Any], field: str) -> str | None:
+    value = payload.get(field)
+    if value is None:
         return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be non-empty text when provided")
+    return value.strip()
+
+
+def _required_direction(payload: Mapping[str, Any], *, context: str) -> str:
+    direction = _required_text(payload, "direction", context=context).lower()
+    if direction not in {"buy", "sell"}:
+        raise ValueError(f"{context} direction must be buy or sell")
+    return direction
+
+
+def _required_position_kind(payload: Mapping[str, Any], *, context: str) -> str:
+    kind = _required_text(payload, "kind", context=context).lower()
+    if kind not in DERIBIT_POSITION_KINDS:
+        raise ValueError(f"{context} kind is not allowed")
+    return kind
+
+
+def _required_finite_number(
+    payload: Mapping[str, Any],
+    field: str,
+    *,
+    context: str,
+) -> float:
+    if field not in payload or payload.get(field) is None:
+        raise ValueError(f"{context} {field} is required")
+    number = _safe_number(payload.get(field))
+    if number is None:
+        raise ValueError(f"{context} {field} must be finite")
+    return number
+
+
+def _optional_finite_number(
+    payload: Mapping[str, Any],
+    field: str,
+    *,
+    context: str,
+) -> float | None:
+    if field not in payload or payload.get(field) is None:
+        return None
+    number = _safe_number(payload.get(field))
+    if number is None:
+        raise ValueError(f"{context} {field} must be finite when provided")
+    return number
+
+
+def _required_integer(
+    payload: Mapping[str, Any],
+    field: str,
+    *,
+    context: str,
+) -> int:
+    value = payload.get(field)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{context} {field} is required as an integer")
+    return value
+
+
+def _validate_snapshot_before_authentication(payload: Mapping[str, Any]) -> None:
+    if payload.get("schema_version") != "deribit_account_snapshot.v1":
+        raise ValueError("account snapshot schema_version is required")
+    _required_text(payload, "captured_at", context="account snapshot")
+    account = payload.get("account")
+    positions = payload.get("positions")
+    open_orders = payload.get("open_orders")
+    if not isinstance(account, Mapping) or not account:
+        raise ValueError("account snapshot account is required as a non-empty object")
+    if not isinstance(positions, list) or any(
+        not isinstance(item, Mapping) for item in positions
+    ):
+        raise ValueError("account snapshot positions must contain only objects")
+    if not isinstance(open_orders, list) or any(
+        not isinstance(item, Mapping) for item in open_orders
+    ):
+        raise ValueError("account snapshot open_orders must contain only objects")
+    status = _required_text(account, "status", context="account snapshot account")
+    if status not in {"available", "missing", "auth_failed"}:
+        raise ValueError("account snapshot status is not allowed")
+    if status == "available":
+        if account.get("configuration_status") != "configured":
+            raise ValueError("available account snapshot must be configured")
+        if account.get("source") != "deribit_live_private_read_only":
+            raise ValueError("available account snapshot source is invalid")
+        if account.get("source_endpoint") != "private/get_account_summary":
+            raise ValueError("available account snapshot source endpoint is invalid")
+        _required_text(account, "observed_at", context="available account snapshot")
+        _required_text(account, "currency", context="available account snapshot")
+        _required_text(account, "margin_model", context="available account snapshot")
+        for field in (
+            "equity",
+            "balance",
+            "margin_balance",
+            "available_funds",
+            "initial_margin",
+            "maintenance_margin",
+        ):
+            _required_finite_number(
+                account,
+                field,
+                context="available account snapshot",
+            )
+        if (
+            float(account["equity"]) <= 0.0
+            or float(account["balance"]) <= 0.0
+            or float(account["margin_balance"]) <= 0.0
+        ):
+            raise ValueError("available account equity and balances must be positive")
+        if any(
+            float(account[field]) < 0.0
+            for field in ("available_funds", "initial_margin", "maintenance_margin")
+        ):
+            raise ValueError("available account funds and margins must be non-negative")
+        for index, item in enumerate(positions):
+            context = f"available position {index}"
+            if item.get("source_endpoint") != "private/get_positions":
+                raise ValueError(f"{context} source endpoint is invalid")
+            _required_text(item, "instrument_name", context=context)
+            _required_position_kind(item, context=context)
+            _required_direction(item, context=context)
+            for field in (
+                "size",
+                "mark_price",
+                "index_price",
+                "floating_pnl",
+                "initial_margin",
+                "maintenance_margin",
+                "delta",
+            ):
+                _required_finite_number(item, field, context=context)
+            if float(item["size"]) <= 0.0:
+                raise ValueError(f"{context} size must be positive")
+            if float(item["mark_price"]) <= 0.0 or float(item["index_price"]) <= 0.0:
+                raise ValueError(f"{context} prices must be positive")
+            if float(item["initial_margin"]) < 0.0 or float(item["maintenance_margin"]) < 0.0:
+                raise ValueError(f"{context} margins must be non-negative")
+            if not -1.0 <= float(item["delta"]) <= 1.0:
+                raise ValueError(f"{context} delta must be within [-1, 1]")
+            for field in ("gamma", "theta", "vega"):
+                _optional_finite_number(item, field, context=context)
+        for index, item in enumerate(open_orders):
+            context = f"available open order {index}"
+            if item.get("source_endpoint") != "private/get_open_orders_by_currency":
+                raise ValueError(f"{context} source endpoint is invalid")
+            for field in ("instrument_name", "order_state", "order_type"):
+                _required_text(item, field, context=context)
+            _required_direction(item, context=context)
+            for field in ("amount", "filled_amount", "price"):
+                _required_finite_number(item, field, context=context)
+            for field in ("creation_timestamp", "last_update_timestamp"):
+                _required_integer(item, field, context=context)
+            if float(item["amount"]) <= 0.0:
+                raise ValueError(f"{context} amount must be positive")
+            if not 0.0 <= float(item["filled_amount"]) <= float(item["amount"]):
+                raise ValueError(f"{context} filled_amount is outside amount")
+            if float(item["price"]) < 0.0:
+                raise ValueError(f"{context} price must be non-negative")
+            if int(item["creation_timestamp"]) < 0 or int(item["last_update_timestamp"]) < 0:
+                raise ValueError(f"{context} timestamps must be non-negative")
+    elif positions or open_orders:
+        raise ValueError("unavailable account snapshot cannot contain positions or orders")
+
+
+def _persist_snapshot(output: Path, payload: dict[str, Any]) -> bool:
+    _validate_snapshot_before_authentication(payload)
+    atomic_write_json(output, payload)
     try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
+        write_sidecar_auth_state(output, expected_payload=payload)
+    except SidecarAuthUnavailable:
+        sidecar_auth_state_path(output).unlink(missing_ok=True)
+        return False
+    return True
 
 
 def _log_json(event: str, **fields: Any) -> None:

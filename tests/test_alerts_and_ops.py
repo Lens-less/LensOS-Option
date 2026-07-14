@@ -194,6 +194,27 @@ class AlertsAndOpsTests(unittest.TestCase):
         self.assertEqual(60, observed_vol_params["resolution"])
         self.assertEqual("BTC", meta["BTC-9JUL26-90000-C"]["settlement_currency"])
 
+    def test_deribit_vol_index_uses_documented_percent_point_unit_at_low_values(self):
+        payload = {
+            "result": {
+                "data": [[1783382400000, 4.1, 4.2, 3.9, 4.0]],
+            }
+        }
+        with mock.patch(
+            "crypto_options_report.market_data._get_json",
+            return_value=payload,
+        ):
+            vol = _fetch_vol_index_feed(
+                "https://www.deribit.com",
+                currency="BTC",
+                timeout=5,
+                captured_at="2026-07-07T00:01:00Z",
+            )
+
+        self.assertEqual(0.04, vol["volatility"])
+        self.assertEqual("fraction", vol["volatility_unit"])
+        self.assertEqual("percent_points", vol["raw_close_unit"])
+
     def test_one_minute_dvol_rollover_does_not_flicker_stale(self):
         base = json.loads(
             (FIXTURES / "deribit_btc_option_chain_snapshot.json").read_text(
@@ -849,7 +870,7 @@ class AlertsAndOpsTests(unittest.TestCase):
             self.assertFalse(state_path.exists())
             self.assertEqual("test-secret", deliver.call_args.kwargs["secret"])
 
-    def test_regime_input_provenance_marks_defaults(self):
+    def test_regime_without_bound_history_collects_instead_of_using_defaults(self):
         snapshot = json.loads(
             (FIXTURES / "deribit_btc_option_chain_snapshot.json").read_text(encoding="utf-8")
         )
@@ -857,11 +878,15 @@ class AlertsAndOpsTests(unittest.TestCase):
             generated_at=snapshot["captured_at"],
             market_snapshot=snapshot,
         )
-        provenance = report["permission_state"]["input_provenance"]
-        self.assertTrue(provenance["synthetic_inputs"])
+        permission = report["permission_state"]
+        provenance = permission["input_provenance"]
+        self.assertEqual("blocked", permission["status"])
+        self.assertEqual("collecting", permission["collection_status"])
+        self.assertFalse(provenance["synthetic_inputs"])
+        self.assertEqual([], provenance["defaults_applied"])
         self.assertIn(
-            "REGIME_DEFAULTS_OR_FALLBACK_APPLIED",
-            report["permission_state"]["reason_codes"],
+            "REGIME_TRUST_EVIDENCE_NOT_PROMOTED",
+            permission["reason_codes"],
         )
 
 

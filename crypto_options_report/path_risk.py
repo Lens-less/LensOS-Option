@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ DEFAULT_PATH_RISK_CONFIG = {
     "stress_mixture_min_weight": 0.10,
     "confidence_penalty_multiplier": 0.50,
 }
+PATH_RISK_CONFIG_FIELDS = frozenset(DEFAULT_PATH_RISK_CONFIG)
 
 
 @dataclass(frozen=True)
@@ -141,34 +143,95 @@ def build_path_risk_report_from_historical_report(
     )
 
 
+def _merge_path_risk_config(
+    payload_config: Any,
+    explicit_config: Any,
+) -> dict[str, float]:
+    merged: dict[str, Any] = dict(DEFAULT_PATH_RISK_CONFIG)
+    for config_source, optional in (
+        (payload_config, False),
+        (explicit_config, True),
+    ):
+        if config_source is None and optional:
+            continue
+        if not isinstance(config_source, Mapping):
+            raise ValueError("path risk config must be a mapping")
+        unknown_fields = set(config_source) - PATH_RISK_CONFIG_FIELDS
+        if unknown_fields:
+            raise ValueError(
+                "unknown path risk config fields: "
+                + ", ".join(sorted(str(field) for field in unknown_fields))
+            )
+        merged.update(config_source)
+
+    validated = {
+        "similarity_bandwidth": _finite_positive_float(
+            merged["similarity_bandwidth"],
+            "similarity_bandwidth",
+        ),
+        "min_effective_sample_size": _strict_finite_at_least_one_float(
+            merged["min_effective_sample_size"],
+            "min_effective_sample_size",
+        ),
+    }
+    for field_name in (
+        "historical_group_weight",
+        "bootstrap_group_weight",
+        "stress_group_weight",
+        "stress_mixture_min_weight",
+        "confidence_penalty_multiplier",
+    ):
+        validated[field_name] = _unit_interval_float(
+            merged[field_name],
+            field_name,
+        )
+    return validated
+
+
 def build_path_risk_distribution_report(
     payload: dict[str, Any],
     *,
     generated_at: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    merged_config = dict(DEFAULT_PATH_RISK_CONFIG)
-    merged_config.update(payload.get("config", {}))
-    if config:
-        merged_config.update(config)
+    merged_config = _merge_path_risk_config(payload.get("config", {}), config)
+    payload_stress_floor = _unit_interval_float(
+        payload.get("stress_mixture_min_weight", 0.0),
+        "stress_mixture_min_weight",
+    )
+    applied_stress_weight = max(
+        merged_config["stress_group_weight"],
+        merged_config["stress_mixture_min_weight"],
+        payload_stress_floor,
+    )
+    if (
+        merged_config["historical_group_weight"]
+        + merged_config["bootstrap_group_weight"]
+        + applied_stress_weight
+        <= 0.0
+    ):
+        raise ValueError("mixture group weights must contain positive mass")
 
     candidate = _candidate_spec(payload["candidate"])
     report_generated_at = generated_at or utc_timestamp()
 
+    historical_paths = payload.get("historical_paths")
+    if not isinstance(historical_paths, list) or not historical_paths:
+        raise ValueError("historical_paths must contain at least one path")
     base_paths = [
         _prepare_path_record(path_payload, candidate)
-        for path_payload in payload["historical_paths"]
+        for path_payload in historical_paths
     ]
     initial_similarity_weights = _similarity_weights(
         candidate.feature_vector,
         [path["feature_vector"] for path in base_paths],
-        bandwidth=float(merged_config["similarity_bandwidth"]),
+        bandwidth=merged_config["similarity_bandwidth"],
     )
     initial_ess = _effective_sample_size(initial_similarity_weights)
 
     applied_paths = list(base_paths)
     applied_weights = list(initial_similarity_weights)
-    fallback_triggered = initial_ess < float(merged_config["min_effective_sample_size"])
+    fallback_triggered = initial_ess < merged_config["min_effective_sample_size"]
     if fallback_triggered:
         pooled_paths = [
             _prepare_path_record(path_payload, candidate)
@@ -189,12 +252,12 @@ def build_path_risk_distribution_report(
         candidate=candidate,
     )
     group_weights = _mixture_group_weights(
-        historical_weight=float(merged_config["historical_group_weight"]),
-        bootstrap_weight=float(merged_config["bootstrap_group_weight"]),
-        stress_weight=float(merged_config["stress_group_weight"]),
+        historical_weight=merged_config["historical_group_weight"],
+        bootstrap_weight=merged_config["bootstrap_group_weight"],
+        stress_weight=merged_config["stress_group_weight"],
         stress_floor=max(
-            float(merged_config["stress_mixture_min_weight"]),
-            float(payload.get("stress_mixture_min_weight", 0.0)),
+            merged_config["stress_mixture_min_weight"],
+            payload_stress_floor,
         ),
     )
 
@@ -203,7 +266,7 @@ def build_path_risk_distribution_report(
         scenario = _scenario_from_record(path, candidate)
         scenario["scenario_id"] = path["path_id"]
         scenario["source_group"] = "historical_similarity"
-        scenario["weight"] = round(weight * group_weights["historical"], 8)
+        scenario["weight"] = weight * group_weights["historical"]
         all_scenarios.append(scenario)
 
     bootstrap_paths = bootstrap_report["paths"]
@@ -212,19 +275,38 @@ def build_path_risk_distribution_report(
         scenario = _scenario_from_record(path, candidate)
         scenario["scenario_id"] = f"bootstrap-{index + 1}"
         scenario["source_group"] = "circular_block_bootstrap"
-        scenario["weight"] = round(group_weights["bootstrap"] / bootstrap_count, 8)
+        scenario["weight"] = group_weights["bootstrap"] / bootstrap_count
         all_scenarios.append(scenario)
 
     stress_paths = stress_report["paths"]
-    stress_total = sum(path["raw_weight"] for path in stress_paths) or 1.0
-    for path in stress_paths:
+    stress_total = stress_report["raw_weight_total"]
+    stress_weights = [
+        group_weights["stress"] * path["raw_weight"] / stress_total
+        for path in stress_paths
+    ]
+    correction_index = max(
+        range(len(stress_paths)),
+        key=lambda index: stress_paths[index]["raw_weight"],
+    )
+    stress_weights[correction_index] += (
+        group_weights["stress"] - math.fsum(stress_weights)
+    )
+    if (
+        any(not math.isfinite(weight) or weight < 0.0 for weight in stress_weights)
+        or not math.isclose(
+            math.fsum(stress_weights),
+            group_weights["stress"],
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ValueError("normalized stress scenario weights must preserve applied mass")
+    for path, scenario_weight in zip(stress_paths, stress_weights, strict=True):
+        path["mixture_weight"] = scenario_weight
         scenario = _scenario_from_record(path, candidate)
         scenario["scenario_id"] = path["path_id"]
         scenario["source_group"] = "stress_mixture"
-        scenario["weight"] = round(
-            group_weights["stress"] * path["raw_weight"] / stress_total,
-            8,
-        )
+        scenario["weight"] = scenario_weight
         scenario["stress_inputs"] = {
             "iv_jump": path["iv_jump"],
             "liquidity_exit_cost_usdc": path["liquidity_exit_cost_usdc"],
@@ -251,9 +333,7 @@ def build_path_risk_distribution_report(
         "spread_only_required": fallback_triggered,
         "recommended_structure": "spread_only" if fallback_triggered else candidate.structure,
         "confidence_penalty_applied": fallback_triggered,
-        "confidence_penalty_multiplier": float(
-            merged_config["confidence_penalty_multiplier"]
-        )
+        "confidence_penalty_multiplier": merged_config["confidence_penalty_multiplier"]
         if fallback_triggered
         else 1.0,
         "reason_codes": (
@@ -268,7 +348,7 @@ def build_path_risk_distribution_report(
     placeholder_data = bool(
         evidence_override.get("placeholder_data", evidence_status != "validated_historical")
     )
-    return {
+    report = {
         "schema_version": PATH_RISK_REPORT_SCHEMA_VERSION,
         "generated_at": report_generated_at,
         "input_evidence": {
@@ -312,11 +392,11 @@ def build_path_risk_distribution_report(
         "path_sampling": {
             "method": "similarity_weighted_plus_circular_block_bootstrap",
             "similarity_weighted": {
-                "bandwidth": float(merged_config["similarity_bandwidth"]),
+                "bandwidth": merged_config["similarity_bandwidth"],
                 "initial_effective_sample_size": round(initial_ess, 8),
-                "minimum_effective_sample_size": float(
-                    merged_config["min_effective_sample_size"]
-                ),
+                "minimum_effective_sample_size": merged_config[
+                    "min_effective_sample_size"
+                ],
                 "fallback_triggered": fallback_triggered,
                 "fallback_mode": "hierarchical_pooling" if fallback_triggered else None,
                 "applied_effective_sample_size": round(applied_ess, 8),
@@ -341,10 +421,11 @@ def build_path_risk_distribution_report(
         },
         "stress_mixture": {
             "configured_min_weight": max(
-                float(merged_config["stress_mixture_min_weight"]),
-                float(payload.get("stress_mixture_min_weight", 0.0)),
+                merged_config["stress_mixture_min_weight"],
+                payload_stress_floor,
             ),
             "applied_weight": round(group_weights["stress"], 8),
+            "raw_weight_total": stress_total,
             "group_weights": group_weights,
             "scenarios": stress_report["paths"],
         },
@@ -361,29 +442,87 @@ def build_path_risk_distribution_report(
             "spread_only_required": restrictions["spread_only_required"],
         },
     }
+    _assert_finite_json_numbers(report)
+    return report
 
 
 def _candidate_spec(payload: dict[str, Any]) -> CandidateSpec:
+    structure = payload["structure"]
+    if not isinstance(structure, str) or structure not in {
+        "naked_short_call",
+        "call_credit_spread",
+    }:
+        raise ValueError(
+            "structure must be naked_short_call or call_credit_spread"
+        )
+    strike = _finite_positive_float(payload["strike"], "strike")
+    raw_long_strike = payload.get("long_strike")
+    long_strike = (
+        None
+        if raw_long_strike is None
+        else _finite_positive_float(raw_long_strike, "long_strike")
+    )
+    entry_credit_usdc = _finite_nonnegative_float(
+        payload["entry_credit_usdc"],
+        "entry_credit_usdc",
+    )
+    contract_size = _finite_positive_float(
+        payload.get("contract_size", 1.0),
+        "contract_size",
+    )
+    if structure == "call_credit_spread":
+        if long_strike is None:
+            raise ValueError("call_credit_spread requires long_strike")
+        if long_strike <= strike:
+            raise ValueError(
+                "call_credit_spread long_strike must be greater than strike"
+            )
+        maximum_credit_usdc = _finite_positive_float(
+            (long_strike - strike) * contract_size,
+            "call_credit_spread width",
+        )
+        if entry_credit_usdc > maximum_credit_usdc:
+            raise ValueError(
+                "call_credit_spread entry_credit_usdc must not exceed spread width"
+            )
+
     return CandidateSpec(
         instrument_name=payload["instrument_name"],
-        structure=payload["structure"],
-        current_spot=float(payload["current_spot"]),
-        strike=float(payload["strike"]),
-        long_strike=(
-            None
-            if payload.get("long_strike") in (None, "")
-            else float(payload["long_strike"])
+        structure=structure,
+        current_spot=_finite_positive_float(payload["current_spot"], "current_spot"),
+        strike=strike,
+        long_strike=long_strike,
+        horizon_days=_positive_int(payload["horizon_days"], "horizon_days"),
+        entry_credit_usdc=entry_credit_usdc,
+        contract_size=contract_size,
+        starting_nav_usdc=_finite_positive_float(
+            payload.get("starting_nav_usdc", 100000.0),
+            "starting_nav_usdc",
         ),
-        horizon_days=int(payload["horizon_days"]),
-        entry_credit_usdc=float(payload["entry_credit_usdc"]),
-        contract_size=float(payload.get("contract_size", 1.0)),
-        starting_nav_usdc=float(payload.get("starting_nav_usdc", 100000.0)),
-        current_abs_delta=float(payload["current_abs_delta"]),
-        delta_cross_up_return=float(payload["delta_cross_up_return"]),
-        vega_usdc_per_abs_vol=float(payload.get("vega_usdc_per_abs_vol", 0.0)),
-        target_realized_vol=float(payload["target_realized_vol"]),
-        regime_scores=dict(payload["regime_scores"]),
-        feature_vector={key: float(value) for key, value in payload["feature_vector"].items()},
+        current_abs_delta=_unit_interval_float(
+            payload["current_abs_delta"],
+            "current_abs_delta",
+        ),
+        delta_cross_up_return=_finite_nonnegative_float(
+            payload["delta_cross_up_return"],
+            "delta_cross_up_return",
+        ),
+        vega_usdc_per_abs_vol=_finite_nonnegative_float(
+            payload.get("vega_usdc_per_abs_vol", 0.0),
+            "vega_usdc_per_abs_vol",
+        ),
+        target_realized_vol=_finite_positive_float(
+            payload["target_realized_vol"],
+            "target_realized_vol",
+        ),
+        regime_scores=_validated_numeric_mapping(
+            payload.get("regime_scores"),
+            "candidate regime_scores",
+        ),
+        feature_vector=_validated_numeric_mapping(
+            payload.get("feature_vector"),
+            "candidate feature_vector",
+        ),
     )
 
 
@@ -394,7 +533,7 @@ def _blocked_historical_path_report(
     generated_at: str | None,
     reason_codes: list[str],
 ) -> dict[str, Any]:
-    return {
+    report = {
         "schema_version": PATH_RISK_REPORT_SCHEMA_VERSION,
         "generated_at": generated_at or utc_timestamp(),
         "input_evidence": {
@@ -465,6 +604,8 @@ def _blocked_historical_path_report(
             "spread_only_required": True,
         },
     }
+    _assert_finite_json_numbers(report)
+    return report
 
 
 def _historical_paths_from_quotes(
@@ -473,7 +614,13 @@ def _historical_paths_from_quotes(
     candidate: CandidateSpec,
 ) -> list[dict[str, Any]]:
     sorted_quotes = sorted(quotes, key=lambda item: str(item.get("ts") or ""))
-    prices = [float(item["underlying_price"]) for item in sorted_quotes]
+    prices = [
+        _finite_positive_float(
+            item["underlying_price"],
+            "historical quote underlying_price",
+        )
+        for item in sorted_quotes
+    ]
     timestamps = [str(item.get("ts")) for item in sorted_quotes]
     paths = []
     for start in range(0, len(prices) - candidate.horizon_days):
@@ -513,21 +660,21 @@ def _realized_vol(returns: list[float]) -> float:
 def _default_stress_scenarios(candidate: CandidateSpec) -> list[dict[str, Any]]:
     return [
         {
-            "name": "validated-history-spot-up-10-iv-jump",
+            "name": "synthetic-stress-spot-up-10-iv-jump",
             "path_returns": [0.10] + [0.0] * max(candidate.horizon_days - 1, 0),
             "iv_jump": 0.15,
             "liquidity_exit_cost_usdc": 120.0,
             "weight": 0.03,
         },
         {
-            "name": "validated-history-spot-up-20-iv-jump",
+            "name": "synthetic-stress-spot-up-20-iv-jump",
             "path_returns": [0.12, 0.08] + [0.0] * max(candidate.horizon_days - 2, 0),
             "iv_jump": 0.25,
             "liquidity_exit_cost_usdc": 250.0,
             "weight": 0.01,
         },
         {
-            "name": "validated-history-liquidity-gap",
+            "name": "synthetic-stress-liquidity-gap",
             "path_returns": [0.05, 0.03] + [0.0] * max(candidate.horizon_days - 2, 0),
             "iv_jump": 0.10,
             "liquidity_exit_cost_usdc": 400.0,
@@ -540,30 +687,65 @@ def _prepare_path_record(
     payload: dict[str, Any],
     candidate: CandidateSpec,
 ) -> dict[str, Any]:
-    raw_returns = [float(value) for value in payload["returns"]]
-    source_vol = float(payload["source_realized_vol"])
-    scale_factor = candidate.target_realized_vol / source_vol if source_vol else 1.0
-    scaled_returns = [round(value * scale_factor, 8) for value in raw_returns]
+    raw_returns = _validated_path_returns(payload["returns"])
+    path_horizon_days = _positive_int(
+        payload.get("horizon_days", candidate.horizon_days),
+        "historical path horizon_days",
+    )
+    if path_horizon_days != candidate.horizon_days:
+        raise ValueError(
+            "historical path horizon_days must equal candidate horizon_days"
+        )
+    if len(raw_returns) != path_horizon_days:
+        raise ValueError("historical path returns length must equal horizon_days")
+    source_vol = _finite_positive_float(
+        payload["source_realized_vol"],
+        "source_realized_vol",
+    )
+    scale_factor = _finite_positive_float(
+        candidate.target_realized_vol / source_vol,
+        "scale_factor",
+    )
+    try:
+        scaled_returns = [
+            round(math.expm1(math.log1p(value) * scale_factor), 8)
+            for value in raw_returns
+        ]
+    except OverflowError as exc:
+        raise ValueError("scaled path returns must remain finite and greater than -1") from exc
+    if any(
+        not math.isfinite(value) or value <= -1.0
+        for value in scaled_returns
+    ):
+        raise ValueError("scaled path returns must remain finite and greater than -1")
     normalized_spot_path = _normalized_path_from_returns(scaled_returns)
+    rounded_spot_path = [round(value, 8) for value in normalized_spot_path]
+    if any(
+        not math.isfinite(level) or level <= 0.0
+        for level in rounded_spot_path
+    ):
+        raise ValueError("normalized spot path must remain finite and positive")
     max_up_return = max(normalized_spot_path) - 1.0
     terminal_return = normalized_spot_path[-1] - 1.0
     return {
         "path_id": payload["path_id"],
         "start_time": payload["start_time"],
-        "horizon_days": int(payload.get("horizon_days", candidate.horizon_days)),
-        "regime_scores": {
-            key: float(value) for key, value in payload["regime_scores"].items()
-        },
-        "feature_vector": {
-            key: float(value) for key, value in payload["feature_vector"].items()
-        },
+        "horizon_days": path_horizon_days,
+        "regime_scores": _validated_numeric_mapping(
+            payload.get("regime_scores"),
+            "historical path regime_scores",
+        ),
+        "feature_vector": _validated_numeric_mapping(
+            payload.get("feature_vector"),
+            "historical path feature_vector",
+        ),
         "returns": raw_returns,
         "scaled_returns": scaled_returns,
-        "normalized_spot_path": [round(value, 8) for value in normalized_spot_path],
+        "normalized_spot_path": rounded_spot_path,
         "max_up_return": round(max_up_return, 8),
         "terminal_return": round(terminal_return, 8),
         "source_realized_vol": source_vol,
-        "scale_factor": round(scale_factor, 8),
+        "scale_factor": scale_factor,
         "path_touch": candidate.current_spot * max(normalized_spot_path) >= candidate.strike,
         "path_itm": candidate.current_spot * normalized_spot_path[-1] >= candidate.strike,
     }
@@ -575,11 +757,23 @@ def _build_circular_block_bootstrap(
     candidate: CandidateSpec,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    source_returns = [float(value) for value in payload["bootstrap_source_returns"]]
-    block_length = int(payload["bootstrap_block_length"])
-    path_count = int(payload["bootstrap_path_count"])
-    random_seed = int(payload.get("random_seed", 0))
-    source_vol = float(payload.get("bootstrap_source_realized_vol", candidate.target_realized_vol))
+    source_returns = _validated_path_returns(
+        payload["bootstrap_source_returns"],
+        field_name="bootstrap_source_returns",
+    )
+    block_length = _positive_int(
+        payload["bootstrap_block_length"],
+        "bootstrap_block_length",
+    )
+    path_count = _positive_int(
+        payload["bootstrap_path_count"],
+        "bootstrap_path_count",
+    )
+    random_seed = _integer(payload.get("random_seed", 0), "random_seed")
+    source_vol = _finite_positive_float(
+        payload.get("bootstrap_source_realized_vol", candidate.target_realized_vol),
+        "bootstrap_source_realized_vol",
+    )
     rng = random.Random(random_seed)
     paths = []
     for index in range(path_count):
@@ -625,8 +819,11 @@ def _build_stress_scenarios(
     payload: dict[str, Any],
     candidate: CandidateSpec,
 ) -> dict[str, Any]:
+    scenarios = payload.get("stress_scenarios")
+    if not isinstance(scenarios, list) or not scenarios:
+        raise ValueError("stress_scenarios must contain at least one scenario")
     paths = []
-    for scenario in payload["stress_scenarios"]:
+    for scenario in scenarios:
         path_payload = {
             "path_id": scenario["name"],
             "start_time": scenario["name"],
@@ -637,13 +834,27 @@ def _build_stress_scenarios(
             "source_realized_vol": candidate.target_realized_vol,
         }
         path_record = _prepare_path_record(path_payload, candidate)
-        path_record["raw_weight"] = float(scenario["weight"])
-        path_record["iv_jump"] = float(scenario["iv_jump"])
-        path_record["liquidity_exit_cost_usdc"] = float(
-            scenario["liquidity_exit_cost_usdc"]
+        path_record["raw_weight"] = _finite_nonnegative_float(
+            scenario["weight"],
+            "stress scenario weight",
+        )
+        path_record["iv_jump"] = _finite_nonnegative_float(
+            scenario["iv_jump"],
+            "stress scenario iv_jump",
+        )
+        path_record["liquidity_exit_cost_usdc"] = _finite_nonnegative_float(
+            scenario["liquidity_exit_cost_usdc"],
+            "stress scenario liquidity_exit_cost_usdc",
         )
         paths.append(path_record)
-    return {"paths": paths}
+    raw_weight_total = sum(path["raw_weight"] for path in paths)
+    if not math.isfinite(raw_weight_total):
+        raise ValueError(
+            "stress scenario weight total must remain finite and positive"
+        )
+    if raw_weight_total <= 0.0:
+        raise ValueError("stress scenario weights must contain positive mass")
+    return {"paths": paths, "raw_weight_total": raw_weight_total}
 
 
 def _scenario_from_record(
@@ -689,19 +900,64 @@ def _similarity_weights(
     *,
     bandwidth: float,
 ) -> list[float]:
-    raw_weights = []
-    for vector in feature_vectors:
+    vectors = list(feature_vectors)
+    log_weights = []
+    for vector in vectors:
         keys = sorted(set(target) | set(vector))
-        squared_distance = 0.0
+        scaled_distance = 0.0
         for key in keys:
-            squared_distance += (target.get(key, 0.0) - vector.get(key, 0.0)) ** 2
-        raw_weights.append(math.exp(-squared_distance / max(2.0 * bandwidth * bandwidth, 1e-12)))
-    total = sum(raw_weights) or 1.0
-    return [weight / total for weight in raw_weights]
+            left = target.get(key, 0.0)
+            right = vector.get(key, 0.0)
+            if left == right:
+                scaled_delta = 0.0
+            else:
+                magnitude = max(abs(left), abs(right))
+                normalized_delta = (left / magnitude) - (right / magnitude)
+                magnitude_to_bandwidth = magnitude / bandwidth
+                if not math.isfinite(magnitude_to_bandwidth):
+                    scaled_distance = math.inf
+                    break
+                scaled_delta = normalized_delta * magnitude_to_bandwidth
+                if not math.isfinite(scaled_delta):
+                    scaled_distance = math.inf
+                    break
+            scaled_distance = math.hypot(scaled_distance, scaled_delta)
+        if not math.isfinite(scaled_distance):
+            log_weights.append(-math.inf)
+            continue
+        squared_distance = scaled_distance * scaled_distance
+        log_weights.append(-0.5 * squared_distance)
+
+    finite_logs = [weight for weight in log_weights if math.isfinite(weight)]
+    if not finite_logs:
+        return [0.0] * len(vectors)
+    max_log_weight = max(finite_logs)
+    raw_weights = [
+        math.exp(weight - max_log_weight) if math.isfinite(weight) else 0.0
+        for weight in log_weights
+    ]
+    total = math.fsum(raw_weights)
+    if not math.isfinite(total) or total <= 0.0:
+        return [0.0] * len(vectors)
+    normalized = [weight / total for weight in raw_weights]
+    correction_index = max(range(len(normalized)), key=normalized.__getitem__)
+    normalized[correction_index] += 1.0 - math.fsum(normalized)
+    return normalized
 
 
 def _effective_sample_size(weights: list[float]) -> float:
-    return 1.0 / sum(weight * weight for weight in weights) if weights else 0.0
+    if not weights or any(
+        not math.isfinite(weight) or weight < 0.0 for weight in weights
+    ):
+        return 0.0
+    total = math.fsum(weights)
+    if not math.isfinite(total) or total <= 0.0:
+        return 0.0
+    squared_mass = math.fsum((weight / total) ** 2 for weight in weights)
+    if not math.isfinite(squared_mass) or squared_mass <= 0.0:
+        return 0.0
+    effective_sample_size = 1.0 / squared_mass
+    return effective_sample_size if math.isfinite(effective_sample_size) else 0.0
 
 
 def _mixture_group_weights(
@@ -718,13 +974,13 @@ def _mixture_group_weights(
         return {
             "historical": 0.0,
             "bootstrap": 0.0,
-            "stress": round(applied_stress, 8),
+            "stress": 1.0 if applied_stress > 0.0 else 0.0,
         }
-    scale = remaining / non_stress
+    historical = remaining * historical_weight / non_stress
     return {
-        "historical": round(historical_weight * scale, 8),
-        "bootstrap": round(bootstrap_weight * scale, 8),
-        "stress": round(applied_stress, 8),
+        "historical": historical,
+        "bootstrap": remaining - historical,
+        "stress": applied_stress,
     }
 
 
@@ -734,6 +990,17 @@ def _weighted_path_metrics(
     candidate: CandidateSpec,
 ) -> dict[str, Any]:
     weights = [float(item["weight"]) for item in scenarios]
+    if (
+        not weights
+        or any(not math.isfinite(weight) or weight < 0.0 for weight in weights)
+        or not math.isclose(
+            math.fsum(weights),
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ValueError("path scenario weights must form complete probability mass")
     p_touch = sum(weight for weight, item in zip(weights, scenarios, strict=True) if item["touched"])
     p_itm = sum(weight for weight, item in zip(weights, scenarios, strict=True) if item["itm"])
     delta_cross_probability = sum(
@@ -812,3 +1079,114 @@ def _normalized_path_from_returns(returns: list[float]) -> list[float]:
         level *= 1.0 + value
         values.append(level)
     return values or [1.0]
+
+
+def _validated_path_returns(
+    values: Iterable[Any],
+    *,
+    field_name: str = "path returns",
+) -> list[float]:
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError(f"{field_name} must contain at least one return")
+    raw_values = list(values)
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in raw_values
+    ):
+        raise ValueError("path returns must be finite and greater than -1")
+    returns = [float(value) for value in raw_values]
+    if any(not math.isfinite(value) or value <= -1.0 for value in returns):
+        raise ValueError("path returns must be finite and greater than -1")
+    return returns
+
+
+def _validated_numeric_mapping(value: Any, field_name: str) -> dict[str, float]:
+    if not isinstance(value, dict) or not value:
+        raise ValueError(f"{field_name} must be a non-empty mapping")
+    validated = {}
+    for key, raw_value in value.items():
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+            raise ValueError(f"{field_name}.{key} must be finite numeric")
+        number = float(raw_value)
+        if not math.isfinite(number):
+            raise ValueError(f"{field_name}.{key} must be finite numeric")
+        validated[key] = number
+    return validated
+
+
+def _assert_finite_json_numbers(
+    value: Any,
+    *,
+    path: str = "path risk report",
+) -> None:
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(
+                f"path risk report contains non-finite number at {path}"
+            )
+        return
+    if isinstance(value, Mapping):
+        for key, nested_value in value.items():
+            _assert_finite_json_numbers(
+                nested_value,
+                path=f"{path}.{key}",
+            )
+        return
+    if isinstance(value, (list, tuple)):
+        for index, nested_value in enumerate(value):
+            _assert_finite_json_numbers(
+                nested_value,
+                path=f"{path}[{index}]",
+            )
+
+
+def _strict_finite_at_least_one_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{field_name} must be finite and positive (at least 1)"
+        )
+    number = float(value)
+    if not math.isfinite(number) or number < 1.0:
+        raise ValueError(
+            f"{field_name} must be finite and positive (at least 1)"
+        )
+    return number
+
+
+def _finite_positive_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be finite and positive")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError(f"{field_name} must be finite and positive")
+    return number
+
+
+def _finite_nonnegative_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be finite and non-negative")
+    number = float(value)
+    if not math.isfinite(number) or number < 0.0:
+        raise ValueError(f"{field_name} must be finite and non-negative")
+    return number
+
+
+def _unit_interval_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be finite and between 0 and 1")
+    number = float(value)
+    if not math.isfinite(number) or not 0.0 <= number <= 1.0:
+        raise ValueError(f"{field_name} must be finite and between 0 and 1")
+    return number
+
+
+def _positive_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return value
+
+
+def _integer(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be an integer")
+    return value

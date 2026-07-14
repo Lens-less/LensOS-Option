@@ -255,7 +255,7 @@ class DqrIssueCompletionTests(unittest.TestCase):
         report = json.loads(completed.stdout)
         self.assertEqual("validated_historical", report["input_evidence"]["status"])
 
-    def test_calibration_promotion_requires_explicit_evidence(self):
+    def test_caller_supplied_flags_cannot_self_promote_calibration(self):
         default_report = build_walk_forward_calibration_report(
             generated_at="2026-07-07T00:01:30Z",
         )
@@ -273,9 +273,13 @@ class DqrIssueCompletionTests(unittest.TestCase):
         )
         self.assertEqual([], validate_walk_forward_calibration_report(promoted))
         registry = promoted["model_registry"]
-        self.assertTrue(registry["promoted_for_sizing"])
-        self.assertEqual("promoted", registry["promotion_status"])
-        self.assertTrue(registry["promotion_evidence"]["validated_path_risk"])
+        self.assertEqual("not_implemented", promoted["status"])
+        self.assertEqual("unavailable", promoted["evidence_class"])
+        self.assertFalse(registry["promoted_for_sizing"])
+        self.assertIsNone(registry["artifact_id"])
+        self.assertEqual(["CALIBRATION_NOT_IMPLEMENTED"], registry["blocking_reasons"])
+        self.assertEqual("not_implemented", registry["promotion_status"])
+        self.assertNotIn("promotion_evidence", registry)
 
     def test_private_replay_suite_maps_failures_to_no_trade(self):
         expectations = {

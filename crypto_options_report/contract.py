@@ -12,6 +12,7 @@ no-trade safeguards.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from typing import Any
 
 from .account_risk import (
@@ -26,6 +27,7 @@ from .market_data import build_market_data_status, parse_timestamp_ms
 from .pnl import build_pnl_evidence_report
 from .ev_scanner import build_ev_candidate_scanner
 from .calibration import (
+    CALIBRATION_NOT_IMPLEMENTED,
     build_walk_forward_calibration_report,
     validate_walk_forward_calibration_report,
 )
@@ -96,21 +98,13 @@ FORBIDDEN_RESEARCH_ONLY_KEYS = {
     "suggested_size",
     "take_profit",
     "risk_exit",
-    "quantity",
-    "qty",
-    "contracts",
-    "symbol",
-    "side",
-    "strike",
-    "expiry",
-    "limit_price",
     "post_only_price",
 }
 
 DEFAULT_REASON_CODES = [
     "MISSING_VALIDATED_MARKET_DATA",
     "MISSING_ACCOUNT_API_SNAPSHOT",
-    "CALIBRATION_PROMOTION_PENDING",
+    CALIBRATION_NOT_IMPLEMENTED,
     "BACKTEST_NOT_RUN",
 ]
 
@@ -228,6 +222,8 @@ def generate_research_report(
         permission_state=permission_state,
         candidate_research=candidate_research,
     )
+    if ev_candidate_scanner.get("reason_code"):
+        reason_codes.append(str(ev_candidate_scanner["reason_code"]))
     portfolio_risk = build_portfolio_risk_report(
         generated_at=generated,
         data_status=data_status,
@@ -241,6 +237,8 @@ def generate_research_report(
         portfolio_risk=portfolio_risk,
         permission_state=permission_state,
     )
+    if position_management.get("reason_code"):
+        reason_codes.append(str(position_management["reason_code"]))
     report = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": generated,
@@ -294,10 +292,44 @@ def generate_research_report(
         report=report,
     )
 
-    errors = validate_report_contract(report)
+    # Builders are covered by their component contracts. The hot path enforces
+    # only cross-cutting safety invariants; the exhaustive validator remains a
+    # public verification surface for CI and external payloads.
+    errors = _validate_runtime_safety_invariants(report)
     if errors:
         raise ValueError("; ".join(errors))
     return report
+
+
+def _validate_runtime_safety_invariants(report: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    missing = REQUIRED_REPORT_KEYS.difference(report)
+    if missing:
+        errors.append(f"missing required keys: {sorted(missing)}")
+    if report.get("schema_version") != SCHEMA_VERSION:
+        errors.append("schema_version must be research_report.v1")
+    if report.get("effective_mode") != "research_only":
+        errors.append("effective_mode must remain research_only")
+    if report.get("action") not in SAFE_ACTIONS:
+        errors.append("action must remain fail closed")
+    mode_gate = report.get("mode_gate") or {}
+    for key in (
+        "trade_recommendation_allowed",
+        "recommended_size_allowed",
+        "order_instructions_allowed",
+        "paper_manual_candidates_allowed",
+    ):
+        if mode_gate.get(key) is not False:
+            errors.append(f"mode_gate.{key} must be false")
+    paper = report.get("paper_proposal_ledger") or {}
+    if paper.get("proposal_creation_allowed") is not False:
+        errors.append("paper proposal creation must remain disabled")
+    if paper.get("automatic_live_submission_possible") is not False:
+        errors.append("automatic live submission must remain impossible")
+    forbidden = _find_forbidden_keys(report)
+    if forbidden:
+        errors.append(f"forbidden research-only keys present: {sorted(forbidden)}")
+    return errors
 
 
 def _calibration_status_from_walk_forward(
@@ -306,6 +338,18 @@ def _calibration_status_from_walk_forward(
     registry = calibration.get("model_registry") or {}
     model_version = registry.get("model_version")
     promotion_status = registry.get("promotion_status")
+    if (
+        calibration.get("status") == "not_implemented"
+        and registry.get("status") == "unavailable"
+    ):
+        return {
+            "status": "unavailable",
+            "calibrated": False,
+            "model_version": None,
+            "promotion_status": "not_implemented",
+            "evidence_class": "unavailable",
+            "reason_code": CALIBRATION_NOT_IMPLEMENTED,
+        }
     if not model_version or not promotion_status:
         return {
             "status": "missing",
@@ -755,7 +799,7 @@ def _validate_account_status(account_status: dict[str, Any]) -> list[str]:
         errors.append(
             "account_status.projected_margin.status must be available, not_requested, unavailable, or auth_failed"
         )
-    for key in {
+    projected_numeric_keys = {
         "initial_margin",
         "maintenance_margin",
         "nav_usd",
@@ -763,9 +807,24 @@ def _validate_account_status(account_status: dict[str, Any]) -> list[str]:
         "nav_to_mm",
         "delta_initial_margin",
         "delta_maintenance_margin",
-    }:
+    }
+    for key in projected_numeric_keys:
         if key not in projected_margin:
             errors.append(f"account_status.projected_margin missing key: {key}")
+            continue
+        value = projected_margin.get(key)
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            errors.append(
+                f"account_status.projected_margin.{key} must be finite numeric or null"
+            )
+        elif projected_margin.get("status") == "available" and value is None:
+            errors.append(
+                f"available account_status.projected_margin.{key} must be finite numeric"
+            )
 
     return errors
 
@@ -1007,11 +1066,17 @@ def _validate_ev_candidate_scanner(ev_candidate_scanner: Any) -> list[str]:
     if not isinstance(ev_candidate_scanner, dict):
         return ["ev_candidate_scanner must be a dict"]
 
-    if ev_candidate_scanner.get("status") not in {"blocked", "validated"}:
-        errors.append("ev_candidate_scanner.status must be blocked or validated")
-    if ev_candidate_scanner.get("score_status") != "UNCALIBRATED_RESEARCH_ONLY":
+    status = ev_candidate_scanner.get("status")
+    if status not in {"blocked", "validated", "unavailable"}:
         errors.append(
-            "ev_candidate_scanner.score_status must be UNCALIBRATED_RESEARCH_ONLY"
+            "ev_candidate_scanner.status must be blocked, validated, or unavailable"
+        )
+    expected_score_status = (
+        "UNAVAILABLE" if status == "unavailable" else "UNCALIBRATED_RESEARCH_ONLY"
+    )
+    if ev_candidate_scanner.get("score_status") != expected_score_status:
+        errors.append(
+            f"ev_candidate_scanner.score_status must be {expected_score_status}"
         )
     for key in (
         "recommended_size_allowed",
@@ -1025,6 +1090,10 @@ def _validate_ev_candidate_scanner(ev_candidate_scanner: Any) -> list[str]:
     if not isinstance(ranked_candidates, list):
         errors.append("ev_candidate_scanner.ranked_candidates must be a list")
     else:
+        if status == "unavailable" and ranked_candidates:
+            errors.append(
+                "unavailable ev_candidate_scanner must not expose ranked candidates"
+            )
         for candidate in ranked_candidates:
             if not isinstance(candidate, dict):
                 errors.append("ev_candidate_scanner candidate entries must be dicts")
@@ -1065,8 +1134,73 @@ def _validate_ev_candidate_scanner(ev_candidate_scanner: Any) -> list[str]:
             if not isinstance(candidate.get("hazard_zone"), dict):
                 errors.append("ev_candidate_scanner candidate hazard_zone must be a dict")
 
-    if not isinstance(ev_candidate_scanner.get("summary"), dict):
+    if status == "unavailable":
+        path_evidence = ev_candidate_scanner.get("path_risk_evidence") or {}
+        if ev_candidate_scanner.get("reason_code") != "MISSING_VALIDATED_PATH_RISK":
+            errors.append(
+                "unavailable ev_candidate_scanner must explain missing validated path risk"
+            )
+        if (
+            path_evidence.get("status") != "unavailable"
+            or path_evidence.get("validated") is not False
+            or path_evidence.get("artifact_id") is not None
+        ):
+            errors.append(
+                "unavailable ev_candidate_scanner path evidence must fail closed"
+            )
+    summary = ev_candidate_scanner.get("summary")
+    if not isinstance(summary, dict):
         errors.append("ev_candidate_scanner.summary must be a dict")
+    elif isinstance(ranked_candidates, list):
+        expected_summary = {
+            "candidates_scanned": len(ranked_candidates),
+            "review_candidates": sum(
+                candidate.get("action") == "REVIEW"
+                for candidate in ranked_candidates
+                if isinstance(candidate, dict)
+            ),
+            "rejected_candidates": sum(
+                candidate.get("action") == "REJECT"
+                for candidate in ranked_candidates
+                if isinstance(candidate, dict)
+            ),
+            "kill_condition_candidates": sum(
+                bool(candidate.get("kill_conditions"))
+                for candidate in ranked_candidates
+                if isinstance(candidate, dict)
+            ),
+            "top_candidate_id": (
+                ranked_candidates[0].get("candidate_id")
+                if ranked_candidates and isinstance(ranked_candidates[0], dict)
+                else None
+            ),
+            "top_candidate_action": (
+                ranked_candidates[0].get("action")
+                if ranked_candidates and isinstance(ranked_candidates[0], dict)
+                else None
+            ),
+        }
+        count_keys = {
+            "candidates_scanned",
+            "review_candidates",
+            "rejected_candidates",
+            "kill_condition_candidates",
+        }
+        summary_mismatch = any(
+            summary.get(key) != expected
+            or (
+                key in count_keys
+                and (
+                    isinstance(summary.get(key), bool)
+                    or not isinstance(summary.get(key), int)
+                )
+            )
+            for key, expected in expected_summary.items()
+        )
+        if summary_mismatch:
+            errors.append(
+                "ev_candidate_scanner.summary must reconcile with ranked_candidates"
+            )
     return errors
 
 

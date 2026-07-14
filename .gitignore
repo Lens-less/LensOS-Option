@@ -16,8 +16,7 @@ docs/automation/.options-platform-project-state.json.*.tmp
 .codex/
 .omx/
 .coordination-evidence/
-.workflow/ultracode/**/raw/
-.workflow/ultracode/**/state.json
+.workflow/ultracode/
 artifacts/
 build/
 dist/

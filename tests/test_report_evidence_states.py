@@ -8,25 +8,19 @@ from crypto_options_report.market_data import load_snapshot_fixture
 
 
 class ReportEvidenceStateTests(unittest.TestCase):
-    def test_local_calibration_fixture_is_pending_promotion_not_missing(self):
+    def test_missing_calibration_implementation_is_not_presented_as_fixture(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
 
         self.assertEqual([], validate_report_contract(report))
-        self.assertEqual("research_fixture", report["calibration_status"]["status"])
+        self.assertEqual("unavailable", report["calibration_status"]["status"])
         self.assertFalse(report["calibration_status"]["calibrated"])
+        self.assertIsNone(report["calibration_status"]["model_version"])
+        self.assertEqual("not_implemented", report["calibration_status"]["promotion_status"])
         self.assertEqual(
-            "walk_forward_fixture_v1",
-            report["calibration_status"]["model_version"],
-        )
-        self.assertEqual(
-            "research_only_unpromoted",
-            report["calibration_status"]["promotion_status"],
-        )
-        self.assertEqual(
-            "CALIBRATION_PROMOTION_PENDING",
+            "CALIBRATION_NOT_IMPLEMENTED",
             report["calibration_status"]["reason_code"],
         )
-        self.assertNotIn("MISSING_CALIBRATED_MODEL", report["reason_codes"])
+        self.assertIn("CALIBRATION_NOT_IMPLEMENTED", report["reason_codes"])
 
     def test_absent_backtest_artifact_is_not_run_and_has_no_performance(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
@@ -75,14 +69,14 @@ class ReportEvidenceStateTests(unittest.TestCase):
         )
 
         self.assertEqual([], calibration["system_comparison"])
-        self.assertEqual("not_run", calibration["comparison_status"]["status"])
+        self.assertEqual("unavailable", calibration["comparison_status"]["status"])
         self.assertEqual(
-            "BACKTEST_NOT_RUN",
+            "CALIBRATION_NOT_IMPLEMENTED",
             calibration["comparison_status"]["reason_code"],
         )
         self.assertEqual([], calibration["slow_bull_acute_rally_windows"])
 
-    def test_release_gates_distinguish_local_evidence_from_release_readiness(self):
+    def test_release_readiness_is_not_inferred_from_internal_evidence(self):
         snapshot = load_snapshot_fixture(
             "tests/fixtures/deribit_btc_option_chain_snapshot.json"
         )
@@ -91,34 +85,28 @@ class ReportEvidenceStateTests(unittest.TestCase):
             market_snapshot=snapshot,
             account_scenario="green",
         )
-        gates = {
-            gate["name"]: gate
-            for gate in report["full_system_surface"]["release_readiness"][
-                "prerequisites"
-            ]
-        }
+        readiness = report["full_system_surface"]["release_readiness"]
+        self.assertEqual("NO-GO", readiness["status"])
+        self.assertFalse(readiness["paper_mode_allowed"])
+        self.assertFalse(readiness["manual_execution_allowed"])
+        self.assertEqual(1, len(readiness["prerequisites"]))
+        gate = readiness["prerequisites"][0]
+        self.assertEqual("external_release_authorization", gate["name"])
+        self.assertFalse(gate["satisfied"])
+        self.assertEqual("not_configured", gate["evidence_state"])
+        self.assertEqual("awaiting_external", gate["release_state"])
+        self.assertEqual("external_operator", gate["owner"])
+        self.assertEqual(
+            ["EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED"], gate["reason_codes"]
+        )
 
-        data_gate = gates["data_quality"]
-        self.assertFalse(data_gate["satisfied"])
-        self.assertEqual("verified_local", data_gate["evidence_state"])
-        self.assertEqual("not_ready", data_gate["release_state"])
-        self.assertEqual("system_observation", data_gate["owner"])
-        self.assertIn("DATA_TRUST_PROMOTION_PENDING", data_gate["reason_codes"])
+        self.assertEqual("unsupported", report["paper_proposal_ledger"]["status"])
+        self.assertEqual("NO-GO", report["paper_proposal_ledger"]["release_state"])
+        self.assertFalse(
+            report["paper_proposal_ledger"]["persistence"]["write_allowed"]
+        )
 
-        calibration_gate = gates["walk_forward_calibration"]
-        self.assertFalse(calibration_gate["satisfied"])
-        self.assertEqual("verified_local", calibration_gate["evidence_state"])
-        self.assertEqual("awaiting_external", calibration_gate["release_state"])
-
-        reconciliation_gate = gates["paper_ledger_reconciliation"]
-        self.assertFalse(reconciliation_gate["satisfied"])
-        self.assertEqual("not_run", reconciliation_gate["evidence_state"])
-        self.assertEqual("awaiting_calendar", reconciliation_gate["release_state"])
-        self.assertEqual("system_observation", reconciliation_gate["owner"])
-
-        for gate in gates.values():
-            self.assertIn("release_blocking", gate)
-            self.assertIsInstance(gate["reason_codes"], list)
+        self.assertTrue(gate["release_blocking"])
 
     def test_release_gate_validator_rejects_contradictory_ready_states(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
@@ -132,21 +120,20 @@ class ReportEvidenceStateTests(unittest.TestCase):
             validate_full_system_surface_report(false_ready),
         )
 
-        true_without_evidence = deepcopy(surface)
-        satisfied_gate = next(
-            gate
-            for gate in true_without_evidence["release_readiness"]["prerequisites"]
-            if gate["satisfied"] is True
-        )
-        satisfied_gate["evidence_state"] = "not_configured"
-        satisfied_gate["reason_codes"] = ["FAKE_READY_STATE"]
-        errors = validate_full_system_surface_report(true_without_evidence)
+        forged_authorization = deepcopy(surface)
+        forged_gate = forged_authorization["release_readiness"]["prerequisites"][0]
+        forged_gate["satisfied"] = True
+        forged_gate["release_state"] = "ready"
+        forged_gate["evidence_state"] = "verified_local"
+        forged_gate["release_blocking"] = False
+        forged_gate["reason_codes"] = []
+        forged_gate["root_cause"] = None
+        forged_authorization["release_readiness"]["status"] = "GO"
+        forged_authorization["release_readiness"]["missing_prerequisites"] = []
+        forged_authorization["release_readiness"]["blocking_prerequisites"] = []
+        errors = validate_full_system_surface_report(forged_authorization)
         self.assertIn(
-            "satisfied release readiness gate must have verified local evidence",
-            errors,
-        )
-        self.assertIn(
-            "satisfied release readiness gate must not retain blocking reasons",
+            "runtime report cannot satisfy external release authorization",
             errors,
         )
 

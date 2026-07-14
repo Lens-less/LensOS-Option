@@ -5,6 +5,8 @@ from __future__ import annotations
 from math import isfinite, log
 from typing import Any
 
+from .market_data import bound_snapshot_trust_evidence
+
 
 DEFAULT_REGIME_INPUTS = {
     "bear_trend_score": 0.35,
@@ -69,38 +71,48 @@ def build_regime_permission_state(
         market_snapshot,
         vol_surface_status,
     )
-    raw_inputs = market_snapshot.get("regime_inputs") or {}
-    explicit_regime_inputs_present = bool(raw_inputs)
-    score_source = "explicit_regime_inputs"
-    observation_count = 0
-    percentile_source_override: str | None = None
-    if not raw_inputs and not _is_fixture_snapshot(market_snapshot):
-        rolling_observations = _rolling_market_observations(market_snapshot)
-        observation_count = len(rolling_observations)
-        derived_inputs, missing_reasons = _derive_rolling_regime_inputs(
-            observations=rolling_observations,
-            current=current_measurements,
-            trust_status=str(
-                (market_snapshot.get("trust_evidence") or {}).get("status") or ""
-            ),
+    # Handwritten scores and percentiles are not measurements. Only rolling
+    # observations bound by the authenticated trust sidecar may produce ranks.
+    trust_evidence = bound_snapshot_trust_evidence(market_snapshot)
+    rolling_observations = _rolling_market_observations(trust_evidence)
+    observation_count = len(rolling_observations)
+    derived_inputs, missing_reasons = _derive_rolling_regime_inputs(
+        observations=rolling_observations,
+        current=current_measurements,
+        trust_status=str(trust_evidence.get("status") or ""),
+    )
+    if derived_inputs is None:
+        return _collecting_permission_state(
+            reason_codes=missing_reasons,
+            current_measurements=current_measurements,
+            observation_count=observation_count,
         )
-        if derived_inputs is None:
-            return _collecting_permission_state(
-                reason_codes=missing_reasons,
-                current_measurements=current_measurements,
-                observation_count=observation_count,
-            )
-        raw_inputs = derived_inputs
-        score_source = "rolling_evidence"
-        percentile_source_override = "rolling_evidence"
-    elif not raw_inputs:
-        # Historical unit fixtures predate rolling evidence. Keep them useful for
-        # deterministic contract tests, but label the synthetic compatibility
-        # path so it can never be mistaken for live regime evidence.
-        score_source = "fixture_compatibility"
+    raw_inputs = derived_inputs
+    explicit_regime_inputs_present = False
+    score_source = "rolling_evidence"
+    percentile_source_override: str | None = "rolling_evidence"
+    if (
+        _percentile_value(
+            raw_inputs,
+            "atm_iv_percentile",
+            aliases=("atm_iv_pct",),
+        )
+        is None
+        or _percentile_value(
+            raw_inputs,
+            "dvol_percentile",
+            aliases=("dvol_pct",),
+        )
+        is None
+    ):
+        return _collecting_permission_state(
+            reason_codes=["REGIME_PERCENTILES_UNAVAILABLE"],
+            current_measurements=current_measurements,
+            observation_count=observation_count,
+            primary_reason=None,
+        )
     percentiles, percentile_provenance = _resolve_volatility_percentiles(
         raw_inputs,
-        vol_surface_status,
     )
     score_fields = (
         ("bear_trend", "bear_trend_score", ("bear_score",), DEFAULT_REGIME_INPUTS["bear_trend_score"]),
@@ -143,8 +155,7 @@ def build_regime_permission_state(
         "percentile_source": percentile_source_override or percentile_provenance,
         "score_source": score_source,
         "observation_count": observation_count,
-        "synthetic_inputs": bool(defaults_applied)
-        or percentile_provenance == "surface_iv_fallback",
+        "synthetic_inputs": bool(defaults_applied),
     }
 
     ignored_inputs = sorted(
@@ -277,9 +288,10 @@ def _collecting_permission_state(
     reason_codes: list[str],
     current_measurements: dict[str, float | None],
     observation_count: int,
+    primary_reason: str | None = "REGIME_ROLLING_HISTORY_INSUFFICIENT",
 ) -> dict[str, Any]:
     codes = _unique_codes(
-        ["REGIME_ROLLING_HISTORY_INSUFFICIENT", *reason_codes]
+        ([primary_reason] if primary_reason is not None else []) + reason_codes
     )
     state = _blocked_permission_state(
         reason_codes=codes,
@@ -306,10 +318,6 @@ def _collecting_permission_state(
         "synthetic_inputs": False,
     }
     return state
-
-
-def _is_fixture_snapshot(market_snapshot: dict[str, Any]) -> bool:
-    return str(market_snapshot.get("source") or "").lower().startswith("fixture:")
 
 
 def _current_market_measurements(
@@ -348,9 +356,8 @@ def _current_market_measurements(
 
 
 def _rolling_market_observations(
-    market_snapshot: dict[str, Any],
+    evidence: dict[str, Any],
 ) -> list[dict[str, float | None]]:
-    evidence = market_snapshot.get("trust_evidence") or {}
     candidates: Any = evidence.get("rolling_observations")
     if candidates is None:
         rolling = evidence.get("rolling")
@@ -387,6 +394,7 @@ def _rolling_market_observations(
                     observation,
                     "atm_iv",
                     aliases=("atm_iv_percent", "surface_atm_iv"),
+                    declared_unit=observation.get("iv_unit"),
                 ),
                 "funding_rate": _numeric_value(
                     observation,
@@ -515,7 +523,12 @@ def _current_atm_iv(vol_surface_status: dict[str, Any]) -> float | None:
         key=lambda point: abs(float(point["strike_price"]) - float(point["underlying_price"])),
     )
     value = float(nearest["surface_fitted_iv"])
-    return value / 100.0 if value > 5.0 else value
+    unit = str(nearest.get("iv_unit") or "").strip().lower()
+    if unit == "percent_points":
+        return value / 100.0
+    if unit == "fraction":
+        return value
+    return None
 
 
 def _exchange_event_score(events: Any) -> float | None:
@@ -561,16 +574,29 @@ def _fraction_value(
     primary: str,
     *,
     aliases: tuple[str, ...],
+    declared_unit: Any = None,
 ) -> float | None:
     value = _numeric_value(payload, primary, aliases=aliases)
     if value is None:
+        return None
+    if declared_unit not in (None, ""):
+        unit = str(declared_unit).strip().lower().replace("-", "_")
+        if unit in {"fraction", "decimal", "ratio"}:
+            return value
+        if unit in {
+            "percent",
+            "percentage_points",
+            "percent_points",
+            "pct",
+            "pct_points",
+        }:
+            return value / 100.0
         return None
     return value / 100.0 if value > 5.0 else value
 
 
 def _resolve_volatility_percentiles(
     raw_inputs: dict[str, Any],
-    vol_surface_status: dict[str, Any],
 ) -> tuple[dict[str, float], str]:
     atm_iv_percentile = _percentile_value(
         raw_inputs,
@@ -582,33 +608,15 @@ def _resolve_volatility_percentiles(
         "dvol_percentile",
         aliases=("dvol_pct",),
     )
-    provenance = "measured"
     if atm_iv_percentile is None or dvol_percentile is None:
-        fallback = _fallback_iv_percentile(vol_surface_status)
-        provenance = "surface_iv_fallback"
-        if atm_iv_percentile is None:
-            atm_iv_percentile = fallback
-        if dvol_percentile is None:
-            dvol_percentile = fallback
+        raise ValueError("regime percentiles must be measured or derived from history")
     return (
         {
             "dvol_percentile": _clamp01(dvol_percentile),
             "atm_iv_percentile": _clamp01(atm_iv_percentile),
         },
-        provenance,
+        "measured",
     )
-
-
-def _fallback_iv_percentile(vol_surface_status: dict[str, Any]) -> float:
-    values: list[float] = []
-    for expiry in vol_surface_status.get("expiries", []):
-        for point in expiry.get("surface_points", []):
-            iv_value = point.get("surface_fitted_iv")
-            if isinstance(iv_value, (int, float)):
-                values.append(iv_value)
-    if not values:
-        return 0.5
-    return _clamp01(sum(values) / len(values) / 100.0)
 
 
 def _score_value_with_provenance(
@@ -620,12 +628,15 @@ def _score_value_with_provenance(
 ) -> tuple[float, bool]:
     for key in (primary, *aliases):
         value = raw_inputs.get(key)
-        if value is None:
+        if (
+            value is None
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+        ):
             continue
-        try:
-            return _clamp01(float(value)), False
-        except (TypeError, ValueError):
-            continue
+        numeric = float(value)
+        if isfinite(numeric):
+            return _clamp01(numeric), False
     return _clamp01(default), True
 
 
@@ -653,8 +664,10 @@ def _percentile_value(
 ) -> float | None:
     for key in (primary, *aliases):
         value = raw_inputs.get(key)
-        if isinstance(value, (int, float)):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
             numeric = float(value)
+            if not isfinite(numeric) or numeric < 0.0 or numeric > 100.0:
+                continue
             if numeric > 1.0:
                 numeric = numeric / 100.0
             return _clamp01(numeric)
