@@ -21,6 +21,7 @@ from crypto_options_report.api import (
     _payload_for_path,
     build_parser as build_api_parser,
     dashboard_page_html,
+    evidence_page_html,
     readiness_payload,
     serve,
 )
@@ -123,21 +124,17 @@ class FullSystemSurfaceTests(unittest.TestCase):
         self.assertIn("views", _payload_for_path("/dashboard", ""))
         self.assertIn("backtest_comparison", _payload_for_path("/backtest/report/default", ""))
 
-    def test_dashboard_page_shell_uses_shared_report_routes(self):
+    def test_dashboard_page_shell_is_the_evidence_console_shell(self):
         html = dashboard_page_html()
 
-        self.assertIn("Crypto Options 研究控制台", html)
-        self.assertIn("/research/report", html)
-        self.assertIn("/dashboard", html)
-        self.assertNotIn("api_base", html)
-        self.assertIn("连接失败，显示离线预览", html)
-        self.assertIn("paper mode 已阻断", html)
-        self.assertIn("证据链", html)
-        self.assertNotIn("order_template", html)
-        ids = re.findall(r'\bid="([^"]+)"', html)
-        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(evidence_page_html(), html)
+        self.assertIn("LensOS Option", html)
+        self.assertIn("/evidence/assets/", html)
+        self.assertIn('id="root"', html)
+        self.assertNotIn("Crypto Options 研究控制台", html)
+        self.assertNotIn("/dashboard.html", html)
 
-    def test_http_dashboard_page_route_returns_html(self):
+    def test_http_dashboard_alias_routes_return_the_same_evidence_console_html(self):
         server = ResearchHTTPServer(
             ("127.0.0.1", 0),
             ResearchReportHandler,
@@ -151,22 +148,49 @@ class FullSystemSurfaceTests(unittest.TestCase):
             timeout=5,
         )
         try:
-            connection.request("GET", DASHBOARD_PAGE_PATH)
-            response = connection.getresponse()
-            body = response.read().decode("utf-8")
+            responses = []
+            for path in ("/", DASHBOARD_PAGE_PATH, "/dashboard/page", EVIDENCE_PAGE_PATH):
+                connection.request("GET", path)
+                response = connection.getresponse()
+                responses.append(
+                    (
+                        path,
+                        response.status,
+                        response.getheader("Content-Type"),
+                        response.getheader("Cache-Control"),
+                        response.getheader("Cross-Origin-Resource-Policy"),
+                        response.getheader("Server"),
+                        response.getheader("Content-Security-Policy"),
+                        response.read().decode("utf-8"),
+                    )
+                )
         finally:
             connection.close()
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
 
-        self.assertEqual(200, response.status)
-        self.assertEqual("text/html; charset=utf-8", response.getheader("Content-Type"))
-        self.assertEqual("no-store, max-age=0", response.getheader("Cache-Control"))
-        self.assertEqual("same-origin", response.getheader("Cross-Origin-Resource-Policy"))
-        self.assertNotIn("Python", response.getheader("Server"))
-        self.assertIn("connect-src 'self'", response.getheader("Content-Security-Policy"))
-        self.assertIn("Crypto Options 研究控制台", body)
+        expected_body = evidence_page_html()
+        for (
+            path,
+            status,
+            content_type,
+            cache_control,
+            corp,
+            server_header,
+            csp,
+            body,
+        ) in responses:
+            with self.subTest(path=path):
+                self.assertEqual(200, status)
+                self.assertEqual("text/html; charset=utf-8", content_type)
+                self.assertEqual("no-store, max-age=0", cache_control)
+                self.assertEqual("same-origin", corp)
+                self.assertNotIn("Python", server_header)
+                self.assertIn("style-src 'self'", csp)
+                self.assertIn("script-src 'self'", csp)
+                self.assertNotIn("'unsafe-inline'", csp)
+                self.assertEqual(expected_body, body)
 
     def test_liveness_and_readiness_are_distinct_fail_closed_contracts(self):
         live_status, _, live_body = self._request("GET", "/livez")
@@ -232,7 +256,7 @@ class FullSystemSurfaceTests(unittest.TestCase):
     def test_readiness_maps_unexpected_validation_failure_to_unavailable(self):
         runtime = RuntimeConfig(profile="production")
         with patch(
-            "crypto_options_report.api.dashboard_page_html",
+            "crypto_options_report.api.validate_evidence_bundle",
             side_effect=RuntimeError("asset changed after startup"),
         ):
             payload = readiness_payload(runtime)

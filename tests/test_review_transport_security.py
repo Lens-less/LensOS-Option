@@ -523,7 +523,8 @@ class ReviewTransportSecurityTests(unittest.TestCase):
         self.assertEqual(200, report.status)
         self.assertEqual("research_report.v1", report_payload["schema_version"])
         self.assertEqual(200, dashboard_page.status)
-        self.assertIn("Crypto Options", dashboard_body)
+        self.assertIn("LensOS Option", dashboard_body)
+        self.assertIn("/evidence/assets/", dashboard_body)
         self.assertEqual(409, post.status)
         self.assertEqual("historical_data_not_configured", post_payload["status"])
         self.assertEqual(404, job.status)
@@ -532,6 +533,57 @@ class ReviewTransportSecurityTests(unittest.TestCase):
         self.assertEqual("not_found", unknown_payload["error"])
         self.assertEqual(404, delete.status)
         self.assertEqual("backtest_job_not_found", delete_payload["error"])
+
+    def test_loopback_extension_origin_can_read_reports_but_cannot_mutate(self):
+        server = api.ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            api.ResearchReportHandler,
+            runtime=api.RuntimeConfig(),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        extension_headers = {"Origin": "chrome-extension://local-research-client"}
+        try:
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", server.server_port, timeout=5
+            )
+            connection.request(
+                "GET",
+                "/research/report",
+                headers=extension_headers,
+            )
+            report = connection.getresponse()
+            report_payload = json.loads(report.read().decode("utf-8"))
+            connection.close()
+
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", server.server_port, timeout=5
+            )
+            connection.request(
+                "POST",
+                "/backtest/run",
+                body=b'{"schema_version":"backtest_run_request.v1"}',
+                headers={
+                    **extension_headers,
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": "extension-must-remain-read-only",
+                },
+            )
+            mutation = connection.getresponse()
+            mutation_payload = json.loads(mutation.read().decode("utf-8"))
+            connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(200, report.status)
+        self.assertEqual("research_report.v1", report_payload["schema_version"])
+        self.assertEqual(403, mutation.status)
+        self.assertEqual(
+            "cross_origin_request_rejected",
+            mutation_payload["error"],
+        )
 
     def test_remote_bearer_auth_does_not_leak_tokens_in_responses_or_logs(self):
         token = "U" * 32

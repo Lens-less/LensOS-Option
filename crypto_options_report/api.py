@@ -531,7 +531,7 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             return
         parsed = urlparse(self.path)
         if parsed.path in DASHBOARD_PAGE_ALIASES:
-            self._write_html(HTTPStatus.OK, dashboard_page_html())
+            self._write_evidence_html(HTTPStatus.OK, dashboard_page_html())
             return
         if parsed.path in EVIDENCE_PAGE_ALIASES:
             self._write_evidence_html(HTTPStatus.OK, evidence_page_html())
@@ -1109,11 +1109,7 @@ def serve(
 
 
 def dashboard_page_html() -> str:
-    return (
-        files("crypto_options_report")
-        .joinpath("static", "dashboard.html")
-        .read_text(encoding="utf-8")
-    )
+    return evidence_page_html()
 
 
 def evidence_page_html() -> str:
@@ -1170,7 +1166,6 @@ def readiness_payload(
     reason_codes: list[str] = []
     try:
         runtime.validate(check_inputs=False)
-        dashboard_page_html()
         validate_evidence_bundle()
         service_ready = True
     except Exception as exc:
