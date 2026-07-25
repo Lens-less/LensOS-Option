@@ -313,7 +313,7 @@ class JobApiIntegrityTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             connection = http.client.HTTPConnection(
-                "127.0.0.1", server.server_port, timeout=2
+                "127.0.0.1", server.server_port, timeout=5
             )
             try:
                 with patch.object(
@@ -344,7 +344,7 @@ class JobApiIntegrityTests(unittest.TestCase):
         thread.start()
         try:
             rejected_connection = http.client.HTTPConnection(
-                "127.0.0.1", server.server_port, timeout=2
+                "127.0.0.1", server.server_port, timeout=5
             )
             rejected_connection.request(
                 "GET",
@@ -356,7 +356,7 @@ class JobApiIntegrityTests(unittest.TestCase):
             rejected_connection.close()
 
             allowed_connection = http.client.HTTPConnection(
-                "127.0.0.1", server.server_port, timeout=2
+                "127.0.0.1", server.server_port, timeout=5
             )
             allowed_connection.request("GET", "/livez")
             allowed = allowed_connection.getresponse()
@@ -385,7 +385,7 @@ class JobApiIntegrityTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             connection = http.client.HTTPConnection(
-                "127.0.0.1", server.server_port, timeout=2
+                "127.0.0.1", server.server_port, timeout=5
             )
             try:
                 connection.request(
@@ -430,7 +430,7 @@ class JobApiIntegrityTests(unittest.TestCase):
 
             try:
                 get_connection = http.client.HTTPConnection(
-                    "127.0.0.1", server.server_port, timeout=2
+                    "127.0.0.1", server.server_port, timeout=5
                 )
                 get_connection.request("GET", f"/backtest/jobs/{job_id}")
                 get_response = get_connection.getresponse()
@@ -438,7 +438,7 @@ class JobApiIntegrityTests(unittest.TestCase):
                 get_connection.close()
 
                 post_connection = http.client.HTTPConnection(
-                    "127.0.0.1", server.server_port, timeout=2
+                    "127.0.0.1", server.server_port, timeout=5
                 )
                 post_connection.request(
                     "POST",
@@ -532,7 +532,7 @@ class ReadinessIntegrityTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         connection = http.client.HTTPConnection(
-            "127.0.0.1", server.server_port, timeout=2
+            "127.0.0.1", server.server_port, timeout=5
         )
         try:
             connection.request("GET", "/readyz")

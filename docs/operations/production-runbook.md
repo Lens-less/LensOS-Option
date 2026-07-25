@@ -22,12 +22,33 @@ Only one instance should own a host/port. Use the service manager's singleton an
 
 The API rejects untrusted `Host` headers by default. Loopback names and addresses are allowed automatically. If a same-origin reverse proxy preserves an external hostname, set a comma-separated exact allowlist such as `$env:CRYPTO_OPTIONS_API_ALLOWED_HOSTS = "research.example.internal"`; do not use wildcards. Mutating requests that carry `Origin` must match the request `Host` authority, including an explicit port. Direct requests accept only the `http` scheme. A TLS reverse proxy must also list each exact external origin, including scheme and port when non-default, for example `$env:CRYPTO_OPTIONS_API_TRUSTED_ORIGINS = "https://research.example.internal"`. This setting has no wildcard or suffix semantics; an invalid entry is ignored.
 
+Non-loopback binds are fail-closed. They require both `CRYPTO_OPTIONS_API_ALLOW_REMOTE=1` and `CRYPTO_OPTIONS_API_BEARER_TOKEN_FILE`, where the configured path is a readable, non-symlink regular file containing exactly one printable ASCII token, no whitespace/control characters, and length `32..256`. On POSIX, use an owner-only or read-only service-group mode (`0400`, `0440`, `0600`, or `0640`). Only `GET /health`, `GET /livez`, and `GET /readyz` remain unauthenticated for probes. Every other path and method, including `404`, `HEAD`, `GET`, `POST`, `DELETE`, and unsupported verbs, requires exactly one `Authorization: Bearer <token>` header before route logic or request-body parsing runs. Duplicate `Host`, `Origin`, or `Authorization` headers are rejected.
+
+If the reverse proxy preserves the caller's bearer header, forward it explicitly:
+
+```nginx
+location / {
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_pass http://127.0.0.1:8000;
+}
+```
+
+If the proxy injects the API bearer itself, source that value from the platform secret store or mounted file rather than checking it into config, command history, or logs.
+
 ## Container startup
 
 ```powershell
 docker build -t crypto-options-research-console:local .
+$apiTokenPath = "C:\service-config\crypto-options\api-bearer.token"
+New-Item -ItemType Directory -Force -Path (Split-Path $apiTokenPath) | Out-Null
+if (-not (Test-Path -LiteralPath $apiTokenPath)) {
+  throw "Provision a 32-256 character ASCII bearer token file before remote startup"
+}
 docker run --rm --name crypto-options-research-console `
   --env CRYPTO_OPTIONS_API_ALLOW_REMOTE=1 `
+  --env CRYPTO_OPTIONS_API_BEARER_TOKEN_FILE=/run/secrets/api-bearer.token `
+  --mount type=bind,source=$apiTokenPath,target=/run/secrets/api-bearer.token,readonly `
   --publish 127.0.0.1:8000:8000 `
   --read-only `
   --tmpfs /tmp:rw,noexec,nosuid,size=16m `
@@ -36,7 +57,7 @@ docker run --rm --name crypto-options-research-console `
     --host 0.0.0.0 --port 8000
 ```
 
-The image itself defaults to loopback and does not bake in `CRYPTO_OPTIONS_API_ALLOW_REMOTE`. Container bridge publishing therefore requires both explicit remote opt-in and an explicit `0.0.0.0` command override, as shown above. Publishing the host port on `127.0.0.1` remains intentional. Put a same-origin reverse proxy in front of it for TLS, authentication, public rate limiting, body-size limits, and HSTS.
+The image itself defaults to loopback and does not bake in `CRYPTO_OPTIONS_API_ALLOW_REMOTE`. Container bridge publishing therefore requires explicit remote opt-in, a mounted `CRYPTO_OPTIONS_API_BEARER_TOKEN_FILE`, and an explicit `0.0.0.0` command override, as shown above. Publishing the host port on `127.0.0.1` remains intentional. Put a same-origin reverse proxy in front of it for TLS, authentication, public rate limiting, body-size limits, and HSTS. Keep the token file outside the image, mount it read-only, and never print the token in startup logs.
 
 ## Data source policy
 

@@ -7,10 +7,12 @@ placeholder and score models remain unpromoted.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
+import math
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -18,6 +20,7 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
 
+from .analysis_run import AnalysisRecord, EntryAdmissionStatus
 from .storage import atomic_write_json
 
 ALERT_EVENT_SCHEMA = "alert_event.v1"
@@ -78,7 +81,7 @@ FORBIDDEN_ALERT_PAYLOAD_KEYS = {
 
 
 def evaluate_alerts(
-    report: dict[str, Any],
+    report: dict[str, Any] | AnalysisRecord,
     *,
     previous_state: dict[str, Any] | None = None,
     cooldown_sec: int = 1800,
@@ -91,13 +94,47 @@ def evaluate_alerts(
     ``allow_opportunity_alerts`` is True **and** evidence gates pass
     (non-placeholder path risk, promoted model). Default is False.
     """
-    generated_at = now or report.get("generated_at") or _utc_now()
+    if isinstance(report, AnalysisRecord):
+        generated_at = now or report.manifest.evaluation_clock
+        candidates = _collect_analysis_record_events(
+            report,
+            allow_opportunity_alerts=allow_opportunity_alerts,
+        )
+        opportunity_alerts_allowed = allow_opportunity_alerts and any(
+            decision.status is EntryAdmissionStatus.CONDITIONALLY_ELIGIBLE
+            for decision in report.entry_admission_decisions
+        )
+        last_report_action = "analysis_record"
+        last_risk_state = None
+        last_portfolio_action = next(
+            (
+                condition.observed
+                for decision in report.entry_admission_decisions
+                for condition in decision.conditions
+                if condition.condition_id == "portfolio_veto"
+            ),
+            None,
+        )
+    else:
+        generated_at = now or report.get("generated_at") or _utc_now()
+        candidates = _collect_candidate_events(
+            report,
+            allow_opportunity_alerts=allow_opportunity_alerts,
+        )
+        opportunity_alerts_allowed = (
+            allow_opportunity_alerts and _opportunity_evidence_ok(report)
+        )
+        last_report_action = report.get("action")
+        last_risk_state = report.get("risk_state")
+        last_portfolio_action = (report.get("portfolio_risk") or {}).get(
+            "final_action"
+        )
     previous_state = previous_state or empty_alert_state()
-    candidates = _collect_candidate_events(report, allow_opportunity_alerts=allow_opportunity_alerts)
     fired: list[dict[str, Any]] = []
     suppressed: list[dict[str, Any]] = []
-    last_fired = dict(previous_state.get("last_fired") or {})
     now_ms = _parse_ms(generated_at)
+    raw_last_fired = previous_state.get("last_fired")
+    last_fired = _sanitize_last_fired(raw_last_fired, now_ms=now_ms)
 
     for event in candidates:
         fingerprint = event["fingerprint"]
@@ -119,18 +156,16 @@ def evaluate_alerts(
         "schema_version": ALERT_STATE_SCHEMA,
         "updated_at": generated_at,
         "last_fired": last_fired,
-        "last_report_action": report.get("action"),
-        "last_risk_state": report.get("risk_state"),
-        "last_portfolio_action": (report.get("portfolio_risk") or {}).get("final_action"),
+        "last_report_action": last_report_action,
+        "last_risk_state": last_risk_state,
+        "last_portfolio_action": last_portfolio_action,
     }
     return {
         "schema_version": ALERT_EVAL_SCHEMA,
         "generated_at": generated_at,
         "research_only": True,
         "trade_actions_allowed": False,
-        "opportunity_alerts_allowed": False
-        if not allow_opportunity_alerts
-        else _opportunity_evidence_ok(report),
+        "opportunity_alerts_allowed": opportunity_alerts_allowed,
         "cooldown_sec": cooldown_sec,
         "events": fired,
         "suppressed": suppressed,
@@ -146,6 +181,54 @@ def evaluate_alerts(
             "order_adapter": "not_implemented",
         },
     }
+
+
+def _collect_analysis_record_events(
+    record: AnalysisRecord,
+    *,
+    allow_opportunity_alerts: bool,
+) -> list[dict[str, Any]]:
+    """Project completed admission events without re-evaluating policy."""
+    alerts: list[dict[str, Any]] = []
+    severity = {
+        EntryAdmissionStatus.BLOCKED_BY_EVIDENCE.value: "critical",
+        EntryAdmissionStatus.NO_OPPORTUNITY.value: "info",
+        EntryAdmissionStatus.MONITOR_ONLY.value: "info",
+        EntryAdmissionStatus.DEFERRED.value: "warning",
+        EntryAdmissionStatus.VETOED.value: "critical",
+        EntryAdmissionStatus.CONDITIONALLY_ELIGIBLE.value: "info",
+    }
+    for event in record.domain_events:
+        if event.event_type != "entry_admission.decided":
+            continue
+        payload = json.loads(event.payload_json)
+        status = str(payload.get("status") or "UNKNOWN")
+        is_opportunity = (
+            status == EntryAdmissionStatus.CONDITIONALLY_ELIGIBLE.value
+        )
+        if is_opportunity and not allow_opportunity_alerts:
+            continue
+        alerts.append(
+            _event(
+                rule_id=f"entry_admission.{status.lower()}",
+                severity=severity.get(status, "warning"),
+                category="opportunity" if is_opportunity else "analysis_state",
+                title=f"Entry admission {status}",
+                reason_codes=list(event.reason_codes),
+                context={
+                    "decision_id": payload.get("decision_id"),
+                    "status": status,
+                    "valid_until": payload.get("valid_until"),
+                    "next_observable_condition": payload.get(
+                        "next_observable_condition"
+                    ),
+                    "analysis_run_id": record.analysis_run_id,
+                },
+                generated_at=record.manifest.evaluation_clock,
+                evidence_ok=True,
+            )
+        )
+    return alerts
 
 
 def empty_alert_state() -> dict[str, Any]:
@@ -491,6 +574,33 @@ def _highest_severity(events: list[dict[str, Any]]) -> str | None:
     return max(events, key=lambda item: SEVERITY_RANK.get(item.get("severity"), 0)).get(
         "severity"
     )
+
+
+def _sanitize_last_fired(raw_last_fired: Any, *, now_ms: int) -> dict[Any, int]:
+    if not isinstance(raw_last_fired, Mapping):
+        return {}
+    sanitized: dict[Any, int] = {}
+    for fingerprint, raw_ms in raw_last_fired.items():
+        prior_ms = _coerce_epoch_ms(raw_ms, now_ms=now_ms)
+        if prior_ms is not None:
+            sanitized[fingerprint] = prior_ms
+    return sanitized
+
+
+def _coerce_epoch_ms(value: Any, *, now_ms: int) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        candidate = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        candidate = int(value)
+    else:
+        return None
+    if candidate < 0 or candidate > now_ms:
+        return None
+    return candidate
 
 
 def _utc_now() -> str:

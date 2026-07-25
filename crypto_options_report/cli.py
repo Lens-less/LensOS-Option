@@ -21,7 +21,8 @@ from .backtest import (
     build_fixed_baseline_backtest_report,
     load_backtest_fixture,
 )
-from .contract import SUPPORTED_MODES, generate_research_report
+from .analysis_run import AnalysisRecord, build_analysis_record
+from .contract import SUPPORTED_MODES
 from .full_surface import build_recommendation_projection
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
@@ -64,6 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit 10 when market data quality is blocked/missing",
     )
+
+    analysis = subcommands.add_parser(
+        "analysis",
+        help="emit the immutable pre-entry AnalysisRecord",
+    )
+    _add_report_replay_args(analysis)
+    analysis.add_argument("--output", help="optional path to write JSON")
 
     pull = subcommands.add_parser(
         "pull-snapshot",
@@ -214,6 +222,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.fail_on_blocked and _market_blocked(report):
                 return EXIT_QUALITY_BLOCKED
             return EXIT_OK
+        if args.command == "analysis":
+            record = _build_analysis_record_from_args(args)
+            _emit_json(
+                record.to_dict(),
+                compact=args.compact,
+                output=args.output,
+            )
+            return EXIT_OK
 
         if args.command in {
             "ingest",
@@ -311,11 +327,14 @@ def _cmd_pull_snapshot(args: argparse.Namespace) -> int:
 def _cmd_alert_eval(args: argparse.Namespace) -> int:
     if args.report_json:
         report = json.loads(Path(args.report_json).read_text(encoding="utf-8"))
+        alert_source: dict[str, Any] | AnalysisRecord = report
     else:
-        report = _build_report_from_args(args)
+        record = _build_analysis_record_from_args(args)
+        report = record.project_research_report_v1()
+        alert_source = record
     state = load_alert_state(args.state_file)
     evaluation = evaluate_alerts(
-        report,
+        alert_source,
         previous_state=state,
         cooldown_sec=args.cooldown_sec,
         allow_opportunity_alerts=args.allow_opportunity_alerts,
@@ -388,6 +407,10 @@ def _add_report_replay_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_report_from_args(args: argparse.Namespace) -> dict:
+    return _build_analysis_record_from_args(args).project_research_report_v1()
+
+
+def _build_analysis_record_from_args(args: argparse.Namespace) -> AnalysisRecord:
     market_snapshot = None
     if getattr(args, "snapshot_fixture", None):
         market_snapshot = load_snapshot_fixture(args.snapshot_fixture)
@@ -399,7 +422,7 @@ def _build_report_from_args(args: argparse.Namespace) -> dict:
             include_feed_graph=True,
         )
 
-    return generate_research_report(
+    return build_analysis_record(
         mode=args.mode,
         market_snapshot=market_snapshot,
         account_scenario=args.account_scenario,

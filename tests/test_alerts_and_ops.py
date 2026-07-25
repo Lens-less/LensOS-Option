@@ -54,6 +54,122 @@ class AlertsAndOpsTests(unittest.TestCase):
         self.assertEqual(0, second["summary"]["fired"])
         self.assertGreaterEqual(second["summary"]["suppressed"], 1)
 
+    def test_alert_eval_treats_malformed_last_fired_as_empty_state(self):
+        report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+
+        for malformed in ([1], 7, None):
+            with self.subTest(last_fired=malformed):
+                previous_state = {
+                    "schema_version": "alert_state.v1",
+                    "updated_at": "2026-07-07T00:00:00Z",
+                    "last_fired": malformed,
+                }
+
+                evaluation = evaluate_alerts(
+                    report,
+                    previous_state=previous_state,
+                    cooldown_sec=3600,
+                )
+
+                self.assertGreaterEqual(evaluation["summary"]["fired"], 1)
+                self.assertEqual(0, evaluation["summary"]["suppressed"])
+                self.assertIsInstance(evaluation["state"]["last_fired"], dict)
+                self.assertEqual(malformed, previous_state["last_fired"])
+
+    def test_alert_eval_ignores_invalid_last_fired_timestamps(self):
+        report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+        baseline = evaluate_alerts(report, cooldown_sec=0)
+        fingerprint = baseline["events"][0]["fingerprint"]
+
+        invalid_values = {
+            "string": "bad",
+            "object": {"ms": 1},
+            "list": [1],
+            "bool": True,
+            "infinity": float("inf"),
+            "nan": float("nan"),
+        }
+
+        for label, malformed in invalid_values.items():
+            with self.subTest(last_fired=label):
+                previous_state = {
+                    "schema_version": "alert_state.v1",
+                    "updated_at": "2026-07-07T00:00:00Z",
+                    "last_fired": {fingerprint: malformed},
+                }
+
+                evaluation = evaluate_alerts(
+                    report,
+                    previous_state=previous_state,
+                    cooldown_sec=3600,
+                )
+
+                self.assertGreaterEqual(evaluation["summary"]["fired"], 1)
+                self.assertEqual(0, evaluation["summary"]["suppressed"])
+                self.assertIsInstance(evaluation["state"]["last_fired"][fingerprint], int)
+                self.assertIs(malformed, previous_state["last_fired"][fingerprint])
+
+    def test_alert_eval_preserves_valid_integer_like_last_fired_timestamps(self):
+        report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+        baseline = evaluate_alerts(report, cooldown_sec=0)
+        fingerprint = baseline["events"][0]["fingerprint"]
+        valid_timestamp = float(baseline["state"]["last_fired"][fingerprint])
+
+        evaluation = evaluate_alerts(
+            report,
+            previous_state={
+                "schema_version": "alert_state.v1",
+                "updated_at": "2026-07-07T00:00:00Z",
+                "last_fired": {
+                    fingerprint: valid_timestamp,
+                    "bad-string": "bad",
+                    "bad-object": {"ms": 1},
+                    "bad-list": [1],
+                    "bad-bool": False,
+                    "bad-infinity": float("inf"),
+                },
+            },
+            cooldown_sec=3600,
+        )
+
+        self.assertGreaterEqual(evaluation["summary"]["suppressed"], 1)
+        suppressed = {
+            event["fingerprint"]: event
+            for event in evaluation["suppressed"]
+        }
+        self.assertIn(fingerprint, suppressed)
+        self.assertEqual(int(valid_timestamp), evaluation["state"]["last_fired"][fingerprint])
+        self.assertNotIn("bad-string", evaluation["state"]["last_fired"])
+        self.assertNotIn("bad-object", evaluation["state"]["last_fired"])
+        self.assertNotIn("bad-list", evaluation["state"]["last_fired"])
+        self.assertNotIn("bad-bool", evaluation["state"]["last_fired"])
+        self.assertNotIn("bad-infinity", evaluation["state"]["last_fired"])
+
+    def test_alert_eval_ignores_negative_and_future_last_fired_timestamps(self):
+        report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+        baseline = evaluate_alerts(report, cooldown_sec=0)
+        fingerprint = baseline["events"][0]["fingerprint"]
+        now_ms = baseline["state"]["last_fired"][fingerprint]
+
+        for label, malformed in (
+            ("negative", -1),
+            ("future", now_ms + 10_000_000),
+        ):
+            with self.subTest(last_fired=label):
+                evaluation = evaluate_alerts(
+                    report,
+                    previous_state={
+                        "schema_version": "alert_state.v1",
+                        "updated_at": "2026-07-07T00:00:00Z",
+                        "last_fired": {fingerprint: malformed},
+                    },
+                    cooldown_sec=3600,
+                )
+
+                self.assertGreaterEqual(evaluation["summary"]["fired"], 1)
+                self.assertEqual(0, evaluation["summary"]["suppressed"])
+                self.assertEqual(now_ms, evaluation["state"]["last_fired"][fingerprint])
+
     def test_opportunity_alerts_remain_blocked_without_evidence(self):
         snapshot = json.loads(
             (FIXTURES / "deribit_btc_option_chain_snapshot.json").read_text(encoding="utf-8")
@@ -132,6 +248,142 @@ class AlertsAndOpsTests(unittest.TestCase):
             self.assertEqual(11, code)
             payload = json.loads(alert_out.read_text(encoding="utf-8"))
             self.assertEqual("alert_evaluation.v1", payload["schema_version"])
+
+    def test_cli_alert_eval_treats_malformed_last_fired_state_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+            report_path = Path(tmp) / "report.json"
+            state_path = Path(tmp) / "state.json"
+            alert_out = Path(tmp) / "alerts.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "alert_state.v1",
+                        "updated_at": "2026-07-07T00:00:00Z",
+                        "last_fired": [1],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code = main(
+                [
+                    "alert-eval",
+                    "--report-json",
+                    str(report_path),
+                    "--state-file",
+                    str(state_path),
+                    "--output",
+                    str(alert_out),
+                    "--dry-run",
+                    "--fail-on-alert",
+                    "--compact",
+                ]
+            )
+
+            self.assertEqual(11, code)
+            payload = json.loads(alert_out.read_text(encoding="utf-8"))
+            self.assertGreaterEqual(payload["summary"]["fired"], 1)
+            self.assertEqual(0, payload["summary"]["suppressed"])
+
+    def test_cli_alert_eval_ignores_invalid_last_fired_timestamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+            fingerprint = evaluate_alerts(report, cooldown_sec=0)["events"][0]["fingerprint"]
+            report_path = Path(tmp) / "report.json"
+            alert_out = Path(tmp) / "alerts.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            invalid_values = {
+                "string": "bad",
+                "object": {"ms": 1},
+                "list": [1],
+                "bool": True,
+                "infinity": float("inf"),
+                "nan": float("nan"),
+            }
+
+            for label, malformed in invalid_values.items():
+                with self.subTest(last_fired=label):
+                    state_path = Path(tmp) / f"state-{label}.json"
+                    state_path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": "alert_state.v1",
+                                "updated_at": "2026-07-07T00:00:00Z",
+                                "last_fired": {fingerprint: malformed},
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    code = main(
+                        [
+                            "alert-eval",
+                            "--report-json",
+                            str(report_path),
+                            "--state-file",
+                            str(state_path),
+                            "--output",
+                            str(alert_out),
+                            "--dry-run",
+                            "--fail-on-alert",
+                            "--compact",
+                        ]
+                    )
+
+                    self.assertEqual(11, code)
+                    payload = json.loads(alert_out.read_text(encoding="utf-8"))
+                    self.assertGreaterEqual(payload["summary"]["fired"], 1)
+                    self.assertEqual(0, payload["summary"]["suppressed"])
+
+    def test_cli_alert_eval_ignores_negative_and_future_last_fired_timestamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+            baseline = evaluate_alerts(report, cooldown_sec=0)
+            fingerprint = baseline["events"][0]["fingerprint"]
+            now_ms = baseline["state"]["last_fired"][fingerprint]
+            report_path = Path(tmp) / "report.json"
+            alert_out = Path(tmp) / "alerts.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            for label, malformed in (
+                ("negative", -1),
+                ("future", now_ms + 10_000_000),
+            ):
+                with self.subTest(last_fired=label):
+                    state_path = Path(tmp) / f"state-{label}.json"
+                    state_path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": "alert_state.v1",
+                                "updated_at": "2026-07-07T00:00:00Z",
+                                "last_fired": {fingerprint: malformed},
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    code = main(
+                        [
+                            "alert-eval",
+                            "--report-json",
+                            str(report_path),
+                            "--state-file",
+                            str(state_path),
+                            "--output",
+                            str(alert_out),
+                            "--dry-run",
+                            "--fail-on-alert",
+                            "--compact",
+                        ]
+                    )
+
+                    self.assertEqual(11, code)
+                    payload = json.loads(alert_out.read_text(encoding="utf-8"))
+                    self.assertGreaterEqual(payload["summary"]["fired"], 1)
+                    self.assertEqual(0, payload["summary"]["suppressed"])
 
     def test_write_snapshot_fixture_roundtrip(self):
         snapshot = {

@@ -7,6 +7,7 @@ from typing import Any
 FULL_SYSTEM_SURFACE_SCHEMA_VERSION = "full_system_surface_report.v1"
 
 CLI_COMMANDS = [
+    "analysis",
     "report",
     "ingest",
     "ingestion-status",
@@ -38,8 +39,10 @@ API_ROUTES = [
     "GET /health",
     "GET /livez",
     "GET /readyz",
+    "GET /analysis/result",
     "GET /research/report",
     "GET /dashboard.html",
+    "GET /evidence",
     "GET /dashboard",
     "GET /market/chain",
     "GET /surface",
@@ -154,36 +157,49 @@ def validate_full_system_surface_report(report: Any) -> list[str]:
         )
     if report.get("status") != "declared_not_probed":
         errors.append("full_system_surface.status must be declared_not_probed")
-    commands = {
-        item.get("name") for item in (report.get("cli") or {}).get("commands", [])
-    }
+
+    cli = _surface_section(report, "cli", errors)
+    api = _surface_section(report, "api", errors)
+    dashboard = _surface_section(report, "dashboard", errors)
+    alerts = _surface_section(report, "alerts", errors)
+    readiness = _surface_section(report, "release_readiness", errors)
+
+    command_items, commands = _declared_items(
+        cli,
+        path="full_system_surface.cli.commands",
+        key="commands",
+        identity_field="name",
+        errors=errors,
+    )
     if commands != set(CLI_COMMANDS):
         errors.append("full_system_surface.cli.commands must include the full command set")
-    routes = {
-        item.get("route") for item in (report.get("api") or {}).get("routes", [])
-    }
+    route_items, routes = _declared_items(
+        api,
+        path="full_system_surface.api.routes",
+        key="routes",
+        identity_field="route",
+        errors=errors,
+    )
     if routes != set(API_ROUTES):
         errors.append("full_system_surface.api.routes must include the full route set")
-    views = {
-        item.get("name")
-        for item in (report.get("dashboard") or {}).get("views", [])
-    }
+    view_items, views = _declared_items(
+        dashboard,
+        path="full_system_surface.dashboard.views",
+        key="views",
+        identity_field="name",
+        errors=errors,
+    )
     if views != set(DASHBOARD_VIEWS):
         errors.append("full_system_surface.dashboard.views must include all required views")
-    declared_items = (
-        list((report.get("cli") or {}).get("commands", []))
-        + list((report.get("api") or {}).get("routes", []))
-        + list((report.get("dashboard") or {}).get("views", []))
-    )
+    declared_items = command_items + route_items + view_items
     if any(item.get("status") != "declared_not_probed" for item in declared_items):
         errors.append("static full-system surfaces must remain declared_not_probed")
-    if (report.get("alerts") or {}).get("status") != "declared_not_probed":
+    if alerts.get("status") != "declared_not_probed":
         errors.append("static alert surface must remain declared_not_probed")
-    for surface_name in ("cli", "api", "dashboard"):
-        if (report.get(surface_name) or {}).get("paper_manual_actions_visible") is not False:
+    for surface_name, section in (("cli", cli), ("api", api), ("dashboard", dashboard)):
+        if section.get("paper_manual_actions_visible") is not False:
             errors.append(f"full_system_surface.{surface_name} must hide paper/manual actions")
 
-    readiness = report.get("release_readiness") or {}
     if readiness.get("status") != "NO-GO":
         errors.append("runtime release readiness must remain NO-GO")
     if readiness.get("paper_mode_allowed") is not False:
@@ -257,6 +273,47 @@ def validate_full_system_surface_report(report: Any) -> list[str]:
         if item.get("root_cause") != _EXTERNAL_RELEASE_REASON:
             errors.append("external release authorization root cause is invalid")
     return errors
+
+
+def _surface_section(
+    report: dict[str, Any],
+    key: str,
+    errors: list[str],
+) -> dict[str, Any]:
+    section = report.get(key)
+    if not isinstance(section, dict):
+        errors.append(f"full_system_surface.{key} must be a dict")
+        return {}
+    return section
+
+
+def _declared_items(
+    section: dict[str, Any],
+    *,
+    path: str,
+    key: str,
+    identity_field: str,
+    errors: list[str],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    raw_items = section.get(key)
+    if not isinstance(raw_items, list):
+        errors.append(f"{path} must be a list")
+        return [], set()
+
+    items: list[dict[str, Any]] = []
+    identities: set[str] = set()
+    saw_non_dict = False
+    for item in raw_items:
+        if not isinstance(item, dict):
+            saw_non_dict = True
+            continue
+        items.append(item)
+        identity = item.get(identity_field)
+        if isinstance(identity, str):
+            identities.add(identity)
+    if saw_non_dict:
+        errors.append(f"{path} entries must be dicts")
+    return items, identities
 
 
 def _view_keys(name: str) -> list[str]:

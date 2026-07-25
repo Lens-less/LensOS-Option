@@ -17,16 +17,18 @@ jobs:
         python-version: ["3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[test]"
       - run: python -m compileall -q crypto_options_report tools
+      - run: node --version
       - run: python -m pytest -q
       - run: python -m crypto_options_report.api --smoke
+      - run: python -m crypto_options_report.account_snapshot_sidecar --help
       - run: python -m pip wheel --no-deps . -w dist
       - name: Verify built wheel on Linux
         if: runner.os == 'Linux'
@@ -38,6 +40,7 @@ jobs:
           wheel-venv/bin/crypto-options-report --help >/dev/null
           wheel-venv/bin/crypto-options-report-api --smoke >/dev/null
           wheel-venv/bin/crypto-options-snapshot-sidecar --help >/dev/null
+          wheel-venv/bin/crypto-options-account-snapshot-sidecar --help >/dev/null
       - name: Verify built wheel on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -49,26 +52,57 @@ jobs:
           wheel-venv\Scripts\crypto-options-report.exe --help | Out-Null
           wheel-venv\Scripts\crypto-options-report-api.exe --smoke | Out-Null
           wheel-venv\Scripts\crypto-options-snapshot-sidecar.exe --help | Out-Null
-      - uses: actions/upload-artifact@v7
+          wheel-venv\Scripts\crypto-options-account-snapshot-sidecar.exe --help | Out-Null
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: runner.os == 'Linux' && matrix.python-version == '3.13'
         with:
           name: python-wheel
           path: dist/*.whl
           if-no-files-found: error
 
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run lint
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - name: Verify committed evidence bundle matches source
+        run: git diff --exit-code -- crypto_options_report/static/evidence
+
   container:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - run: docker build --tag crypto-options-research-console:ci .
       - name: Verify production container
         shell: bash
         run: |
           set -euo pipefail
+          token_dir="$(mktemp -d)"
+          token_file="$token_dir/api-bearer.token"
+          token_value="$(python -c 'print("T" * 32, end="")')"
+          printf '%s' "$token_value" > "$token_file"
+          sudo chown 10001:10001 "$token_file"
+          sudo chmod 400 "$token_file"
           docker run --rm crypto-options-research-console:ci \
             python -m crypto_options_report.snapshot_sidecar --help >/dev/null
+          docker run --rm crypto-options-research-console:ci \
+            python -m crypto_options_report.account_snapshot_sidecar --help >/dev/null
           docker run --detach --name crypto-options-research-console-ci \
             --env CRYPTO_OPTIONS_API_ALLOW_REMOTE=1 \
+            --env CRYPTO_OPTIONS_API_BEARER_TOKEN_FILE=/run/secrets/api-bearer.token \
+            --mount type=bind,src="$token_file",target=/run/secrets/api-bearer.token,readonly \
             --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
             --publish 127.0.0.1:18000:8000 \
             crypto-options-research-console:ci \
@@ -122,7 +156,13 @@ jobs:
           }
           assert required_reasons.issubset(set(ready["reason_codes"]))
           PY
-          curl --fail --silent --show-error http://127.0.0.1:18000/dashboard.html >/dev/null
+          dashboard_auth="Authorization: Bearer $token_value"
+          curl --fail --silent --show-error \
+            --header "$dashboard_auth" \
+            http://127.0.0.1:18000/dashboard.html >/dev/null
+          curl --fail --silent --show-error \
+            --header "$dashboard_auth" \
+            http://127.0.0.1:18000/evidence >/dev/null
           healthy=false
           for attempt in {1..45}; do
             health="$(docker inspect --format='{{.State.Health.Status}}' crypto-options-research-console-ci)"

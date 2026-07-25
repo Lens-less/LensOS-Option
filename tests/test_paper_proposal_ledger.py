@@ -1,4 +1,5 @@
 from copy import deepcopy
+import re
 import tempfile
 from pathlib import Path
 import unittest
@@ -8,12 +9,44 @@ from crypto_options_report.contract import (
     validate_report_contract,
 )
 from crypto_options_report.paper_ledger import (
+    CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID,
+    DEFAULT_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID,
     build_paper_proposal_ledger,
+    manual_approval_runbook_evidence,
     validate_paper_proposal_ledger,
 )
 
 
 class PaperProposalLedgerTests(unittest.TestCase):
+    def test_default_manual_runbook_path_is_package_relative_identifier(self):
+        evidence = manual_approval_runbook_evidence()
+
+        self.assertEqual(
+            DEFAULT_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID,
+            evidence["path"],
+        )
+        self.assertFalse(_looks_like_absolute_path(evidence["path"]))
+
+    def test_custom_manual_runbook_path_hides_posix_absolute_location(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runbook = Path(tmp) / "manual.md"
+            runbook.write_text(
+                "# Manual approval runbook\n\nVersion: 1.0\n\n"
+                "RESEARCH_ONLY. Manual approval is required.\n",
+                encoding="utf-8",
+            )
+
+            evidence = manual_approval_runbook_evidence(runbook)
+
+        self.assertEqual(CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID, evidence["path"])
+        self.assertFalse(_looks_like_absolute_path(evidence["path"]))
+
+    def test_custom_manual_runbook_path_hides_windows_absolute_location(self):
+        evidence = manual_approval_runbook_evidence(r"C:\ops\manual-approval-runbook.md")
+
+        self.assertEqual(CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID, evidence["path"])
+        self.assertFalse(_looks_like_absolute_path(evidence["path"]))
+
     def test_default_report_declares_paper_mode_unsupported(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
         ledger = report["paper_proposal_ledger"]
@@ -126,3 +159,7 @@ class PaperProposalLedgerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _looks_like_absolute_path(value: str) -> bool:
+    return bool(re.match(r"^(?:[A-Za-z]:[\\\\/]|\\\\\\\\|/)", value))

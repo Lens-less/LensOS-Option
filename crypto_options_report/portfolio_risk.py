@@ -131,8 +131,31 @@ def validate_portfolio_risk_report(report: Any) -> list[str]:
             errors.append(
                 "portfolio_risk.final_action must match final_signal.severity"
             )
-    if not isinstance(report.get("size_caps"), list):
+    size_caps = report.get("size_caps")
+    if not isinstance(size_caps, list):
         errors.append("portfolio_risk.size_caps must be a list")
+    elif report.get("final_action") == "halt_system":
+        if size_caps:
+            errors.append("halted portfolio_risk must not expose size_caps")
+    else:
+        for size_cap in size_caps:
+            if not isinstance(size_cap, dict):
+                errors.append("portfolio_risk.size_caps entries must be dicts")
+                continue
+            for key in (
+                "candidate_id",
+                "structure_type",
+                "raw_cap_units",
+                "calibrated_shadow_cap_units",
+                "final_cap_units",
+                "limiting_dimension",
+                "dimensions",
+                "research_only_reason",
+                "size_output_allowed",
+                "reason_codes",
+            ):
+                if key not in size_cap:
+                    errors.append(f"portfolio_risk.size_cap missing key: {key}")
     return errors
 
 
@@ -439,10 +462,11 @@ def _candidate_size_cap(
 
 
 def _volatility_size_multiplier(inputs: dict[str, Any]) -> float:
-    percentile = max(
-        float(inputs.get("dvol_percentile") or 0.0),
-        float(inputs.get("atm_iv_percentile") or 0.0),
-    )
+    dvol = _finite_percentile(inputs.get("dvol_percentile"))
+    atm_iv = _finite_percentile(inputs.get("atm_iv_percentile"))
+    if dvol is None or atm_iv is None:
+        return 0.0
+    percentile = max(dvol, atm_iv)
     if percentile >= 0.98:
         return 0.0
     if percentile >= 0.95:
@@ -468,6 +492,15 @@ def _dimension(name: str, value: float) -> dict[str, Any]:
         "dimension": name,
         "cap_units": round(max(float(value), 0.0), 6),
     }
+
+
+def _finite_percentile(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    percentile = float(value)
+    if not math.isfinite(percentile) or not 0.0 <= percentile <= 1.0:
+        return None
+    return percentile
 
 
 def _signal(

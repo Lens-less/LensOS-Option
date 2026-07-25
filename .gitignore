@@ -21,6 +21,9 @@ artifacts/
 build/
 dist/
 *.egg-info/
+web/node_modules/
+web/.vite/
+web/coverage/
 *.log
 *.db
 *.sqlite

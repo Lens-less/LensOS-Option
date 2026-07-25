@@ -242,8 +242,11 @@ def validate_position_management_report(report: Any) -> list[str]:
         errors.append("position_management.schema_version must be position_management_report.v1")
     if report.get("status") not in {"available", "empty", "unavailable"}:
         errors.append("position_management.status is invalid")
-    if report.get("status") == "unavailable" and report.get("replays") != []:
+    status = report.get("status")
+    if status == "unavailable" and report.get("replays") != []:
         errors.append("unavailable position management must not expose replays")
+    if status == "empty" and report.get("replays") != []:
+        errors.append("empty position management must not expose replays")
     missing_evidence = report.get("missing_evidence")
     if not isinstance(missing_evidence, list) or any(
         not isinstance(item, str) or not item for item in (missing_evidence or [])
@@ -253,12 +256,14 @@ def validate_position_management_report(report: Any) -> list[str]:
         errors.append("available position management must not have missing evidence")
     if report.get("status") == "unavailable" and not missing_evidence:
         errors.append("unavailable position management must identify missing evidence")
+    if report.get("status") == "empty" and missing_evidence:
+        errors.append("empty position management must not claim missing evidence")
     if set(report.get("state_definitions") or []) != set(POSITION_STATES):
         errors.append("position_management.state_definitions must include all states")
     replays = report.get("replays")
     if not isinstance(replays, list):
         errors.append("position_management.replays must be a list")
-    else:
+    elif status == "available":
         for replay in replays:
             if not isinstance(replay, dict):
                 errors.append("position_management replay entries must be dicts")

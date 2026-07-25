@@ -1,0 +1,1350 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>LensOS Option · 亮色研究台方向样机</title>
+  <style>
+    :root {
+      --shell-bg: #efefec;
+      --shell-paper: #fbfbf9;
+      --shell-ink: #191a1c;
+      --shell-muted: #666b73;
+      --shell-line: #d6d6d1;
+      --shell-blue: #125bd5;
+      --shell-green: #177853;
+      --ease-out: cubic-bezier(.23, 1, .32, 1);
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--shell-bg); scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        linear-gradient(90deg, transparent 0 31px, rgb(25 26 28 / 3%) 31px 32px, transparent 32px),
+        var(--shell-bg);
+      color: var(--shell-ink);
+    }
+
+    ::selection { color: #fff; background: #1c5fd4; }
+
+    .preview-shell {
+      width: min(1480px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 38px 0 72px;
+    }
+
+    .preview-intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(280px, .75fr);
+      gap: 48px;
+      align-items: end;
+      padding: 0 0 28px;
+      border-bottom: 1px solid var(--shell-line);
+    }
+
+    .preview-kicker {
+      margin: 0 0 10px;
+      color: var(--shell-blue);
+      font: 700 12px/1.2 ui-monospace, "Cascadia Code", Consolas, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .preview-title {
+      max-width: 19ch;
+      margin: 0;
+      font-size: clamp(30px, 4vw, 58px);
+      font-weight: 650;
+      line-height: .98;
+      letter-spacing: -.055em;
+      text-wrap: balance;
+    }
+
+    .preview-contract {
+      margin: 0;
+      color: var(--shell-muted);
+      font-size: 14px;
+      line-height: 1.7;
+      text-wrap: pretty;
+    }
+
+    .dial-panel {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      margin: 24px 0 28px;
+      border: 1px solid var(--shell-line);
+      background: var(--shell-line);
+    }
+
+    .dial {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+      padding: 14px 16px 13px;
+      background: var(--shell-paper);
+      color: var(--shell-muted);
+      font-size: 12px;
+    }
+
+    .dial-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--shell-ink);
+      font-weight: 650;
+    }
+
+    .dial output {
+      color: var(--shell-blue);
+      font: 700 14px/1 ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .dial input {
+      width: 100%;
+      accent-color: var(--shell-ink);
+      cursor: ew-resize;
+    }
+
+    .direction-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 22px;
+    }
+
+    .direction-card {
+      position: relative;
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid #c9cac7;
+      background: #fff;
+      box-shadow: 0 1px 0 rgb(25 26 28 / 4%);
+      cursor: pointer;
+      transition:
+        transform 160ms var(--ease-out),
+        border-color 160ms var(--ease-out),
+        box-shadow 160ms var(--ease-out);
+    }
+
+    .direction-card:focus-within { border-color: var(--shell-ink); }
+    .direction-card.is-selected {
+      border-color: var(--shell-green);
+      box-shadow: 0 0 0 3px rgb(23 120 83 / 14%);
+    }
+
+    .direction-card-header {
+      display: flex;
+      min-height: 56px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 15px;
+      border-bottom: 1px solid #d8d9d5;
+      background: #fafaf8;
+    }
+
+    .direction-id {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .direction-id b {
+      color: var(--shell-blue);
+      font: 760 13px/1 ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+
+    .direction-id h2 {
+      margin: 0;
+      overflow: hidden;
+      font-size: 16px;
+      font-weight: 650;
+      line-height: 1.2;
+      letter-spacing: -.02em;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .direction-labels {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #73777d;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .recommended {
+      display: inline-flex;
+      min-height: 24px;
+      align-items: center;
+      padding: 0 8px;
+      background: #1d5fce;
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .mockup-frame {
+      position: relative;
+      height: 348px;
+      min-height: 348px;
+      overflow: hidden;
+      background: #e9e9e6;
+    }
+
+    .mockup-frame::after {
+      position: absolute;
+      right: 10px;
+      bottom: 9px;
+      z-index: 8;
+      padding: 4px 6px;
+      border: 1px solid rgb(255 255 255 / 65%);
+      background: rgb(20 22 25 / 72%);
+      color: #fff;
+      content: "方向样机";
+      font: 650 9px/1 ui-monospace, "Cascadia Code", Consolas, monospace;
+      letter-spacing: .05em;
+      pointer-events: none;
+    }
+
+    .direction-meta {
+      display: grid;
+      width: 100%;
+      min-width: 0;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      padding: 14px 15px 15px;
+      border-top: 1px solid #d8d9d5;
+      background: #fff;
+    }
+
+    .direction-meta p {
+      display: -webkit-box;
+      width: 100%;
+      min-width: min(240px, 100%);
+      max-width: 68ch;
+      margin: 0;
+      overflow: hidden;
+      color: #676b71;
+      font-size: 12px;
+      line-height: 1.55;
+      text-wrap: pretty;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+
+    .qmdp-pick-button {
+      display: inline-flex;
+      width: 100%;
+      min-height: 44px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #191b21;
+      border-radius: 0;
+      background: #191b21;
+      color: #fff;
+      font: 700 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI Variable",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+      cursor: pointer;
+    }
+
+    .direction-notes {
+      margin-top: 34px;
+      border-top: 1px solid var(--shell-line);
+    }
+
+    .notes-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, .65fr);
+      gap: 32px;
+      align-items: end;
+      padding: 25px 0 18px;
+    }
+
+    .notes-head h2 {
+      margin: 0;
+      font-size: clamp(24px, 2.8vw, 38px);
+      font-weight: 650;
+      line-height: 1;
+      letter-spacing: -.045em;
+    }
+
+    .notes-head p {
+      margin: 0;
+      color: var(--shell-muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .notes-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-top: 1px solid var(--shell-line);
+      border-left: 1px solid var(--shell-line);
+    }
+
+    .note {
+      min-width: 0;
+      padding: 18px;
+      border-right: 1px solid var(--shell-line);
+      border-bottom: 1px solid var(--shell-line);
+      background: rgb(251 251 249 / 72%);
+    }
+
+    .note h3 {
+      margin: 0 0 13px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .note dl { margin: 0; }
+    .note dt {
+      margin-top: 11px;
+      color: #7a7e84;
+      font: 650 10px/1.2 ui-monospace, "Cascadia Code", Consolas, monospace;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .note dd {
+      margin: 4px 0 0;
+      color: #41454b;
+      font-size: 12px;
+      line-height: 1.62;
+      text-wrap: pretty;
+    }
+
+    .note-recommend {
+      color: #1354bd;
+      font-weight: 650;
+    }
+
+    .native-confirm {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483100;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgb(15 18 26 / 42%);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 150ms var(--ease-out);
+    }
+
+    .native-confirm.open { opacity: 1; pointer-events: auto; }
+
+    .native-dialog {
+      width: min(520px, calc(100vw - 32px));
+      padding: 22px;
+      border: 1px solid #cfd1d4;
+      background: #fff;
+      box-shadow: 0 28px 80px rgb(15 23 42 / 25%);
+      transform: translateY(8px) scale(.98);
+      transition: transform 150ms var(--ease-out);
+    }
+
+    .native-confirm.open .native-dialog { transform: translateY(0) scale(1); }
+    .native-dialog h2 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.02em; }
+    .native-dialog p { margin: 0 0 15px; color: #5d636d; font-size: 13px; line-height: 1.6; }
+    .native-dialog textarea {
+      width: 100%;
+      min-height: 92px;
+      resize: vertical;
+      border: 1px solid #cfd1d4;
+      border-radius: 0;
+      padding: 11px 12px;
+      color: #191b21;
+      font: 500 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI Variable",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    .native-dialog textarea:focus {
+      border-color: #191b21;
+      outline: 3px solid rgb(25 27 33 / 9%);
+      outline-offset: 0;
+    }
+
+    .native-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .native-action {
+      min-height: 40px;
+      border: 1px solid #cfd1d4;
+      border-radius: 0;
+      padding: 0 15px;
+      background: #fff;
+      color: #191b21;
+      font: 700 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI Variable",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+      cursor: pointer;
+    }
+
+    .native-action.primary { border-color: #191b21; background: #191b21; color: #fff; }
+
+    .native-toast {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      z-index: 2147483099;
+      max-width: min(620px, calc(100vw - 28px));
+      padding: 12px 15px;
+      border: 1px solid rgb(255 255 255 / 16%);
+      background: #191b21;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 650;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 18px);
+      transition: transform 180ms var(--ease-out), opacity 180ms var(--ease-out);
+    }
+
+    .native-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    /* Direction A — editorial research brief. */
+    .dir-a {
+      height: 100%;
+      padding: 15px 17px 14px;
+      background: #f8f4e9;
+      color: #172033;
+      font-family: "Source Sans 3", "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    .dir-a__mast {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 9px;
+      border-bottom: 2px solid #1c2e4a;
+    }
+
+    .dir-a__brand { font-size: 14px; font-weight: 800; letter-spacing: -.03em; }
+    .dir-a__brand span { color: #1f65d6; }
+    .dir-a__stamp {
+      color: #5f6771;
+      font: 650 9px/1.3 ui-monospace, "Cascadia Code", Consolas, monospace;
+      letter-spacing: .04em;
+    }
+
+    .dir-a__body {
+      display: grid;
+      height: calc(100% - 28px);
+      grid-template-columns: minmax(0, 1.08fr) minmax(230px, .92fr);
+      gap: 18px;
+      padding-top: 14px;
+    }
+
+    .dir-a__lead {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .dir-a__eyebrow {
+      color: #1f65d6;
+      font: 750 9px/1.2 ui-monospace, "Cascadia Code", Consolas, monospace;
+      letter-spacing: .09em;
+    }
+
+    .dir-a__price {
+      margin-top: 5px;
+      font-size: clamp(34px, 5vw, 58px);
+      font-weight: 650;
+      line-height: .92;
+      letter-spacing: -.065em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .dir-a__move { margin-top: 7px; color: #177853; font-size: 12px; font-weight: 700; }
+    .dir-a__thesis {
+      max-width: 34ch;
+      margin: 12px 0 0;
+      color: #465063;
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .dir-a__pulse {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border-top: 1px solid #aeb2b3;
+      border-left: 1px solid #aeb2b3;
+    }
+
+    .dir-a__metric { padding: 9px 8px; border-right: 1px solid #aeb2b3; border-bottom: 1px solid #aeb2b3; }
+    .dir-a__metric span { display: block; color: #6b7076; font-size: 8px; }
+    .dir-a__metric b {
+      display: block;
+      margin-top: 3px;
+      font: 750 13px/1.1 ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+
+    .dir-a__sheet {
+      display: grid;
+      min-width: 0;
+      grid-template-rows: auto 1fr auto;
+      border-left: 1px solid #aeb2b3;
+      padding-left: 15px;
+    }
+
+    .dir-a__sheet-head { display: flex; align-items: baseline; justify-content: space-between; }
+    .dir-a__sheet-head b { font-size: 12px; }
+    .dir-a__sheet-head span { color: #777c83; font-size: 8px; }
+    .dir-a__rows { margin-top: 7px; border-top: 1px solid #b9bcb9; }
+    .dir-a__row {
+      display: grid;
+      grid-template-columns: 1fr 44px 42px;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid #d1d0c9;
+      font-size: 9px;
+    }
+
+    .dir-a__row b { font-weight: 700; }
+    .dir-a__row span { color: #61666e; text-align: right; font-variant-numeric: tabular-nums; }
+    .dir-a__verdict {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 8px;
+      color: #59606b;
+      font-size: 8px;
+    }
+
+    .dir-a__verdict b { color: #a84229; font-size: 10px; }
+
+    /* Direction B — dense exchange board. */
+    .dir-b {
+      height: 100%;
+      overflow: hidden;
+      background: #f3f6f8;
+      color: #111a22;
+      font-family: "IBM Plex Mono", "Cascadia Code", Consolas, monospace;
+    }
+
+    .dir-b__top {
+      display: grid;
+      grid-template-columns: 1.1fr repeat(4, minmax(74px, .45fr));
+      min-height: 54px;
+      border-bottom: 1px solid #9ba8b4;
+      background: #102638;
+      color: #f1f7fb;
+    }
+
+    .dir-b__cell {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      justify-content: center;
+      padding: 8px 10px;
+      border-right: 1px solid rgb(255 255 255 / 16%);
+    }
+
+    .dir-b__cell small { color: #92a8b8; font-size: 7px; letter-spacing: .08em; }
+    .dir-b__cell b { margin-top: 3px; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .dir-b__cell:first-child b { font-size: 16px; }
+    .dir-b__positive { color: #7ed2a9; }
+
+    .dir-b__toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 36px;
+      padding: 0 10px;
+      border-bottom: 1px solid #bec8cf;
+      background: #e8eef2;
+      font-size: 8px;
+    }
+
+    .dir-b__filters { display: flex; gap: 12px; color: #52616d; }
+    .dir-b__filters b { color: #0c58ad; }
+    .dir-b__fresh { color: #1a7957; font-weight: 700; }
+
+    .dir-b__table {
+      display: grid;
+      grid-template-columns: minmax(116px, 1.1fr) 58px 58px 58px 58px 70px;
+      font-size: 8px;
+      line-height: 1.25;
+    }
+
+    .dir-b__table > * {
+      min-width: 0;
+      padding: 6px 7px;
+      overflow: hidden;
+      border-right: 1px solid #d4dce1;
+      border-bottom: 1px solid #d4dce1;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dir-b__th {
+      background: #dbe4ea;
+      color: #60717e;
+      font-weight: 700;
+      letter-spacing: .04em;
+    }
+
+    .dir-b__num { text-align: right; font-variant-numeric: tabular-nums; }
+    .dir-b__call { color: #0966b5; }
+    .dir-b__spread { color: #8a4d12; }
+    .dir-b__bottom {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1.2fr;
+      min-height: 48px;
+      border-top: 1px solid #8796a2;
+      background: #fff;
+    }
+
+    .dir-b__bottom div {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      border-right: 1px solid #ccd4d9;
+      font-size: 8px;
+    }
+
+    .dir-b__bottom b { font-size: 12px; }
+
+    /* Direction C — scientific surface lab. */
+    .dir-c {
+      display: grid;
+      height: 100%;
+      grid-template-columns: 78px minmax(0, 1fr) 128px;
+      background: #f7fbfc;
+      color: #15252e;
+      font-family: "Bahnschrift", "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    .dir-c__rail {
+      display: grid;
+      align-content: start;
+      gap: 1px;
+      padding: 10px 8px;
+      border-right: 1px solid #c5d2d7;
+      background: #eaf1f3;
+    }
+
+    .dir-c__logo {
+      margin-bottom: 10px;
+      color: #0e5f67;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: -.03em;
+    }
+
+    .dir-c__expiry {
+      padding: 8px 6px;
+      border-left: 2px solid transparent;
+      color: #6a787e;
+      font-size: 8px;
+      line-height: 1.4;
+    }
+
+    .dir-c__expiry b { display: block; color: #273a43; font-size: 9px; }
+    .dir-c__expiry.active { border-left-color: #0f7880; background: #fff; color: #0f7880; }
+
+    .dir-c__canvas {
+      display: grid;
+      min-width: 0;
+      grid-template-rows: auto 1fr auto;
+      padding: 12px 14px 10px;
+    }
+
+    .dir-c__canvas-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .dir-c__canvas-head h3 { margin: 0; font-size: 15px; letter-spacing: -.03em; }
+    .dir-c__canvas-head p { margin: 3px 0 0; color: #68777c; font-size: 8px; }
+    .dir-c__quality { color: #137158; font: 750 10px/1 ui-monospace, "Cascadia Code", monospace; }
+    .dir-c__plot { min-height: 0; margin-top: 4px; }
+    .dir-c__plot svg { display: block; width: 100%; height: 100%; min-height: 185px; }
+    .dir-c__legend {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-top: 6px;
+      border-top: 1px solid #c5d2d7;
+      color: #607178;
+      font-size: 8px;
+    }
+
+    .dir-c__legend b { color: #1f3842; }
+    .dir-c__side {
+      padding: 12px 10px;
+      border-left: 1px solid #c5d2d7;
+      background: #f0f6f7;
+    }
+
+    .dir-c__side-title { color: #6b7b81; font-size: 8px; letter-spacing: .06em; }
+    .dir-c__score { margin: 5px 0 12px; font-size: 25px; font-weight: 650; letter-spacing: -.05em; }
+    .dir-c__score small { color: #68777c; font-size: 8px; letter-spacing: 0; }
+    .dir-c__evidence {
+      display: grid;
+      gap: 7px;
+      padding-top: 9px;
+      border-top: 1px solid #c5d2d7;
+    }
+
+    .dir-c__evidence div { display: flex; justify-content: space-between; gap: 6px; color: #68777c; font-size: 8px; }
+    .dir-c__evidence b { color: #253b44; }
+    .dir-c__candidate {
+      margin-top: 13px;
+      padding: 9px;
+      background: #0f5962;
+      color: #fff;
+      font-size: 8px;
+      line-height: 1.5;
+    }
+
+    .dir-c__candidate strong { display: block; margin-bottom: 3px; font-size: 11px; }
+
+    /* Direction D — candidate-first workbench. */
+    .dir-d {
+      display: grid;
+      height: 100%;
+      grid-template-columns: 156px minmax(0, 1fr);
+      background: #f5f5f2;
+      color: #242620;
+      font-family: "Aptos", "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    .dir-d__filters {
+      display: flex;
+      flex-direction: column;
+      padding: 14px 12px;
+      border-right: 1px solid #babdb5;
+      background: #dedfd8;
+    }
+
+    .dir-d__brand { margin-bottom: 14px; font-size: 13px; font-weight: 800; letter-spacing: -.04em; }
+    .dir-d__brand span { color: #236c4c; }
+    .dir-d__filter-title { color: #70756d; font-size: 8px; font-weight: 700; letter-spacing: .08em; }
+    .dir-d__filter {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #c4c6bf;
+      font-size: 9px;
+    }
+
+    .dir-d__filter b { font-variant-numeric: tabular-nums; }
+    .dir-d__summary {
+      margin-top: auto;
+      padding-top: 10px;
+      border-top: 2px solid #262923;
+      font-size: 8px;
+      line-height: 1.55;
+    }
+
+    .dir-d__summary strong { display: block; margin-bottom: 3px; font-size: 21px; letter-spacing: -.05em; }
+    .dir-d__work {
+      display: grid;
+      min-width: 0;
+      grid-template-rows: auto auto 1fr auto;
+      padding: 12px 14px 10px;
+    }
+
+    .dir-d__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .dir-d__head h3 { margin: 0; font-size: 16px; letter-spacing: -.035em; }
+    .dir-d__head p { margin: 3px 0 0; color: #767b73; font-size: 8px; }
+    .dir-d__mode { padding: 5px 7px; border: 1px solid #aeb2aa; color: #4d534b; font-size: 8px; }
+    .dir-d__tabs {
+      display: flex;
+      gap: 16px;
+      margin-top: 12px;
+      border-bottom: 1px solid #bfc2ba;
+      color: #737870;
+      font-size: 8px;
+    }
+
+    .dir-d__tabs span { padding-bottom: 6px; }
+    .dir-d__tabs .active { border-bottom: 2px solid #236c4c; color: #236c4c; font-weight: 700; }
+    .dir-d__list { overflow: hidden; }
+    .dir-d__row {
+      display: grid;
+      grid-template-columns: minmax(112px, 1.2fr) 54px 54px 48px 42px;
+      align-items: center;
+      gap: 7px;
+      min-height: 43px;
+      border-bottom: 1px solid #d4d5cf;
+      font-size: 8px;
+    }
+
+    .dir-d__row > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dir-d__row strong { font-size: 9px; }
+    .dir-d__row small { display: block; margin-top: 2px; color: #7b8078; font-size: 7px; }
+    .dir-d__num { text-align: right; font-variant-numeric: tabular-nums; }
+    .dir-d__grade {
+      justify-self: end;
+      padding: 4px 5px;
+      background: #dfeae1;
+      color: #236c4c;
+      font-weight: 700;
+    }
+
+    .dir-d__foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 8px;
+      color: #6e746c;
+      font-size: 8px;
+    }
+
+    .dir-d__foot b { color: #a14c2f; }
+
+    @media (hover: hover) and (pointer: fine) {
+      .direction-card:hover {
+        border-color: #8f9291;
+        box-shadow: 0 12px 36px rgb(25 26 28 / 9%);
+        transform: translateY(-2px);
+      }
+
+      .qmdp-pick-button:hover,
+      .native-action:hover { filter: brightness(1.12); }
+    }
+
+    @media (max-width: 1060px) {
+      .preview-shell { width: min(100% - 32px, 900px); }
+      .direction-grid { grid-template-columns: 1fr; }
+      .notes-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .mockup-frame { height: 370px; min-height: 370px; }
+    }
+
+    @media (max-width: 720px) {
+      .preview-shell { width: calc(100% - 24px); padding-top: 24px; }
+      .preview-intro, .notes-head { grid-template-columns: 1fr; gap: 16px; }
+      .preview-title { max-width: 14ch; }
+      .dial-panel { grid-template-columns: 1fr; }
+      .direction-grid { gap: 16px; }
+      .direction-card-header { min-height: 52px; }
+      .direction-labels > span:not(.recommended) { display: none; }
+      .mockup-frame { height: 300px; min-height: 300px; }
+      .notes-grid { grid-template-columns: 1fr; }
+
+      .dir-a { padding: 12px; }
+      .dir-a__body { grid-template-columns: 1fr; }
+      .dir-a__sheet { display: none; }
+      .dir-a__price { font-size: 44px; }
+
+      .dir-b__top { grid-template-columns: 1.2fr repeat(2, .7fr); }
+      .dir-b__top .dir-b__cell:nth-child(4),
+      .dir-b__top .dir-b__cell:nth-child(5) { display: none; }
+      .dir-b__table { grid-template-columns: minmax(120px, 1.2fr) 52px 52px 62px; }
+      .dir-b__table > :nth-child(6n + 4),
+      .dir-b__table > :nth-child(6n + 5) { display: none; }
+      .dir-b__bottom { grid-template-columns: 1fr 1fr; }
+      .dir-b__bottom div:last-child { display: none; }
+
+      .dir-c { grid-template-columns: 58px minmax(0, 1fr); }
+      .dir-c__side { display: none; }
+      .dir-c__canvas { padding: 10px; }
+      .dir-c__plot svg { min-height: 165px; }
+
+      .dir-d { grid-template-columns: 92px minmax(0, 1fr); }
+      .dir-d__filters { padding: 10px 8px; }
+      .dir-d__brand span { display: none; }
+      .dir-d__filter span { display: none; }
+      .dir-d__filter { justify-content: flex-start; }
+      .dir-d__summary strong { font-size: 17px; }
+      .dir-d__work { padding: 10px; }
+      .dir-d__row { grid-template-columns: minmax(100px, 1.2fr) 48px 38px; }
+      .dir-d__row > :nth-child(3),
+      .dir-d__row > :nth-child(4) { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="preview-shell">
+    <section class="preview-intro" aria-labelledby="preview-title">
+      <div>
+        <p class="preview-kicker">LensOS Option / Research desk study</p>
+        <h1 class="preview-title" id="preview-title">亮色研究台，四种工作入口</h1>
+      </div>
+      <p class="preview-contract">
+        这是设计方向样机，不是最终 App。四个版本使用同一组 Deribit 实际研究指标，
+        只比较信息架构、视觉语言与操作重心；确认后才进入正式实现。
+      </p>
+    </section>
+
+    <section class="dial-panel" data-qmdp-dials aria-label="设计拨盘">
+      <label class="dial">
+        <span class="dial-head"><span>视觉冒险度</span><output data-qmdp-output="variance">3</output></span>
+        <input data-qmdp-dial="variance" id="variance" type="range" min="1" max="10" value="3">
+      </label>
+      <label class="dial">
+        <span class="dial-head"><span>动效强度</span><output data-qmdp-output="motion">2</output></span>
+        <input data-qmdp-dial="motion" id="motion" type="range" min="1" max="10" value="2">
+      </label>
+      <label class="dial">
+        <span class="dial-head"><span>信息密度</span><output data-qmdp-output="density">7</output></span>
+        <input data-qmdp-dial="density" id="density" type="range" min="1" max="10" value="7">
+      </label>
+    </section>
+
+    <section class="direction-grid" aria-label="四个研究台设计方向">
+      <article class="direction-card" data-design-option="A" data-name="研究晨报" data-recommended="true">
+        <header class="direction-card-header">
+          <div class="direction-id">
+            <b>A</b>
+            <h2 data-direction-name>研究晨报</h2>
+          </div>
+          <div class="direction-labels">
+            <span>编辑式 · 结论优先</span>
+            <span class="recommended">推荐</span>
+          </div>
+        </header>
+        <div class="mockup-frame">
+          <div class="dir-a">
+            <div class="dir-a__mast">
+              <div class="dir-a__brand">LensOS <span>/ BTC OPTIONS</span></div>
+              <div class="dir-a__stamp">24 JUL 2026 · 14:08 CST<br>DERIBIT LIVE · 4s</div>
+            </div>
+            <div class="dir-a__body">
+              <section class="dir-a__lead">
+                <div>
+                  <div class="dir-a__eyebrow">MARKET PULSE / 市场脉搏</div>
+                  <div class="dir-a__price">$65,109</div>
+                  <div class="dir-a__move">DVOL 37.66% · 波动率处于可研究区间</div>
+                  <p class="dir-a__thesis">
+                    两个到期日的曲面质量稳定。当前更值得先看信用价差，而不是被发布门禁打断研究。
+                  </p>
+                </div>
+                <div class="dir-a__pulse">
+                  <div class="dir-a__metric"><span>有效报价</span><b>20 / 20</b></div>
+                  <div class="dir-a__metric"><span>曲面质量</span><b>0.982</b></div>
+                  <div class="dir-a__metric"><span>候选策略</span><b>4 + 5</b></div>
+                </div>
+              </section>
+              <section class="dir-a__sheet">
+                <div class="dir-a__sheet-head"><b>今日候选</b><span>按研究优先级</span></div>
+                <div class="dir-a__rows">
+                  <div class="dir-a__row"><b>31 JUL · 65K/67K Call Spread</b><span>Δ 0.18</span><span>Q 0.98</span></div>
+                  <div class="dir-a__row"><b>07 AUG · 66K Naked Call</b><span>Δ 0.14</span><span>Q 0.97</span></div>
+                  <div class="dir-a__row"><b>07 AUG · 64K/68K Call Spread</b><span>Δ 0.21</span><span>Q 0.97</span></div>
+                  <div class="dir-a__row"><b>31 JUL · 67K Naked Call</b><span>Δ 0.11</span><span>Q 0.98</span></div>
+                </div>
+                <div class="dir-a__verdict"><span>研究可继续 · 实盘发布仍锁定</span><b>READ-ONLY</b></div>
+              </section>
+            </div>
+          </div>
+        </div>
+        <div class="direction-meta">
+          <p>先给“今天值得研究什么”，再展开数据证据；最适合每天快速判断是否要继续深挖。</p>
+          <button class="qmdp-pick-button" data-qmdp-managed="page" type="button">选择 A · 研究晨报</button>
+        </div>
+      </article>
+
+      <article class="direction-card" data-design-option="B" data-name="交易所行情板">
+        <header class="direction-card-header">
+          <div class="direction-id">
+            <b>B</b>
+            <h2 data-direction-name>交易所行情板</h2>
+          </div>
+          <div class="direction-labels"><span>等宽 · 扫描优先</span></div>
+        </header>
+        <div class="mockup-frame">
+          <div class="dir-b">
+            <div class="dir-b__top">
+              <div class="dir-b__cell"><small>BTC-PERPETUAL / INDEX</small><b>65,109.22</b></div>
+              <div class="dir-b__cell"><small>DVOL</small><b>37.66%</b></div>
+              <div class="dir-b__cell"><small>QUOTE AGE</small><b class="dir-b__positive">04s</b></div>
+              <div class="dir-b__cell"><small>VALID</small><b>20/20</b></div>
+              <div class="dir-b__cell"><small>EXPIRIES</small><b>02</b></div>
+            </div>
+            <div class="dir-b__toolbar">
+              <div class="dir-b__filters"><b>ALL</b><span>31JUL26</span><span>07AUG26</span><span>CALL</span><span>SPREAD</span></div>
+              <span class="dir-b__fresh">DERIBIT · LIVE</span>
+            </div>
+            <div class="dir-b__table">
+              <div class="dir-b__th">INSTRUMENT / STRATEGY</div><div class="dir-b__th dir-b__num">BID IV</div><div class="dir-b__th dir-b__num">ASK IV</div><div class="dir-b__th dir-b__num">DELTA</div><div class="dir-b__th dir-b__num">QUALITY</div><div class="dir-b__th">CLASS</div>
+              <div>BTC-31JUL26-65000-C</div><div class="dir-b__num">36.21</div><div class="dir-b__num">37.04</div><div class="dir-b__num">0.183</div><div class="dir-b__num">0.982</div><div class="dir-b__call">NAKED</div>
+              <div>BTC-31JUL26-65000/67000-C</div><div class="dir-b__num">35.88</div><div class="dir-b__num">36.72</div><div class="dir-b__num">0.214</div><div class="dir-b__num">0.982</div><div class="dir-b__spread">SPREAD</div>
+              <div>BTC-07AUG26-66000-C</div><div class="dir-b__num">37.15</div><div class="dir-b__num">37.91</div><div class="dir-b__num">0.142</div><div class="dir-b__num">0.977</div><div class="dir-b__call">NAKED</div>
+              <div>BTC-07AUG26-64000/68000-C</div><div class="dir-b__num">36.74</div><div class="dir-b__num">37.62</div><div class="dir-b__num">0.207</div><div class="dir-b__num">0.977</div><div class="dir-b__spread">SPREAD</div>
+              <div>BTC-07AUG26-67000-C</div><div class="dir-b__num">37.26</div><div class="dir-b__num">38.02</div><div class="dir-b__num">0.112</div><div class="dir-b__num">0.977</div><div class="dir-b__call">NAKED</div>
+            </div>
+            <div class="dir-b__bottom">
+              <div><span>NAKED CALL</span><b>04</b></div>
+              <div><span>CREDIT SPREAD</span><b>05</b></div>
+              <div><span>RELEASE</span><b>NO-GO / READ ONLY</b></div>
+            </div>
+          </div>
+        </div>
+        <div class="direction-meta">
+          <p>把屏幕当成专业行情板，牺牲叙事感换取最快扫描速度；适合频繁横向比较合约。</p>
+          <button class="qmdp-pick-button" data-qmdp-managed="page" type="button">选择 B · 交易所行情板</button>
+        </div>
+      </article>
+
+      <article class="direction-card" data-design-option="C" data-name="曲面实验室">
+        <header class="direction-card-header">
+          <div class="direction-id">
+            <b>C</b>
+            <h2 data-direction-name>曲面实验室</h2>
+          </div>
+          <div class="direction-labels"><span>科学可视化 · 证据优先</span></div>
+        </header>
+        <div class="mockup-frame">
+          <div class="dir-c">
+            <aside class="dir-c__rail">
+              <div class="dir-c__logo">L/Surface</div>
+              <div class="dir-c__expiry active"><b>31 JUL</b>7 DTE</div>
+              <div class="dir-c__expiry"><b>07 AUG</b>14 DTE</div>
+              <div class="dir-c__expiry"><b>DVOL</b>37.66%</div>
+              <div class="dir-c__expiry"><b>DATA</b>20/20</div>
+            </aside>
+            <section class="dir-c__canvas">
+              <div class="dir-c__canvas-head">
+                <div><h3>BTC 波动率微笑</h3><p>31 JUL 2026 · 实时拟合 · Forward 65,109</p></div>
+                <span class="dir-c__quality">Q 0.982</span>
+              </div>
+              <div class="dir-c__plot">
+                <svg viewBox="0 0 460 230" role="img" aria-label="31 JUL 与 07 AUG 两条波动率微笑曲线">
+                  <defs>
+                    <pattern id="grid-c" width="46" height="38" patternUnits="userSpaceOnUse">
+                      <path d="M46 0H0V38" fill="none" stroke="#d6e1e4" stroke-width="1"/>
+                    </pattern>
+                  </defs>
+                  <rect x="0" y="0" width="460" height="230" fill="url(#grid-c)"/>
+                  <line x1="30" y1="195" x2="438" y2="195" stroke="#91a4aa"/>
+                  <line x1="30" y1="18" x2="30" y2="195" stroke="#91a4aa"/>
+                  <path d="M36 62 C95 104, 145 143, 224 151 C295 158, 356 119, 430 58"
+                    fill="none" stroke="#0f7880" stroke-width="4"/>
+                  <path d="M36 82 C102 116, 155 135, 226 139 C298 143, 362 110, 430 74"
+                    fill="none" stroke="#e17c45" stroke-width="2.5" stroke-dasharray="7 6"/>
+                  <line x1="229" y1="25" x2="229" y2="194" stroke="#355964" stroke-dasharray="3 4"/>
+                  <circle cx="229" cy="151" r="5" fill="#f7fbfc" stroke="#0f7880" stroke-width="3"/>
+                  <text x="238" y="143" fill="#23424b" font-size="10">ATM · 36.9%</text>
+                  <text x="37" y="216" fill="#647980" font-size="9">50K</text>
+                  <text x="212" y="216" fill="#647980" font-size="9">65K</text>
+                  <text x="405" y="216" fill="#647980" font-size="9">80K</text>
+                </svg>
+              </div>
+              <div class="dir-c__legend">
+                <span><b>实线</b> 31 JUL · 7D</span>
+                <span><b>虚线</b> 07 AUG · 14D</span>
+                <span>拟合残差 1.8%</span>
+              </div>
+            </section>
+            <aside class="dir-c__side">
+              <div class="dir-c__side-title">SURFACE CONFIDENCE</div>
+              <div class="dir-c__score">98.2<small>/100</small></div>
+              <div class="dir-c__evidence">
+                <div><span>有效报价</span><b>20 / 20</b></div>
+                <div><span>数据时效</span><b>4 秒</b></div>
+                <div><span>到期覆盖</span><b>2 组</b></div>
+                <div><span>异常点</span><b>0</b></div>
+              </div>
+              <div class="dir-c__candidate"><strong>5 个价差候选</strong>曲面右翼更适合做上侧信用价差研究。</div>
+            </aside>
+          </div>
+        </div>
+        <div class="direction-meta">
+          <p>让波动率曲面成为主角，候选策略作为曲面解释的结果；适合研究模型与证据质量。</p>
+          <button class="qmdp-pick-button" data-qmdp-managed="page" type="button">选择 C · 曲面实验室</button>
+        </div>
+      </article>
+
+      <article class="direction-card" data-design-option="D" data-name="策略筛选台">
+        <header class="direction-card-header">
+          <div class="direction-id">
+            <b>D</b>
+            <h2 data-direction-name>策略筛选台</h2>
+          </div>
+          <div class="direction-labels"><span>工作流 · 候选优先</span></div>
+        </header>
+        <div class="mockup-frame">
+          <div class="dir-d">
+            <aside class="dir-d__filters">
+              <div class="dir-d__brand">LensOS <span>WORKBENCH</span></div>
+              <div class="dir-d__filter-title">ACTIVE FILTERS</div>
+              <div class="dir-d__filter"><span>标的</span><b>BTC</b></div>
+              <div class="dir-d__filter"><span>方向</span><b>CALL</b></div>
+              <div class="dir-d__filter"><span>到期</span><b>≤ 14D</b></div>
+              <div class="dir-d__filter"><span>曲面质量</span><b>≥ .97</b></div>
+              <div class="dir-d__summary"><strong>09</strong>个候选通过研究筛选<br>4 单腿 · 5 价差</div>
+            </aside>
+            <section class="dir-d__work">
+              <div class="dir-d__head">
+                <div><h3>候选策略队列</h3><p>Deribit live · BTC $65,109 · DVOL 37.66%</p></div>
+                <span class="dir-d__mode">PAPER CANDIDATES</span>
+              </div>
+              <div class="dir-d__tabs"><span class="active">推荐顺序 09</span><span>单腿 04</span><span>价差 05</span></div>
+              <div class="dir-d__list">
+                <div class="dir-d__row"><div><strong>31 JUL · 65K/67K Call Spread</strong><small>7 DTE · 上侧信用价差</small></div><span class="dir-d__num">0.18 Δ</span><span class="dir-d__num">0.982</span><span class="dir-d__num">2.04R</span><span class="dir-d__grade">A</span></div>
+                <div class="dir-d__row"><div><strong>07 AUG · 64K/68K Call Spread</strong><small>14 DTE · 曲面右翼</small></div><span class="dir-d__num">0.21 Δ</span><span class="dir-d__num">0.977</span><span class="dir-d__num">1.91R</span><span class="dir-d__grade">A</span></div>
+                <div class="dir-d__row"><div><strong>07 AUG · 66K Naked Call</strong><small>14 DTE · 单腿观察</small></div><span class="dir-d__num">0.14 Δ</span><span class="dir-d__num">0.977</span><span class="dir-d__num">1.63R</span><span class="dir-d__grade">B+</span></div>
+                <div class="dir-d__row"><div><strong>31 JUL · 67K Naked Call</strong><small>7 DTE · 事件敏感</small></div><span class="dir-d__num">0.11 Δ</span><span class="dir-d__num">0.982</span><span class="dir-d__num">1.48R</span><span class="dir-d__grade">B</span></div>
+              </div>
+              <div class="dir-d__foot"><span>账户快照未连接，不影响研究排序</span><b>发布保持锁定</b></div>
+            </section>
+          </div>
+        </div>
+        <div class="direction-meta">
+          <p>直接从候选队列开始工作，限制条件只做筛选器；适合把研究结论推进到 Paper 候选。</p>
+          <button class="qmdp-pick-button" data-qmdp-managed="page" type="button">选择 D · 策略筛选台</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="direction-notes" aria-labelledby="notes-title">
+      <div class="notes-head">
+        <h2 id="notes-title">差异不在配色，在工作方式</h2>
+        <p>可以选完整方向，也可以在确认框里写混搭要求，例如“要 A 的结论层级 + C 的曲面图”。</p>
+      </div>
+      <div class="notes-grid">
+        <article class="note">
+          <h3>A · 研究晨报</h3>
+          <dl>
+            <dt>气质</dt><dd>像机构晨会的一页研究简报，先结论，后证据。</dd>
+            <dt>排版 / 色彩</dt><dd>人文无衬线 + 等宽数字；暖纸白、研究蓝、克制绿色。</dd>
+            <dt>记忆点</dt><dd>左侧市场脉搏与右侧候选清单形成不等比编辑网格。</dd>
+            <dt>判断</dt><dd class="note-recommend">推荐：最符合单用户每天快速读懂“现在有什么值得研究”。</dd>
+          </dl>
+        </article>
+        <article class="note">
+          <h3>B · 交易所行情板</h3>
+          <dl>
+            <dt>气质</dt><dd>像交易所数据终端的亮色版，密排、直接、可横向扫描。</dd>
+            <dt>排版 / 色彩</dt><dd>全等宽结构；冷灰白、深海军蓝、功能性色标。</dd>
+            <dt>记忆点</dt><dd>顶部市场带与连续报价表，不使用卡片分组。</dd>
+            <dt>代价</dt><dd>信息吞吐最高，但研究结论需要用户自己从表格里提取。</dd>
+          </dl>
+        </article>
+        <article class="note">
+          <h3>C · 曲面实验室</h3>
+          <dl>
+            <dt>气质</dt><dd>像量化研究室的仪器面板，关注模型而不是市场新闻。</dd>
+            <dt>排版 / 色彩</dt><dd>科学无衬线；浅青白、石油蓝、橙色对照线。</dd>
+            <dt>记忆点</dt><dd>曲面图占据视觉中心，证据质量贴着模型显示。</dd>
+            <dt>代价</dt><dd>最适合波动率研究，但对只想快速看候选的人稍慢。</dd>
+          </dl>
+        </article>
+        <article class="note">
+          <h3>D · 策略筛选台</h3>
+          <dl>
+            <dt>气质</dt><dd>像投资研究团队的候选工作台，围绕任务队列推进。</dd>
+            <dt>排版 / 色彩</dt><dd>人机工程无衬线；中性灰、苔绿、风险棕红。</dd>
+            <dt>记忆点</dt><dd>左侧过滤条件与右侧候选队列形成稳定工作流。</dd>
+            <dt>代价</dt><dd>最接近执行前一步，宏观市场与曲面细节被压到次级。</dd>
+          </dl>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <div class="native-confirm" id="native-confirm" role="dialog" aria-modal="true" aria-labelledby="native-confirm-title">
+    <div class="native-dialog">
+      <h2 id="native-confirm-title">确认设计方向</h2>
+      <p id="native-confirm-meta"></p>
+      <textarea id="native-adjustments" placeholder="可选：写下调整建议，例如要 A 的层级 + C 的曲面图"></textarea>
+      <div class="native-actions">
+        <button class="native-action" id="native-cancel" type="button">取消</button>
+        <button class="native-action primary" id="native-submit" type="button">确认并回传</button>
+      </div>
+    </div>
+  </div>
+  <div class="native-toast" id="native-toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const directions = {
+        A: {
+          id: "A",
+          name: "研究晨报",
+          label: "A: 研究晨报",
+          notes: "结论优先的编辑式研究简报；市场脉搏左置，候选与发布状态右置。"
+        },
+        B: {
+          id: "B",
+          name: "交易所行情板",
+          label: "B: 交易所行情板",
+          notes: "以顶部市场带和连续合约表为核心的高密度扫描工作台。"
+        },
+        C: {
+          id: "C",
+          name: "曲面实验室",
+          label: "C: 曲面实验室",
+          notes: "以波动率微笑和曲面可信度为核心的科学可视化研究台。"
+        },
+        D: {
+          id: "D",
+          name: "策略筛选台",
+          label: "D: 策略筛选台",
+          notes: "以筛选条件和候选策略队列为核心的 Paper 研究工作流。"
+        }
+      };
+
+      const confirmLayer = document.getElementById("native-confirm");
+      const confirmMeta = document.getElementById("native-confirm-meta");
+      const adjustments = document.getElementById("native-adjustments");
+      const cancelButton = document.getElementById("native-cancel");
+      const submitButton = document.getElementById("native-submit");
+      const toast = document.getElementById("native-toast");
+      let pending = null;
+      let lastTrigger = null;
+
+      function readDials() {
+        const value = (key) => Number(document.querySelector(`[data-qmdp-dial="${key}"]`).value);
+        return {
+          variance: value("variance"),
+          motion: value("motion"),
+          density: value("density")
+        };
+      }
+
+      function formatDials(values) {
+        return `视觉冒险度 ${values.variance} / 动效强度 ${values.motion} / 信息密度 ${values.density}`;
+      }
+
+      document.querySelectorAll("[data-qmdp-dial]").forEach((input) => {
+        const output = document.querySelector(`[data-qmdp-output="${input.dataset.qmdpDial}"]`);
+        const sync = () => {
+          output.value = input.value;
+          output.textContent = input.value;
+          input.setAttribute("aria-valuenow", input.value);
+        };
+        input.addEventListener("input", sync);
+        sync();
+      });
+
+      function markSelected(id) {
+        document.querySelectorAll(".direction-card").forEach((card) => {
+          card.classList.toggle("is-selected", card.dataset.designOption === id);
+        });
+      }
+
+      function openConfirm(id, trigger) {
+        const selected = directions[id];
+        if (!selected) return;
+        pending = { ...selected, dials: readDials() };
+        lastTrigger = trigger || null;
+        markSelected(id);
+        confirmMeta.textContent = `${selected.label} · ${formatDials(pending.dials)}`;
+        adjustments.value = "";
+        confirmLayer.classList.add("open");
+        requestAnimationFrame(() => adjustments.focus({ preventScroll: true }));
+      }
+
+      function closeConfirm() {
+        confirmLayer.classList.remove("open");
+        pending = null;
+        document.querySelectorAll(".direction-card").forEach((card) => {
+          card.classList.remove("is-selected");
+        });
+        if (lastTrigger) lastTrigger.focus({ preventScroll: true });
+      }
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("show");
+      }
+
+      async function sendSelection(payload) {
+        if (location.protocol === "file:") {
+          const text = `选 ${payload.label}；拨盘：${formatDials(payload.dials)}`
+            + (payload.adjustments ? `；建议：${payload.adjustments}` : "");
+          if (navigator.clipboard) await navigator.clipboard.writeText(text).catch(() => {});
+          return { ok: false, fallback: true };
+        }
+        const response = await fetch("/api/select", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        return response.json();
+      }
+
+      async function confirmSelection() {
+        if (!pending) return;
+        const payload = {
+          ...pending,
+          dials: readDials(),
+          adjustments: adjustments.value.trim()
+        };
+        submitButton.disabled = true;
+        submitButton.textContent = "正在回传…";
+        try {
+          const result = await sendSelection(payload);
+          confirmLayer.classList.remove("open");
+          showToast(result.ok
+            ? `已选择 ${payload.label}，已回传。`
+            : `已选择 ${payload.label}；当前为静态预览，请把已复制的选择发回对话。`);
+        } catch (error) {
+          showToast(`回传失败：${String(error)}`);
+        } finally {
+          submitButton.disabled = false;
+          submitButton.textContent = "确认并回传";
+        }
+      }
+
+      document.addEventListener("click", (event) => {
+        if (event.target.closest(".native-confirm")) return;
+        const card = event.target.closest(".direction-card");
+        if (!card) return;
+        const interactive = event.target.closest("input, textarea, select, a");
+        if (interactive) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        openConfirm(card.dataset.designOption, event.target.closest("button") || card);
+      }, true);
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && confirmLayer.classList.contains("open")) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          closeConfirm();
+          return;
+        }
+        if (event.target.closest("input, textarea, select, [contenteditable='true']")) return;
+        if (confirmLayer.classList.contains("open")) return;
+        const index = ["1", "2", "3", "4"].indexOf(event.key);
+        if (index < 0) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const id = "ABCD"[index];
+        const card = document.querySelector(`[data-design-option="${id}"]`);
+        openConfirm(id, card?.querySelector(".qmdp-pick-button"));
+      }, true);
+
+      cancelButton.addEventListener("click", closeConfirm);
+      submitButton.addEventListener("click", confirmSelection);
+      confirmLayer.addEventListener("click", (event) => {
+        if (event.target === confirmLayer) closeConfirm();
+      });
+    })();
+  </script>
+</body>
+</html>

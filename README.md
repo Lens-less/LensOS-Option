@@ -1,6 +1,6 @@
 # Crypto Options Research Console
 
-本仓库是一个加密货币期权卖 Call 研究工具链。当前状态是：
+本仓库是一个 evidence-first、可回放的期权入场前研究决策工具链。当前状态是：
 
 - **GO**：本地 deterministic/replay research toolchain。
 - **NO-GO**：paper/manual trading、自动下单、真实账户执行。
@@ -16,15 +16,33 @@ python -m crypto_options_report.api --host 127.0.0.1 --port 8000
 
 启动 API 后可访问：
 
+- `http://127.0.0.1:8000/evidence`（组件化证据控制台，推荐入口）
 - `http://127.0.0.1:8000/dashboard.html`
 - `http://127.0.0.1:8000/dashboard`
 - `http://127.0.0.1:8000/research/report`
+- `http://127.0.0.1:8000/analysis/result`（不可变 `AnalysisRecord`）
 - `http://127.0.0.1:8000/health`
 - `http://127.0.0.1:8000/livez`
 - `http://127.0.0.1:8000/readyz`
 
-Dashboard 与 API 固定同源，避免跨源配置和浏览器参数改变生产报告语义。
+Dashboard 与 API 固定同源，避免跨源配置和浏览器参数改变生产报告语义。服务端对同一组输入只生成一次 `AnalysisRecord`；各 GET 投影复用同一 `X-Analysis-Run-ID` 与 ETag，不会重新拉取 live 数据或重算准入结论。
+`AnalysisRun.evaluate(AnalysisRequest)` 是最高层业务 seam，可信链路严格止于不可变的 `EntryAdmissionDecision`。`research_report.v1` 和其中的 `strategy_research.v1` 继续作为兼容投影供 `/evidence` 与旧客户端读取；其中既有退出状态机、持仓或 sizing shadow 叙述不属于可信 `AnalysisRecord`，也不能影响新的入场准入。`/dashboard.html` 继续作为兼容的 dependency-free 页面保留。
 `/livez` 只表示进程存活；production 的 `/readyz` 只有在服务契约、已绑定的市场信任证据、账户快照、历史/工件存储、作业队列和已提升模型全部可用时才返回 200，否则返回带原因码的 503。当前没有可提升模型，所以 production readiness 按设计保持 503；这不等于进程不健康。
+
+For implicit-clock HTTP runs, projection deduplication lasts only until the
+shortest policy trust, evidence-expiry, or decision-TTL deadline. Explicit
+`generated_at` runs remain immutable replays. P0 never promotes a model from a
+legacy report flag: a hypothetical promoted E3 contract must bind a trusted
+historical/OOS artifact, while real promotion, account acquisition, margin
+simulation, and incremental portfolio risk remain deferred to P2. Naked short
+calls appear only as rejected, unbounded-loss comparisons in the trusted
+record. A hypothetical promoted artifact must also be current at the run's
+fixed evaluation clock. Trusted portfolio/exchange vetoes accept only a
+hash-bound typed `PreEntryRiskClaim`; compatibility `final_action` strings are
+not decision inputs.
+
+`crypto-options-report analysis --output <path>` is the export projection of
+the same `AnalysisRecord`; it does not run a separate decision path.
 
 ## Production Runtime
 
@@ -76,6 +94,8 @@ python -m crypto_options_report.api --runtime-profile production --host 127.0.0.
   --backtest-artifact-dir "$runtime/backtests"
 ```
 
+Remote bind contract: loopback remains the default. If you intentionally bind the API to a non-loopback interface, set both `CRYPTO_OPTIONS_API_ALLOW_REMOTE=1` and `CRYPTO_OPTIONS_API_BEARER_TOKEN_FILE=<regular file>`. The file must not be a symlink; it must contain exactly one printable ASCII token with no whitespace and length `32..256`. On POSIX, restrict it to the owner and an optional read-only service group (`0400`, `0440`, `0600`, or `0640`). Only `GET /health`, `GET /livez`, and `GET /readyz` stay unauthenticated; every other route and method, including `404`, `HEAD`, `GET`, `POST`, `DELETE`, and unsupported verbs, requires one exact `Authorization: Bearer <token>` header. Put an authenticated TLS reverse proxy in front of the API and forward or inject `Authorization` from a mounted secret file instead of hardcoding the token in source control or shell history.
+
 Market trust and account provenance contribute to readiness only when their exact sidecar payloads are authenticated with separate operator-owned, exactly 32-byte HMAC keys. The market and account domains deliberately use different environment variables and different key files. Without the applicable key, reports remain safely readable for research but production readiness remains false. Calibration/model promotion and paper/manual workflow are currently unavailable/unsupported; no ledger persistence or external authorization is inferred from local flags.
 
 账户 sidecar 的 `public/auth` 使用 JSON-RPC POST，凭证只在请求 body 中；私有接口的 access token 只通过 `Authorization: Bearer <token>` 发送。两类请求都拒绝重定向，secret/token 不会进入 URL。
@@ -97,9 +117,22 @@ curl.exe -sS -X POST http://127.0.0.1:8000/backtest/run `
 ```powershell
 python -m unittest tests.test_full_system_surfaces
 python -m pytest -q
+python -m crypto_options_report.cli analysis --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json --generated-at 2026-07-07T00:01:30Z --compact
 python -m crypto_options_report.cli ingestion-status --live-deribit --instrument-limit 5 --compact
 python -m crypto_options_report.cli ingestion-status --live-deribit --instrument-limit 20 --compact
 ```
+
+组件化 Web 控制台：
+
+```powershell
+cd web
+npm ci
+npm test
+npm run lint
+npm run build
+```
+
+`npm run build` 会更新 `crypto_options_report/static/evidence/`；该产物随 wheel 和容器一起发布。开发时可分别启动 Python API 与 `npm run dev`，Vite 会把 `/research` 请求代理到 `127.0.0.1:8000`。
 
 ## Analysis Ops And Alerts
 
@@ -148,10 +181,12 @@ Optional environment overrides:
 
 ## Project Map
 
-- `crypto_options_report/contract.py` builds the shared `research_report.v1`.
-- `crypto_options_report/api.py` serves the stdlib HTTP API and static dashboard page.
+- `crypto_options_report/analysis_run.py` owns the immutable mandate, evidence, policy, opportunity, strategy, manifest, domain-event, and entry-admission contracts.
+- `crypto_options_report/contract.py` builds the compatibility `research_report.v1` projection.
+- `crypto_options_report/api.py` serves the stdlib HTTP API, legacy dashboard, and `/evidence` bundle.
 - `crypto_options_report/full_surface.py` declares CLI/API/dashboard surface descriptors.
 - `crypto_options_report/static/dashboard.html` is the dependency-free research console.
+- `web/` contains the typed React/Vite evidence console source; `crypto_options_report/static/evidence/` is its packaged build output.
 - `tests/` contains contract, API, data-quality, risk, fail-closed evidence, and unsupported-feature checks.
 - `issues/README.md` indexes core `ISSUE-001..015` and DQR remediation issues.
 - `docs/automation/goal-board.md` is the canonical acceptance board.
@@ -161,7 +196,7 @@ Optional environment overrides:
 
 ## Safety Boundary
 
-This project intentionally has no live-order adapter. Calibration/model promotion is not implemented and paper/manual workflow is unsupported; the single external release-authorization gate therefore remains `NO-GO`.
+This project intentionally has no live-order adapter. The trusted output ceiling is `EntryAdmissionDecision` with `execution_allowed=false`; it contains no actionable contract count or order instruction. Calibration/model promotion is not implemented and paper/manual workflow is unsupported; the single external release-authorization gate therefore remains `NO-GO`.
 
 Do not add order templates, live submission paths, paper/manual candidate controls, or sizing outputs as part of research-console cleanup.
 

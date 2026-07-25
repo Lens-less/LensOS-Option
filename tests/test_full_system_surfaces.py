@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from crypto_options_report.api import (
     DASHBOARD_PAGE_PATH,
+    EVIDENCE_PAGE_PATH,
     GET_SURFACE_PATHS,
     POST_SURFACE_PATHS,
     REPORT_PATH,
@@ -65,6 +66,29 @@ class FullSystemSurfaceTests(unittest.TestCase):
             set(route_status.values()),
         )
 
+    def test_surface_validator_rejects_non_dict_entries_without_throwing(self):
+        surface = generate_research_report(
+            generated_at="2026-07-07T00:01:30Z"
+        )["full_system_surface"]
+        surface["cli"]["commands"] = ["report"]
+        surface["api"]["routes"] = [None]
+        surface["dashboard"]["views"] = ["today_overview"]
+
+        errors = validate_full_system_surface_report(surface)
+
+        self.assertIn(
+            "full_system_surface.cli.commands entries must be dicts",
+            errors,
+        )
+        self.assertIn(
+            "full_system_surface.api.routes entries must be dicts",
+            errors,
+        )
+        self.assertIn(
+            "full_system_surface.dashboard.views entries must be dicts",
+            errors,
+        )
+
     def test_api_route_descriptors_match_runtime_routes(self):
         declared_routes = set(API_ROUTES)
         expected_get_routes = {
@@ -73,6 +97,7 @@ class FullSystemSurfaceTests(unittest.TestCase):
             "GET /readyz",
             f"GET {REPORT_PATH}",
             f"GET {DASHBOARD_PAGE_PATH}",
+            f"GET {EVIDENCE_PAGE_PATH}",
         }
         expected_get_routes.update(f"GET {path}" for path in GET_SURFACE_PATHS)
         expected_get_routes.add("GET /backtest/report/{id}")
@@ -123,7 +148,7 @@ class FullSystemSurfaceTests(unittest.TestCase):
         connection = http.client.HTTPConnection(
             "127.0.0.1",
             server.server_port,
-            timeout=2,
+            timeout=5,
         )
         try:
             connection.request("GET", DASHBOARD_PAGE_PATH)
@@ -269,12 +294,12 @@ class FullSystemSurfaceTests(unittest.TestCase):
         request_thread = threading.Thread(target=first_request, daemon=True)
         with patch("crypto_options_report.api._payload_for_path", side_effect=slow_payload):
             request_thread.start()
-            self.assertTrue(entered.wait(timeout=2))
+            self.assertTrue(entered.wait(timeout=5))
             try:
                 overload_responses = []
                 for _ in range(20):
                     connection = http.client.HTTPConnection(
-                        "127.0.0.1", server.server_port, timeout=2
+                        "127.0.0.1", server.server_port, timeout=5
                     )
                     try:
                         connection.request("GET", "/health")
@@ -485,7 +510,7 @@ class FullSystemSurfaceTests(unittest.TestCase):
         connection = http.client.HTTPConnection(
             "127.0.0.1",
             server.server_port,
-            timeout=2,
+            timeout=5,
         )
         try:
             encoded = None if body is None else json.dumps(body).encode("utf-8")

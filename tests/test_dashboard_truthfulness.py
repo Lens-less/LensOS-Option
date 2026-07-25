@@ -27,6 +27,25 @@ class _DashboardMarkupParser(HTMLParser):
 
 
 class DashboardTruthfulnessTests(unittest.TestCase):
+    def test_dashboard_source_keeps_visible_chinese_legible_and_markup_closed(self):
+        html = dashboard_page_html()
+
+        for expected in (
+            "操作员 / 外部动作",
+            "系统 / 策略延续",
+            "02 · 市场证据",
+            "等待当前市场证据。",
+            "03 · 产品发布",
+            "仍有发布证据未满足；不影响研究服务继续运行。",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, html)
+        self.assertIsNone(re.search(r"[\ue000-\uf8ff]", html))
+        self.assertIsNone(re.search(r"\?/(?:p|span|div|li|h[1-6])>", html))
+        for mojibake in ("姝ｅ湪楠岃瘉", "甯傚満璇佹嵁", "浜у搧鍙戝竷"):
+            with self.subTest(mojibake=mojibake):
+                self.assertNotIn(mojibake, html)
+
     def test_local_pass_labels_never_imply_trade_authorization(self):
         html = dashboard_page_html()
 
@@ -35,6 +54,11 @@ class DashboardTruthfulnessTests(unittest.TestCase):
         self.assertNotIn('"allow_new": "允许新交易"', html)
         self.assertIn("scrollbar-width: none", html)
         self.assertIn(".nav::-webkit-scrollbar", html)
+
+    def test_mobile_refresh_keeps_an_accessible_name_when_text_is_hidden(self):
+        html = dashboard_page_html()
+
+        self.assertIn('id="refresh" type="button" aria-label="刷新证据"', html)
 
     def test_research_trust_never_claims_production_market_evidence(self):
         html = dashboard_page_html()
@@ -119,6 +143,9 @@ class DashboardTruthfulnessTests(unittest.TestCase):
         self.assertFalse(state["truth"]["hidden"])
         self.assertEqual("offline", state["truth"]["dataset"]["state"])
         self.assertEqual("NOT CURRENT MARKET DATA", state["truthLabel"]["text"])
+        self.assertTrue(state["backtestBars"]["hidden"])
+        self.assertEqual([], state["backtestBars"]["children"])
+        self.assertIn("NOT CURRENT MARKET DATA", state["backtestEmpty"]["text"])
         self.assertIn("报告 API", state["truthDetail"]["text"])
         self.assertEqual("未生成", state["reportTime"]["text"])
         self.assertEqual("无当前市场时间", state["marketTime"]["text"])
@@ -150,6 +177,40 @@ class DashboardTruthfulnessTests(unittest.TestCase):
         self.assertIn("0 个候选", state["candidateEmpty"]["text"])
         self.assertIn("扫描结果", state["candidateEmpty"]["text"])
         self.assertNotIn("无可信市场数据", state["candidateEmpty"]["text"])
+        self.assertEqual([], state["consoleErrors"])
+
+    def test_trusted_market_data_expires_without_manual_refresh(self):
+        report = self._report()
+        report["backtest_status"] = {
+            "status": "aligned",
+            "aligned": True,
+            "reason_code": None,
+        }
+        report["full_system_surface"]["backtest_comparison"] = [
+            {"variant": "full_system", "calmar": 0.92},
+        ]
+
+        state = self._render_dashboard(
+            mode="live",
+            report=report,
+            advance_seconds=45,
+        )
+
+        self.assertFalse(state["initial"]["backtestBars"]["hidden"])
+
+        self.assertTrue(state["initial"]["truth"]["hidden"])
+        self.assertEqual(
+            "current-trusted",
+            state["initial"]["truth"]["dataset"]["state"],
+        )
+        self.assertEqual("16 秒", state["initial"]["marketAge"]["text"])
+        self.assertEqual("研究证据可信", state["initial"]["marketEvidenceState"]["text"])
+
+        self.assertEqual("61 秒", state["marketAge"]["text"])
+        self.assertFalse(state["truth"]["hidden"])
+        self.assertEqual("not-current", state["truth"]["dataset"]["state"])
+        self.assertEqual("NOT CURRENT MARKET DATA", state["truthLabel"]["text"])
+        self.assertEqual("市场证据不可用", state["marketEvidenceState"]["text"])
         self.assertEqual([], state["consoleErrors"])
 
     def test_fresh_public_data_with_pending_trust_keeps_live_scanner_truth(self):
@@ -235,6 +296,29 @@ class DashboardTruthfulnessTests(unittest.TestCase):
         self.assertEqual(2, len(state["backtestBars"]["children"]))
         self.assertTrue(state["backtestEmpty"]["hidden"])
         self.assertIn("0.92 Calmar", self._all_text(state["backtestBars"]))
+        self.assertEqual([], state["consoleErrors"])
+
+    def test_aligned_backtest_hides_again_once_market_evidence_expires(self):
+        report = self._report()
+        report["backtest_status"] = {
+            "status": "aligned",
+            "aligned": True,
+            "reason_code": None,
+        }
+        report["full_system_surface"]["backtest_comparison"] = [
+            {"variant": "full_system", "calmar": 0.92},
+        ]
+
+        state = self._render_dashboard(
+            mode="live",
+            report=report,
+            advance_seconds=45,
+        )
+
+        self.assertFalse(state["initial"]["backtestBars"]["hidden"])
+        self.assertTrue(state["backtestBars"]["hidden"])
+        self.assertEqual([], state["backtestBars"]["children"])
+        self.assertIn("NOT CURRENT MARKET DATA", state["backtestEmpty"]["text"])
         self.assertEqual([], state["consoleErrors"])
 
     def test_readiness_renders_evidence_release_and_reason_instead_of_missing(self):
@@ -324,6 +408,114 @@ class DashboardTruthfulnessTests(unittest.TestCase):
             html,
             flags=re.DOTALL,
         ))
+        self.assertIsNone(re.search(
+            r"\.chip\s*\{[^}]*overflow-wrap:\s*anywhere;",
+            html,
+            flags=re.DOTALL,
+        ))
+        self.assertIsNotNone(re.search(
+            r"\.chip-code\s*\{[^}]*overflow-wrap:\s*anywhere;",
+            html,
+            flags=re.DOTALL,
+        ))
+
+    def test_current_limits_merge_blocking_prerequisites_into_grouped_actions(self):
+        report = self._report()
+        report["reason_codes"] = []
+        report["full_system_surface"]["release_readiness"] = {
+            "status": "NO-GO",
+            "paper_mode_allowed": False,
+            "prerequisites": [
+                {
+                    "name": "private_account_snapshot",
+                    "satisfied": False,
+                    "evidence_state": "verified_local",
+                    "release_state": "awaiting_external",
+                    "reason": "operator evidence pending",
+                    "reason_code": "MISSING_ACCOUNT_API_SNAPSHOT",
+                    "owner": "operator",
+                    "next_action": "Inject read-only account credentials locally and capture a sanitized snapshot.",
+                    "root_cause": "private_account_evidence",
+                },
+                {
+                    "name": "private_account_snapshot_duplicate",
+                    "satisfied": False,
+                    "evidence_state": "verified_local",
+                    "release_state": "awaiting_external",
+                    "reason": "duplicate operator evidence gate",
+                    "reason_code": "MISSING_ACCOUNT_API_SNAPSHOT",
+                    "owner": "operator",
+                    "next_action": "Provide private account evidence; the system will recompute portfolio risk.",
+                    "root_cause": "private_account_evidence",
+                },
+                {
+                    "name": "paper_observation_window",
+                    "satisfied": False,
+                    "evidence_state": "not_run",
+                    "release_state": "awaiting_calendar",
+                    "reason_codes": ["MISSING_30_60_DAY_RECONCILIATION"],
+                    "owner": "system_observation",
+                    "next_action": "Accumulate and reconcile at least 30 days of paper observations.",
+                    "root_cause": "paper_observation_window",
+                },
+                {
+                    "name": "safety_boundary",
+                    "satisfied": False,
+                    "evidence_state": "verified_local",
+                    "release_state": "not_ready",
+                    "reason": "policy cap remains active",
+                    "reason_code": "VOLATILITY_CAP_0",
+                    "owner": "policy",
+                    "next_action": "No action until the market exits the capped regime.",
+                    "root_cause": "policy_cap",
+                },
+            ],
+        }
+
+        state = self._render_dashboard(mode="live", report=report)
+
+        self.assertNotIn("暂无需要处理的限制", self._all_text(state["reasonCodes"]))
+        self.assertEqual(1, len(state["operatorLimitations"]["children"]))
+        self.assertEqual(2, len(state["systemLimitations"]["children"]))
+        self.assertIn("operator evidence pending", self._all_text(state["operatorLimitations"]))
+        self.assertIn("MISSING_ACCOUNT_API_SNAPSHOT", self._all_text(state["operatorLimitations"]))
+        self.assertIn("MISSING_30_60_DAY_RECONCILIATION", self._all_text(state["systemLimitations"]))
+        self.assertIn("VOLATILITY_CAP_0", self._all_text(state["systemLimitations"]))
+        self.assertIn("3", state["missingCount"]["text"])
+        self.assertIn("4", state["missingCount"]["text"])
+        self.assertEqual([], state["consoleErrors"])
+
+    def test_boundary_strip_renders_all_four_truths_and_updates_with_freshness(self):
+        report = self._report()
+
+        state = self._render_dashboard(
+            mode="live",
+            report=report,
+            advance_seconds=45,
+        )
+
+        self.assertTrue(state["serviceAvailability"]["text"])
+        self.assertEqual(
+            state["initial"]["marketEvidenceState"]["text"],
+            state["initial"]["marketBoundaryStripState"]["text"],
+        )
+        self.assertIn("WebSocket", state["initial"]["marketBoundaryStripNote"]["text"])
+        self.assertEqual("NO-GO", state["releaseBoundaryStripState"]["text"])
+        self.assertEqual(
+            state["productReleaseState"]["text"],
+            state["releaseBoundaryStripState"]["text"],
+        )
+        self.assertEqual("RESEARCH_ONLY", state["policyBoundaryState"]["text"])
+        self.assertNotEqual(
+            state["initial"]["marketBoundaryStripState"]["text"],
+            state["marketBoundaryStripState"]["text"],
+        )
+        self.assertNotEqual(
+            state["initial"]["marketBoundaryStripNote"]["text"],
+            state["marketBoundaryStripNote"]["text"],
+        )
+        self.assertTrue(state["policyBoundaryNote"]["text"])
+        self.assertEqual([], state["consoleErrors"])
 
     def test_ready_gate_uses_maintenance_copy_instead_of_stale_repair_action(self):
         report = self._report()
@@ -446,7 +638,7 @@ class DashboardTruthfulnessTests(unittest.TestCase):
             },
         }
 
-    def _render_dashboard(self, *, mode, report=None):
+    def _render_dashboard(self, *, mode, report=None, advance_seconds=0):
         node = shutil.which("node")
         if node is None:
             self.skipTest("node is required for dashboard behavior verification")
@@ -463,9 +655,39 @@ import vm from "node:vm";
 const source = {json.dumps(scripts[-1], ensure_ascii=False)};
 const mode = {json.dumps(mode)};
 const report = {json.dumps(report, ensure_ascii=False)};
+const advanceSeconds = {json.dumps(advance_seconds)};
 const elementIds = {json.dumps(parser.ids, ensure_ascii=False)};
 const hiddenIds = new Set({json.dumps(parser.hidden_ids, ensure_ascii=False)});
 const consoleErrors = [];
+const NativeDate = Date;
+let nowMs = NativeDate.parse(
+  report && report.generated_at
+    ? report.generated_at
+    : "2026-07-12T12:34:56Z"
+);
+const intervalCallbacks = [];
+
+class ControlledDate extends NativeDate {{
+  constructor(...args) {{
+    super(...(args.length === 0 ? [nowMs] : args));
+  }}
+
+  static now() {{ return nowMs; }}
+  static parse(value) {{ return NativeDate.parse(value); }}
+  static UTC(...args) {{ return NativeDate.UTC(...args); }}
+}}
+
+function scheduleInterval(callback) {{
+  intervalCallbacks.push(callback);
+  return intervalCallbacks.length;
+}}
+
+function clearScheduledInterval(intervalId) {{
+  const index = Number(intervalId) - 1;
+  if (index >= 0 && index < intervalCallbacks.length) {{
+    intervalCallbacks[index] = null;
+  }}
+}}
 
 class FakeElement {{
   constructor(id = "") {{
@@ -526,8 +748,11 @@ const document = {{
 }};
 const window = {{
   location: {{ protocol: "http:", origin: "http://dashboard.test" }},
+  Date: ControlledDate,
   setTimeout() {{ return 1; }},
-  clearTimeout() {{}}
+  clearTimeout() {{}},
+  setInterval: scheduleInterval,
+  clearInterval: clearScheduledInterval
 }};
 class FakeAbortController {{
   constructor() {{ this.signal = {{}}; }}
@@ -544,11 +769,16 @@ const fetch = async () => {{
 }};
 const context = {{
   AbortController: FakeAbortController,
+  Date: ControlledDate,
   Intl,
   URL,
+  clearInterval: clearScheduledInterval,
+  clearTimeout: window.clearTimeout,
   console: fakeConsole,
   document,
   fetch,
+  setInterval: scheduleInterval,
+  setTimeout: window.setTimeout,
   window
 }};
 context.globalThis = context;
@@ -563,8 +793,8 @@ function snapshot(id) {{
     text: node.textContent,
     hidden: node.hidden,
     className: node.className,
-    dataset: node.dataset,
-    attributes: node.attributes,
+    dataset: {{ ...node.dataset }},
+    attributes: {{ ...node.attributes }},
     children: node.children.map((child) => snapshotNode(child))
   }} : null;
 }}
@@ -574,13 +804,34 @@ function snapshotNode(node) {{
     text: node.textContent,
     hidden: node.hidden,
     className: node.className,
-    dataset: node.dataset,
-    attributes: node.attributes,
+    dataset: {{ ...node.dataset }},
+    attributes: {{ ...node.attributes }},
     children: node.children.map((child) => snapshotNode(child))
   }};
 }}
 
+const initial = {{
+  truth: snapshot("market-data-truth-state"),
+  marketAge: snapshot("market-data-age"),
+  marketEvidenceState: snapshot("market-evidence-state"),
+  backtestBars: snapshot("backtest-bars"),
+  marketBoundaryStripState: snapshot("market-boundary-strip-state"),
+  marketBoundaryStripNote: snapshot("market-boundary-strip-note")
+}};
+
+if (advanceSeconds > 0) {{
+  nowMs += advanceSeconds * 1000;
+  for (const callback of [...intervalCallbacks]) {{
+    if (typeof callback === "function") {{
+      await callback();
+    }}
+  }}
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+}}
+
 process.stdout.write(JSON.stringify({{
+  initial,
   truth: snapshot("market-data-truth-state"),
   truthLabel: snapshot("market-data-truth-label"),
   truthDetail: snapshot("market-data-truth-detail"),
@@ -598,7 +849,13 @@ process.stdout.write(JSON.stringify({{
   productReleaseState: snapshot("product-release-state"),
   policyBoundaryState: snapshot("policy-boundary-state"),
   policyBoundaryNote: snapshot("policy-boundary-note"),
+  marketBoundaryStripState: snapshot("market-boundary-strip-state"),
+  marketBoundaryStripNote: snapshot("market-boundary-strip-note"),
+  releaseBoundaryStripState: snapshot("release-boundary-strip-state"),
+  releaseBoundaryStripNote: snapshot("release-boundary-strip-note"),
   reasonCodes: snapshot("reason-codes"),
+  operatorLimitations: snapshot("operator-limitations"),
+  systemLimitations: snapshot("system-limitations"),
   action: snapshot("action"),
   modeGateList: snapshot("mode-gate-list"),
   candidateCount: snapshot("candidate-count"),

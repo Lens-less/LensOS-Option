@@ -120,6 +120,66 @@ class PortfolioRiskReportTests(unittest.TestCase):
         self.assertEqual([], portfolio["size_caps"])
         self.assertEqual(0, portfolio["summary"]["candidate_caps_evaluated"])
 
+    def test_halted_portfolio_rejects_leaked_size_caps(self):
+        report = self._report(account_scenario="stale")
+        portfolio = report["portfolio_risk"]
+        portfolio["size_caps"] = [{"candidate_id": "leaked-cap"}]
+
+        component_errors = validate_portfolio_risk_report(portfolio)
+        contract_errors = validate_report_contract(report)
+
+        self.assertIn(
+            "halted portfolio_risk must not expose size_caps",
+            component_errors,
+        )
+        self.assertIn(
+            "halted portfolio_risk must not expose size_caps",
+            contract_errors,
+        )
+
+    def test_non_halted_size_caps_require_expected_shape(self):
+        portfolio = self._portfolio_with_candidate(
+            permission_state=self._sizing_permission_state(),
+        )
+        portfolio["size_caps"] = [{"candidate_id": "cap-1"}]
+
+        self.assertIn(
+            "portfolio_risk.size_cap missing key: raw_cap_units",
+            validate_portfolio_risk_report(portfolio),
+        )
+
+    def test_malformed_volatility_percentiles_fail_closed_during_direct_sizing(self):
+        invalid_inputs = (
+            {
+                "dvol_percentile": "bad",
+                "atm_iv_percentile": float("inf"),
+            },
+            {
+                "dvol_percentile": -0.01,
+                "atm_iv_percentile": 0.45,
+            },
+            {
+                "dvol_percentile": 0.55,
+                "atm_iv_percentile": 1.01,
+            },
+        )
+        for volatility_inputs in invalid_inputs:
+            with self.subTest(volatility_inputs=volatility_inputs):
+                portfolio = self._portfolio_with_candidate(
+                    permission_state=self._sizing_permission_state(
+                        volatility_inputs=volatility_inputs
+                    ),
+                )
+
+                self.assertEqual("spread_only", portfolio["final_action"])
+                self.assertEqual(1, len(portfolio["size_caps"]))
+                volatility_dimension = next(
+                    item
+                    for item in portfolio["size_caps"][0]["dimensions"]
+                    if item["dimension"] == "volatility"
+                )
+                self.assertEqual(0.0, volatility_dimension["cap_units"])
+
     def test_malformed_or_unknown_mdd_state_halts_instead_of_clearing(self):
         for mdd_state in ({}, {"status": "halt_systm"}, "clear"):
             with self.subTest(mdd_state=mdd_state):
@@ -258,6 +318,50 @@ class PortfolioRiskReportTests(unittest.TestCase):
             ev_candidate_scanner=base["ev_candidate_scanner"],
             risk_overrides=risk_overrides,
         )
+
+    def _portfolio_with_candidate(self, *, permission_state):
+        base = self._report()
+        return build_portfolio_risk_report(
+            generated_at=base["generated_at"],
+            data_status=base["data_status"],
+            account_status=base["account_status"],
+            permission_state=permission_state,
+            ev_candidate_scanner={
+                "ranked_candidates": [
+                    {
+                        "candidate_id": "candidate-1",
+                        "structure_type": "call_credit_spread",
+                        "model_delta": 0.22,
+                        "underlying_price": 100_000.0,
+                        "sell_leg_depth": 20.0,
+                        "buy_leg_depth": 18.0,
+                        "path_risk": {
+                            "cvar_99_usdc": 800.0,
+                            "stress_loss_usdc": 950.0,
+                        },
+                        "margin_snapshot": {
+                            "delta_initial_margin": 750.0,
+                        },
+                    }
+                ]
+            },
+        )
+
+    def _sizing_permission_state(self, *, volatility_inputs=None):
+        return {
+            "sell_permission": 0.25,
+            "naked_permission": False,
+            "spread_permission": True,
+            "reason_codes": ["SIZING_TEST_PERMISSION"],
+            "volatility_inputs": (
+                {
+                    "dvol_percentile": 0.55,
+                    "atm_iv_percentile": 0.45,
+                }
+                if volatility_inputs is None
+                else volatility_inputs
+            ),
+        }
 
     def _report_with_regime(self, *, dvol_percentile, atm_iv_percentile):
         snapshot = load_snapshot_fixture(self._fixture_path())

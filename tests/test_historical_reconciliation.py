@@ -3,6 +3,7 @@ import math
 import subprocess
 import sys
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 from crypto_options_report.historical import (
@@ -63,6 +64,109 @@ class HistoricalReconciliationTests(unittest.TestCase):
             "quality_status",
         }
         self.assertTrue(required_quote_keys.issubset(quote))
+
+    def test_invalid_settlement_currency_is_quarantined_without_canonical_promotion(self):
+        cases = (
+            ("missing", lambda row: row.pop("settlement_currency", None)),
+            ("null", lambda row: row.__setitem__("settlement_currency", None)),
+            ("whitespace", lambda row: row.__setitem__("settlement_currency", "   ")),
+            ("bool", lambda row: row.__setitem__("settlement_currency", True)),
+            ("number", lambda row: row.__setitem__("settlement_currency", 123)),
+            ("container", lambda row: row.__setitem__("settlement_currency", {"ccy": "USDC"})),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label):
+                rows = deepcopy(
+                    load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")["rows"][:1]
+                )
+                mutate(rows[0])
+
+                report = build_historical_reconciliation_report(rows)
+
+                self.assertEqual("INELIGIBLE", report["eligibility"]["decision"])
+                self.assertEqual(0, report["summary"]["eligible_quotes"])
+                self.assertEqual([], report["canonical_data"]["instrument_metadata"])
+                self.assertEqual([], report["canonical_data"]["normalized_quotes"])
+                self.assertEqual(
+                    {"METADATA_MAPPING_FAILED": 1},
+                    report["summary"]["failure_counts"],
+                )
+                self.assertEqual(
+                    ["METADATA_MAPPING_FAILED"],
+                    report["quarantine"]["quotes"][0]["failure_codes"],
+                )
+
+    def test_linear_put_payoff_replay_is_eligible(self):
+        rows = deepcopy(
+            load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")["rows"][:1]
+        )
+        rows[0]["instrument_name"] = "BTC-31JAN26-100000-P"
+        rows[0]["delivery_price"] = 95_000.0
+        rows[0]["recorded_long_payoff"] = 5_000.0
+
+        report = build_historical_reconciliation_report(rows)
+
+        self.assertEqual("ELIGIBLE", report["eligibility"]["decision"])
+        self.assertEqual("PUT", report["canonical_data"]["eligible_quotes"][0]["option_type"])
+
+    def test_linear_contract_size_scales_payoff_replay(self):
+        rows = deepcopy(
+            load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")["rows"][:1]
+        )
+        rows[0]["contract_size"] = 2.5
+        rows[0]["recorded_long_payoff"] = 12_500.0
+
+        report = build_historical_reconciliation_report(rows)
+
+        self.assertEqual("ELIGIBLE", report["eligibility"]["decision"])
+        self.assertEqual(
+            2.5,
+            report["canonical_data"]["instrument_metadata"][0]["contract_size"],
+        )
+
+    def test_inverse_call_payoff_replay_remains_eligible(self):
+        rows = deepcopy(
+            load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")["rows"][:1]
+        )
+        rows[0]["settlement_currency"] = "BTC"
+        rows[0]["quote_currency"] = "BTC"
+        rows[0]["recorded_long_payoff"] = 5_000.0 / 105_000.0
+
+        report = build_historical_reconciliation_report(rows)
+
+        self.assertEqual("ELIGIBLE", report["eligibility"]["decision"])
+
+    def test_inverse_put_payoff_replay_is_eligible(self):
+        rows = deepcopy(
+            load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")["rows"][:1]
+        )
+        rows[0]["instrument_name"] = "BTC-31JAN26-100000-P"
+        rows[0]["settlement_currency"] = "BTC"
+        rows[0]["quote_currency"] = "BTC"
+        rows[0]["delivery_price"] = 95_000.0
+        rows[0]["recorded_long_payoff"] = 5_000.0 / 95_000.0
+
+        report = build_historical_reconciliation_report(rows)
+
+        self.assertEqual("ELIGIBLE", report["eligibility"]["decision"])
+        self.assertEqual("PUT", report["canonical_data"]["eligible_quotes"][0]["option_type"])
+
+    def test_inverse_contract_size_scales_payoff_replay(self):
+        rows = deepcopy(
+            load_historical_fixture(FIXTURE_DIR / "pass_fixture.json")["rows"][:1]
+        )
+        rows[0]["settlement_currency"] = "BTC"
+        rows[0]["quote_currency"] = "BTC"
+        rows[0]["contract_size"] = 2.5
+        rows[0]["recorded_long_payoff"] = 2.5 * (5_000.0 / 105_000.0)
+
+        report = build_historical_reconciliation_report(rows)
+
+        self.assertEqual("ELIGIBLE", report["eligibility"]["decision"])
+        self.assertEqual(
+            2.5,
+            report["canonical_data"]["instrument_metadata"][0]["contract_size"],
+        )
 
     def test_surface_no_arb_evidence_is_explicit_finite_and_fail_closed(self):
         cases = (

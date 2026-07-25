@@ -49,6 +49,10 @@ from .position_management import (
     validate_position_management_report,
 )
 from .surface import build_vol_surface_and_candidate_research
+from .strategy_research import (
+    build_strategy_research,
+    validate_strategy_research,
+)
 
 SCHEMA_VERSION = "research_report.v1"
 SUPPORTED_MODES = {"research_only", "paper", "manual_execution"}
@@ -74,6 +78,7 @@ REQUIRED_REPORT_KEYS = {
     "pnl_evidence",
     "vol_surface_status",
     "candidate_research",
+    "strategy_research",
     "ev_candidate_scanner",
     "portfolio_risk",
     "position_management",
@@ -118,7 +123,7 @@ def utc_timestamp() -> str:
     )
 
 
-def generate_research_report(
+def _build_research_report_v1_projection(
     *,
     mode: str = "research_only",
     generated_at: str | None = None,
@@ -130,7 +135,7 @@ def generate_research_report(
     manual_approval_runbook_path: str | None = None,
     persist_paper_ledger: bool = True,
 ) -> dict[str, Any]:
-    """Build the shared report payload for CLI/API/dashboard consumers."""
+    """Build the legacy projection before the AnalysisRun migration layer."""
 
     if mode not in SUPPORTED_MODES:
         raise ValueError(
@@ -239,6 +244,18 @@ def generate_research_report(
     )
     if position_management.get("reason_code"):
         reason_codes.append(str(position_management["reason_code"]))
+    strategy_research = build_strategy_research(
+        generated_at=generated,
+        data_status=data_status,
+        account_status=account_status,
+        vol_surface_status=vol_surface_status,
+        candidate_research=candidate_research,
+        permission_state=permission_state,
+        calibration_status=calibration_status,
+        backtest_status=backtest_status,
+        ev_candidate_scanner=ev_candidate_scanner,
+        portfolio_risk=portfolio_risk,
+    )
     report = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": generated,
@@ -274,6 +291,7 @@ def generate_research_report(
         "pnl_evidence": pnl_evidence,
         "vol_surface_status": vol_surface_status,
         "candidate_research": candidate_research,
+        "strategy_research": strategy_research,
         "ev_candidate_scanner": ev_candidate_scanner,
         "portfolio_risk": portfolio_risk,
         "position_management": position_management,
@@ -299,6 +317,39 @@ def generate_research_report(
     if errors:
         raise ValueError("; ".join(errors))
     return report
+
+
+def generate_research_report(
+    *,
+    mode: str = "research_only",
+    generated_at: str | None = None,
+    market_snapshot: dict[str, Any] | None = None,
+    account_payload: dict[str, Any] | None = None,
+    account_scenario: str | None = None,
+    backtest_artifact: dict[str, Any] | None = None,
+    paper_ledger_path: str | None = None,
+    manual_approval_runbook_path: str | None = None,
+    persist_paper_ledger: bool = True,
+) -> dict[str, Any]:
+    """Project one immutable AnalysisRecord as ``research_report.v1``.
+
+    The legacy schema and business values stay unchanged.  New trusted domain
+    ownership lives behind :class:`AnalysisRun`; this function is retained as
+    the compatibility surface used by existing callers.
+    """
+    from .analysis_run import build_analysis_record
+
+    return build_analysis_record(
+        mode=mode,
+        generated_at=generated_at,
+        market_snapshot=market_snapshot,
+        account_payload=account_payload,
+        account_scenario=account_scenario,
+        backtest_artifact=backtest_artifact,
+        paper_ledger_path=paper_ledger_path,
+        manual_approval_runbook_path=manual_approval_runbook_path,
+        persist_paper_ledger=persist_paper_ledger,
+    ).project_research_report_v1()
 
 
 def _validate_runtime_safety_invariants(report: dict[str, Any]) -> list[str]:
@@ -524,6 +575,7 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
     errors.extend(_validate_pnl_evidence(report.get("pnl_evidence")))
     errors.extend(_validate_vol_surface_status(report.get("vol_surface_status")))
     errors.extend(_validate_candidate_research(report.get("candidate_research")))
+    errors.extend(validate_strategy_research(report.get("strategy_research")))
     errors.extend(_validate_ev_candidate_scanner(report.get("ev_candidate_scanner")))
     errors.extend(validate_portfolio_risk_report(report.get("portfolio_risk")))
     errors.extend(validate_position_management_report(report.get("position_management")))
@@ -958,6 +1010,16 @@ def _validate_permission_state(permission_state: Any) -> list[str]:
         for key in ("dvol_percentile", "atm_iv_percentile"):
             if key not in volatility_inputs:
                 errors.append(f"permission_state.volatility_inputs missing key: {key}")
+                continue
+            value = volatility_inputs.get(key)
+            if not _is_finite_number(value):
+                errors.append(
+                    f"permission_state.volatility_inputs.{key} must be a finite number"
+                )
+            elif not 0.0 <= float(value) <= 1.0:
+                errors.append(
+                    f"permission_state.volatility_inputs.{key} must stay in [0.0, 1.0]"
+                )
 
     cap_details = permission_state.get("cap_details", [])
     if isinstance(cap_details, list):
@@ -977,6 +1039,14 @@ def _validate_permission_state(permission_state: Any) -> list[str]:
                 errors.append("permission_state.cap_detail reason_codes must be a list")
 
     return errors
+
+
+def _is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
 
 
 def _validate_vol_surface_status(vol_surface_status: Any) -> list[str]:

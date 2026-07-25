@@ -23,7 +23,17 @@ crypto-options-account-snapshot-sidecar = "crypto_options_report.account_snapsho
 include = ["crypto_options_report*"]
 
 [tool.setuptools.package-data]
-crypto_options_report = ["static/*.html", "resources/*.md"]
+crypto_options_report = [
+    "static/*.html",
+    "static/evidence/*.html",
+    "static/evidence/assets/*.css",
+    "static/evidence/assets/*.js",
+    "static/evidence/assets/*.png",
+    "static/evidence/assets/*.svg",
+    "static/evidence/assets/*.woff",
+    "static/evidence/assets/*.woff2",
+    "resources/*.md",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

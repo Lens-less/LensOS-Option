@@ -15,7 +15,13 @@ from crypto_options_report.historical import (
     build_historical_reconciliation_report,
     load_historical_fixture,
 )
-from crypto_options_report.api import RuntimeConfig, build_api_report, _report_from_query
+from crypto_options_report.api import (
+    HTTP_MAX_INSTRUMENT_LIMIT,
+    RuntimeConfig,
+    _report_from_query,
+    _report_options_from_query,
+    build_api_report,
+)
 from crypto_options_report.market_data import (
     build_market_data_status,
     normalize_market_snapshot,
@@ -302,6 +308,18 @@ class DataQualityRemediationTests(unittest.TestCase):
                     ),
                 )
         fetch.assert_not_called()
+
+    def test_explicit_live_fetch_gate_drives_the_default_development_report(self):
+        options = _report_options_from_query(
+            "",
+            runtime=RuntimeConfig(
+                profile="development",
+                allow_live_fetch=True,
+            ),
+        )
+
+        self.assertTrue(options["live_deribit"])
+        self.assertEqual(HTTP_MAX_INSTRUMENT_LIMIT, options["instrument_limit"])
 
     def _base_snapshot(self):
         return json.loads((FIXTURES / "deribit_btc_option_chain_snapshot.json").read_text())

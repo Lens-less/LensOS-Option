@@ -150,6 +150,26 @@ class PositionManagementReplayTests(unittest.TestCase):
         self.assertEqual(0, report["summary"]["positions_observed"])
         self.assertEqual(0, report["summary"]["positions_evaluated"])
 
+    def test_empty_status_rejects_replay_leaks_without_validating_rows(self):
+        report = build_position_management_report(
+            generated_at="2026-07-07T00:01:30Z",
+            account_status={"positions": []},
+            portfolio_risk={"final_action": "allow_new"},
+            permission_state={"reason_codes": []},
+        )
+        report["replays"] = [{"state": "UNKNOWN"}]
+
+        errors = validate_position_management_report(report)
+
+        self.assertIn(
+            "empty position management must not expose replays",
+            errors,
+        )
+        self.assertNotIn(
+            "position_management replay has unknown state",
+            errors,
+        )
+
     def test_explicit_position_missing_economic_evidence_is_unavailable(self):
         report = build_position_management_report(
             generated_at="2026-07-07T00:01:30Z",
@@ -174,6 +194,27 @@ class PositionManagementReplayTests(unittest.TestCase):
         self.assertIn("roll_candidate.ev_before", report["missing_evidence"])
         self.assertIn("protective_spread.stress_loss_before", report["missing_evidence"])
         self.assertNotIn(0.0, report["missing_evidence"])
+
+    def test_unavailable_status_rejects_replay_leaks_without_validating_rows(self):
+        report = build_position_management_report(
+            generated_at="2026-07-07T00:01:30Z",
+            account_status={"positions": []},
+            portfolio_risk={"final_action": "allow_new"},
+            permission_state={"reason_codes": []},
+            positions=[{"position_id": "partial"}],
+        )
+        report["replays"] = [{"state": "UNKNOWN"}]
+
+        errors = validate_position_management_report(report)
+
+        self.assertIn(
+            "unavailable position management must not expose replays",
+            errors,
+        )
+        self.assertNotIn(
+            "position_management replay has unknown state",
+            errors,
+        )
 
     def test_complete_explicit_position_is_evaluated(self):
         report = build_position_management_report(

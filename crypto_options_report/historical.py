@@ -567,11 +567,18 @@ def _map_instrument_metadata(
     option_type = "CALL" if match.group("option") == "C" else "PUT"
     strike = float(match.group("strike"))
 
-    settlement_currency = str(
-        row.get("settlement_currency")
-        or row.get("quote_currency")
-        or base_currency
-    ).upper()
+    settlement_currency_raw = row.get("settlement_currency")
+    if not isinstance(settlement_currency_raw, str):
+        raise HistoricalNormalizationError(
+            "METADATA_MAPPING_FAILED",
+            "settlement_currency is required",
+        )
+    settlement_currency = settlement_currency_raw.strip().upper()
+    if not settlement_currency:
+        raise HistoricalNormalizationError(
+            "METADATA_MAPPING_FAILED",
+            "settlement_currency is required",
+        )
     quote_currency = str(row.get("quote_currency") or settlement_currency).upper()
     contract_size = _positive_float(
         row.get("contract_size", config["default_contract_size"]),
@@ -1114,19 +1121,32 @@ def _validate_payoff_replay(
             recorded_long_payoff_raw,
             "recorded_long_payoff",
         )
+        contract_size = _positive_float(
+            raw.get("contract_size", config["default_contract_size"]),
+            "contract_size",
+        )
     except HistoricalNormalizationError:
         return False
     if delivery_price <= 0.0 or recorded_long_payoff < 0.0:
         return False
-    intrinsic = max(delivery_price - quote.strike, 0.0)
     if quote.settlement_currency == quote.currency:
-        expected_long_payoff = inverse_long_call_settlement_coin(
-            quote.strike,
-            delivery_price,
-        )
+        if quote.option_type == "PUT":
+            expected_long_payoff = (
+                contract_size * max(quote.strike - delivery_price, 0.0) / delivery_price
+            )
+        else:
+            expected_long_payoff = inverse_long_call_settlement_coin(
+                quote.strike,
+                delivery_price,
+                contract_count=contract_size,
+            )
         tolerance = max(1e-10, 1e-7 * abs(expected_long_payoff))
     else:
-        expected_long_payoff = intrinsic
+        if quote.option_type == "PUT":
+            intrinsic = max(quote.strike - delivery_price, 0.0)
+        else:
+            intrinsic = max(delivery_price - quote.strike, 0.0)
+        expected_long_payoff = intrinsic * contract_size
         tolerance = (
             config["max_payoff_bps_error"]
             / 10000.0

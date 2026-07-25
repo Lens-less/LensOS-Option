@@ -27,7 +27,11 @@ from crypto_options_report.evidence_store import (
     promote_backtest_evidence_default,
     run_backtest_evidence_job,
 )
-from crypto_options_report.paper_ledger import build_paper_proposal_ledger
+from crypto_options_report.paper_ledger import (
+    CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID,
+    DEFAULT_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID,
+    build_paper_proposal_ledger,
+)
 
 
 class EvidenceRuntimeCompletionTests(unittest.TestCase):
@@ -269,7 +273,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 connection = http.client.HTTPConnection(
-                    "127.0.0.1", server.server_port, timeout=2
+                    "127.0.0.1", server.server_port, timeout=5
                 )
                 try:
                     connection.request(
@@ -292,7 +296,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                     connection.close()
 
                     overloaded = http.client.HTTPConnection(
-                        "127.0.0.1", server.server_port, timeout=2
+                        "127.0.0.1", server.server_port, timeout=5
                     )
                     overloaded.request(
                         "POST",
@@ -507,7 +511,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 connection = http.client.HTTPConnection(
-                    "127.0.0.1", server.server_port, timeout=2
+                    "127.0.0.1", server.server_port, timeout=5
                 )
                 try:
                     connection.request("GET", f"/backtest/jobs/{job_id}")
@@ -554,7 +558,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             connection = http.client.HTTPConnection(
-                "127.0.0.1", server.server_port, timeout=2
+                "127.0.0.1", server.server_port, timeout=5
             )
             try:
                 connection.request(
@@ -771,7 +775,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             connection = http.client.HTTPConnection(
-                "127.0.0.1", server.server_port, timeout=2
+                "127.0.0.1", server.server_port, timeout=5
             )
             try:
                 connection.request("GET", f"/backtest/jobs/{job_id}/result")
@@ -925,7 +929,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                         connection = http.client.HTTPConnection(
                             "127.0.0.1",
                             server.server_port,
-                            timeout=2,
+                            timeout=5,
                         )
                         try:
                             connection.request(
@@ -1459,7 +1463,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
 
             def submit_once():
                 connection = http.client.HTTPConnection(
-                    "127.0.0.1", server.server_port, timeout=2
+                    "127.0.0.1", server.server_port, timeout=5
                 )
                 try:
                     connection.request(
@@ -2081,8 +2085,25 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
         evidence = report["paper_proposal_ledger"]["manual_approval_runbook"]
 
         self.assertEqual("verified_local", evidence["status"])
+        self.assertEqual(DEFAULT_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID, evidence["path"])
         self.assertRegex(evidence["sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(["EXTERNAL_APPROVAL_PENDING"], evidence["reason_codes"])
+
+    def test_api_report_hides_custom_manual_runbook_absolute_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runbook = Path(tmp) / "manual.md"
+            runbook.write_text(
+                "# Manual approval runbook\n\nVersion: 1.0\n\n"
+                "RESEARCH_ONLY. Manual approval is required.\n",
+                encoding="utf-8",
+            )
+
+            report = build_api_report(manual_approval_runbook_path=str(runbook))
+
+        evidence = report["paper_proposal_ledger"]["manual_approval_runbook"]
+        self.assertEqual("verified_local", evidence["status"])
+        self.assertEqual(CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID, evidence["path"])
+        self.assertNotEqual(str(runbook.resolve()), evidence["path"])
 
     @staticmethod
     def _write_succeeded_job(

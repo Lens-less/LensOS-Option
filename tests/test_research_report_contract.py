@@ -47,6 +47,79 @@ class ResearchReportContractTests(unittest.TestCase):
             validate_report_contract(report),
         )
 
+    def test_contract_rejects_malformed_surface_collections_without_throwing(self):
+        report = generate_research_report(generated_at="2026-07-07T00:00:00Z")
+        report["full_system_surface"]["cli"]["commands"] = "report"
+        report["full_system_surface"]["api"] = []
+        report["full_system_surface"]["dashboard"]["views"] = [False]
+
+        errors = validate_report_contract(report)
+
+        self.assertIn(
+            "full_system_surface.cli.commands must be a list",
+            errors,
+        )
+        self.assertIn(
+            "full_system_surface.api must be a dict",
+            errors,
+        )
+        self.assertIn(
+            "full_system_surface.dashboard.views entries must be dicts",
+            errors,
+        )
+
+    def test_contract_rejects_non_finite_permission_percentiles(self):
+        report = self._report_with_regime_inputs(
+            bear_trend_score=0.82,
+            range_score=0.20,
+            squeeze_score=0.18,
+            slow_bull_score=0.15,
+            fast_bull_breakout_score=0.10,
+            event_score=0.05,
+            dvol_percentile=0.52,
+            atm_iv_percentile=0.48,
+        )
+        report["permission_state"]["volatility_inputs"]["dvol_percentile"] = True
+        report["permission_state"]["volatility_inputs"]["atm_iv_percentile"] = float(
+            "nan"
+        )
+
+        errors = validate_report_contract(report)
+
+        self.assertIn(
+            "permission_state.volatility_inputs.dvol_percentile must be a finite number",
+            errors,
+        )
+        self.assertIn(
+            "permission_state.volatility_inputs.atm_iv_percentile must be a finite number",
+            errors,
+        )
+
+    def test_contract_rejects_out_of_range_permission_percentiles(self):
+        report = self._report_with_regime_inputs(
+            bear_trend_score=0.82,
+            range_score=0.20,
+            squeeze_score=0.18,
+            slow_bull_score=0.15,
+            fast_bull_breakout_score=0.10,
+            event_score=0.05,
+            dvol_percentile=0.52,
+            atm_iv_percentile=0.48,
+        )
+        report["permission_state"]["volatility_inputs"]["dvol_percentile"] = -0.01
+        report["permission_state"]["volatility_inputs"]["atm_iv_percentile"] = 1.01
+
+        errors = validate_report_contract(report)
+
+        self.assertIn(
+            "permission_state.volatility_inputs.dvol_percentile must stay in [0.0, 1.0]",
+            errors,
+        )
+        self.assertIn(
+            "permission_state.volatility_inputs.atm_iv_percentile must stay in [0.0, 1.0]",
+            errors,
+        )
+
     def test_contract_rejects_ev_summary_that_disagrees_with_ranked_candidates(self):
         report = generate_research_report(generated_at="2026-07-07T00:00:00Z")
         summary = report["ev_candidate_scanner"]["summary"]

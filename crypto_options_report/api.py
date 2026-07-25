@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from contextvars import ContextVar
+import hmac
 import http.client
 import ipaddress
 import json
@@ -10,12 +12,13 @@ import math
 import os
 import re
 import socket
+import stat
 import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -27,7 +30,7 @@ from .account_risk import (
     AVAILABLE_ACCOUNT_SCENARIOS,
     build_account_status,
 )
-from .contract import generate_research_report
+from .analysis_run import AnalysisRecord, build_analysis_record
 from .evidence_store import (
     BacktestIdempotencyConflict,
     BacktestJobSubmissionFailed,
@@ -44,6 +47,7 @@ from .market_data import (
     build_market_data_status,
     fetch_deribit_option_chain_snapshot,
     load_snapshot_fixture,
+    snapshot_trust_state_path,
     validate_deribit_base_url,
     utc_timestamp as market_utc_timestamp,
 )
@@ -51,14 +55,20 @@ from .sidecar_auth import (
     authenticate_sidecar_payload,
     authenticated_projection,
     is_authenticated_sidecar_payload,
+    sidecar_auth_state_path,
 )
 from .storage import read_json_object_from_regular_file
 
 REPORT_PATH = "/research/report"
 REPORT_ALIASES = {REPORT_PATH, "/report"}
+ANALYSIS_RESULT_PATH = "/analysis/result"
 DASHBOARD_PAGE_PATH = "/dashboard.html"
 DASHBOARD_PAGE_ALIASES = {"/", DASHBOARD_PAGE_PATH, "/dashboard/page"}
+EVIDENCE_PAGE_PATH = "/evidence"
+EVIDENCE_PAGE_ALIASES = {EVIDENCE_PAGE_PATH, f"{EVIDENCE_PAGE_PATH}/"}
+EVIDENCE_ASSET_PREFIX = f"{EVIDENCE_PAGE_PATH}/assets/"
 GET_SURFACE_PATHS = {
+    ANALYSIS_RESULT_PATH,
     "/market/chain",
     "/surface",
     "/regime",
@@ -75,6 +85,8 @@ LIVENESS_PATHS = {"/health", "/livez"}
 READINESS_PATH = "/readyz"
 ALLOWED_HOSTS_ENV = "CRYPTO_OPTIONS_API_ALLOWED_HOSTS"
 TRUSTED_ORIGINS_ENV = "CRYPTO_OPTIONS_API_TRUSTED_ORIGINS"
+ALLOW_REMOTE_ENV = "CRYPTO_OPTIONS_API_ALLOW_REMOTE"
+BEARER_TOKEN_FILE_ENV = "CRYPTO_OPTIONS_API_BEARER_TOKEN_FILE"
 DERIBIT_POSITION_KINDS = frozenset(
     {"future", "option", "spot", "future_combo", "option_combo"}
 )
@@ -82,7 +94,15 @@ BACKTEST_REPORT_PREFIX = "/backtest/report/"
 BACKTEST_JOB_PREFIX = "/backtest/jobs/"
 BACKTEST_REQUEST_SCHEMA_VERSION = "backtest_run_request.v1"
 MAX_BACKTEST_REQUEST_BYTES = 16 * 1024
+MIN_BEARER_TOKEN_LENGTH = 32
+MAX_BEARER_TOKEN_LENGTH = 256
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_EVIDENCE_ASSET_NAME = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:css|js|png|svg|woff|woff2)$"
+)
+_EVIDENCE_BUNDLE_REFERENCE = re.compile(
+    r'(?:href|src)="/evidence/assets/([^"]+)"'
+)
 _RFC3339_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -95,6 +115,10 @@ MAX_REQUEST_TIMEOUT_SEC = 120.0
 PRODUCTION_ALLOWED_QUERY_KEYS = {"mode"}
 OVERLOAD_DRAIN_TIMEOUT_SEC = 0.05
 OVERLOAD_DRAIN_LIMIT_BYTES = 64 * 1024
+_REQUEST_ANALYSIS_RECORD: ContextVar[AnalysisRecord | None] = ContextVar(
+    "request_analysis_record",
+    default=None,
+)
 
 
 class _RequestContractError(ValueError):
@@ -231,9 +255,25 @@ class ResearchHTTPServer(ThreadingHTTPServer):
         handler_class: type[BaseHTTPRequestHandler],
         *,
         runtime: RuntimeConfig | None = None,
+        bearer_token: str | None = None,
     ) -> None:
         self.runtime = (runtime or RuntimeConfig()).validate()
+        if not _bind_target(server_address[0])[1] and bearer_token is None:
+            raise ValueError("non-loopback HTTP servers require a bearer token")
+        self.bearer_token = (
+            _validate_bearer_token(
+                bearer_token,
+                source="bearer_token",
+            )
+            if bearer_token is not None
+            else None
+        )
+        self.expected_bearer_authorization = (
+            f"Bearer {self.bearer_token}" if self.bearer_token is not None else None
+        )
         self._worker_slots = threading.BoundedSemaphore(self.runtime.max_workers)
+        self._analysis_record_lock = threading.Lock()
+        self._analysis_records: dict[str, AnalysisRecord] = {}
         try:
             if ipaddress.ip_address(server_address[0]).version == 6:
                 self.address_family = socket.AF_INET6
@@ -248,6 +288,32 @@ class ResearchHTTPServer(ThreadingHTTPServer):
             if self.runtime.historical_fixture and self.runtime.backtest_artifact_dir
             else None
         )
+
+    def analysis_record(self, query: str) -> AnalysisRecord:
+        """Return one immutable record per canonical GET input set.
+
+        Building while holding the lock is intentional: concurrent GET
+        projections must never trigger duplicate live collection or duplicate
+        decision evaluation for the same request identity.
+        """
+        options = _report_options_from_query(query, runtime=self.runtime)
+        cache_key = json.dumps(
+            _analysis_cache_identity(options),
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        with self._analysis_record_lock:
+            cached = self._analysis_records.get(cache_key)
+            if cached is not None:
+                if _analysis_cache_entry_current(cached, options):
+                    return cached
+                self._analysis_records.pop(cache_key, None)
+            if len(self._analysis_records) >= 64:
+                raise ValueError("analysis result cache is full")
+            record = build_api_analysis_record(**options)
+            self._analysis_records[cache_key] = record
+            return record
 
     def server_close(self) -> None:
         try:
@@ -339,7 +405,7 @@ class ResearchHTTPServer(ThreadingHTTPServer):
             return
 
 
-def build_api_report(
+def build_api_analysis_record(
     *,
     mode: str = "research_only",
     snapshot_fixture: str | None = None,
@@ -354,7 +420,7 @@ def build_api_report(
     backtest_artifact_dir: str | None = None,
     paper_ledger_path: str | None = None,
     manual_approval_runbook_path: str | None = None,
-) -> dict[str, Any]:
+) -> AnalysisRecord:
     if snapshot_fixture and live_deribit:
         raise ValueError("choose snapshot_fixture or live_deribit, not both")
 
@@ -391,7 +457,7 @@ def build_api_report(
     )
     if account_payload is not None and account_scenario is not None:
         raise ValueError("operator account snapshot cannot be combined with account_scenario")
-    return generate_research_report(
+    return build_analysis_record(
         mode=mode,
         market_snapshot=market_snapshot,
         account_scenario=account_scenario,
@@ -402,6 +468,40 @@ def build_api_report(
         manual_approval_runbook_path=manual_approval_runbook_path,
         persist_paper_ledger=False,
     )
+
+
+def build_api_report(
+    *,
+    mode: str = "research_only",
+    snapshot_fixture: str | None = None,
+    live_deribit: bool = False,
+    currency: str = "BTC",
+    deribit_base_url: str = DEFAULT_DERIBIT_BASE_URL,
+    instrument_limit: int | None = None,
+    account_scenario: str | None = None,
+    account_snapshot_fixture: str | None = None,
+    generated_at: str | None = None,
+    sandbox_fixtures: bool = False,
+    backtest_artifact_dir: str | None = None,
+    paper_ledger_path: str | None = None,
+    manual_approval_runbook_path: str | None = None,
+) -> dict[str, Any]:
+    """Return the legacy report projection of one immutable analysis record."""
+    return build_api_analysis_record(
+        mode=mode,
+        snapshot_fixture=snapshot_fixture,
+        live_deribit=live_deribit,
+        currency=currency,
+        deribit_base_url=deribit_base_url,
+        instrument_limit=instrument_limit,
+        account_scenario=account_scenario,
+        account_snapshot_fixture=account_snapshot_fixture,
+        generated_at=generated_at,
+        sandbox_fixtures=sandbox_fixtures,
+        backtest_artifact_dir=backtest_artifact_dir,
+        paper_ledger_path=paper_ledger_path,
+        manual_approval_runbook_path=manual_approval_runbook_path,
+    ).project_research_report_v1()
 
 
 class ResearchReportHandler(BaseHTTPRequestHandler):
@@ -415,6 +515,17 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
     def version_string(self) -> str:
         return self.server_version
 
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,
+    ) -> None:
+        if code == HTTPStatus.NOT_IMPLEMENTED and getattr(self, "command", None):
+            self._method_not_allowed(write_body=self.command != "HEAD")
+            return
+        super().send_error(code, message, explain)
+
     def do_GET(self) -> None:
         if not self._start_request():
             return
@@ -422,14 +533,37 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         if parsed.path in DASHBOARD_PAGE_ALIASES:
             self._write_html(HTTPStatus.OK, dashboard_page_html())
             return
+        if parsed.path in EVIDENCE_PAGE_ALIASES:
+            self._write_evidence_html(HTTPStatus.OK, evidence_page_html())
+            return
+        if parsed.path.startswith(EVIDENCE_ASSET_PREFIX):
+            asset_name = parsed.path.removeprefix(EVIDENCE_ASSET_PREFIX)
+            try:
+                body, content_type = evidence_asset(asset_name)
+            except (FileNotFoundError, ValueError):
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                return
+            self._write_response(
+                HTTPStatus.OK,
+                body,
+                content_type=content_type,
+            )
+            return
         if parsed.path in LIVENESS_PATHS:
             payload = {"status": "ok"} if parsed.path == "/health" else {"status": "alive"}
             self._write_json(HTTPStatus.OK, payload)
             return
         if parsed.path == READINESS_PATH:
+            analysis_record = None
+            if not self._runtime().allow_live_fetch:
+                try:
+                    analysis_record = self.server.analysis_record("")
+                except (OSError, TypeError, ValueError):
+                    analysis_record = None
             payload = readiness_payload(
                 self._runtime(),
                 job_service=getattr(self.server, "backtest_jobs", None),
+                analysis_record=analysis_record,
             )
             status = HTTPStatus.OK if payload["ready"] else HTTPStatus.SERVICE_UNAVAILABLE
             self._write_json(status, payload)
@@ -475,11 +609,24 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            payload = _payload_for_path(
-                parsed.path,
-                parsed.query,
-                runtime=self._runtime(),
-            )
+            analysis_record = None
+            if backtest_lookup:
+                payload = _payload_for_path(
+                    parsed.path,
+                    parsed.query,
+                    runtime=self._runtime(),
+                )
+            else:
+                analysis_record = self.server.analysis_record(parsed.query)
+                token = _REQUEST_ANALYSIS_RECORD.set(analysis_record)
+                try:
+                    payload = _payload_for_path(
+                        parsed.path,
+                        parsed.query,
+                        runtime=self._runtime(),
+                    )
+                finally:
+                    _REQUEST_ANALYSIS_RECORD.reset(token)
         except ValueError as exc:
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
@@ -499,7 +646,15 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             )
             self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal"})
             return
-        self._write_json(HTTPStatus.OK, payload)
+        headers = (
+            {
+                "X-Analysis-Run-ID": analysis_record.analysis_run_id,
+                "ETag": f'"{analysis_record.output_hash}"',
+            }
+            if analysis_record is not None
+            else None
+        )
+        self._write_json(HTTPStatus.OK, payload, extra_headers=headers)
 
     def do_POST(self) -> None:
         if not self._start_request():
@@ -720,6 +875,18 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             ),
         )
 
+    def _write_evidence_html(self, status: HTTPStatus, body: str) -> None:
+        self._write_response(
+            status,
+            body.encode("utf-8"),
+            content_type="text/html; charset=utf-8",
+            content_security_policy=(
+                "default-src 'self'; img-src 'self' data:; "
+                "style-src 'self'; script-src 'self'; connect-src 'self'; "
+                "base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+            ),
+        )
+
     def _write_response(
         self,
         status: HTTPStatus,
@@ -812,14 +979,36 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
     def _start_request(self) -> bool:
         self._request_id = uuid.uuid4().hex
         self._request_started_at = time.monotonic()
-        host_header = self.headers.get("Host")
+        path = urlparse(self.path).path
+        host_values = self.headers.get_all("Host", [])
+        if len(host_values) != 1:
+            self._write_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "invalid_host_header"},
+            )
+            return False
+        host_header = host_values[0]
         if not _request_host_allowed(host_header):
             self._write_json(
                 HTTPStatus.MISDIRECTED_REQUEST,
                 {"error": "untrusted_host"},
             )
             return False
-        origin = self.headers.get("Origin")
+        origin_values = self.headers.get_all("Origin", [])
+        if len(origin_values) > 1:
+            self._write_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "invalid_origin_header"},
+            )
+            return False
+        authorization_values = self.headers.get_all("Authorization", [])
+        if len(authorization_values) > 1:
+            self._write_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "invalid_authorization_header"},
+            )
+            return False
+        origin = origin_values[0] if origin_values else None
         if (
             self.command in {"POST", "DELETE"}
             and origin
@@ -830,11 +1019,27 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
                 {"error": "cross_origin_request_rejected"},
             )
             return False
+        if _request_requires_bearer_auth(self.command, path) and not self._request_is_authorized(
+            authorization_values
+        ):
+            self._write_json(
+                HTTPStatus.UNAUTHORIZED,
+                {"error": "authentication_required"},
+                extra_headers={"WWW-Authenticate": "Bearer"},
+            )
+            return False
         return True
 
     def _ensure_request_context(self) -> None:
         if not hasattr(self, "_request_id"):
             self._start_request()
+
+    def _request_is_authorized(self, authorization_values: list[str]) -> bool:
+        expected = getattr(self.server, "expected_bearer_authorization", None)
+        if expected is None:
+            return True
+        provided = authorization_values[0] if authorization_values else None
+        return isinstance(provided, str) and hmac.compare_digest(provided, expected)
 
     def _log_access(self, status: HTTPStatus) -> None:
         if not self._runtime().access_logging:
@@ -862,13 +1067,19 @@ def serve(
     bind_host, loopback_bind = _bind_target(host)
     if not loopback_bind and not _remote_bind_allowed():
         raise SystemExit(
-            "refusing non-loopback bind without CRYPTO_OPTIONS_API_ALLOW_REMOTE=1 "
+            f"refusing non-loopback bind without {ALLOW_REMOTE_ENV}=1 "
             f"(got host={host!r})"
         )
+    bearer_token = None
+    if not loopback_bind:
+        try:
+            bearer_token = _load_remote_bearer_token()
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     if not loopback_bind:
         print(
             "warning: binding research API on non-loopback interface; "
-            "fixture sandbox and live-fetch controls still apply",
+            "bearer auth, fixture sandbox, and live-fetch controls still apply",
             file=sys.stderr,
         )
     if runtime.production and not readiness_payload(runtime)["service_ready"]:
@@ -879,6 +1090,7 @@ def serve(
         (bind_host, port),
         ResearchReportHandler,
         runtime=runtime,
+        bearer_token=bearer_token,
     )
     try:
         _log_json(
@@ -904,10 +1116,48 @@ def dashboard_page_html() -> str:
     )
 
 
+def evidence_page_html() -> str:
+    return (
+        files("crypto_options_report")
+        .joinpath("static", "evidence", "index.html")
+        .read_text(encoding="utf-8")
+    )
+
+
+def evidence_asset(asset_name: str) -> tuple[bytes, str]:
+    if not _EVIDENCE_ASSET_NAME.fullmatch(asset_name):
+        raise ValueError("invalid evidence asset name")
+    suffix = asset_name.rsplit(".", 1)[-1]
+    content_types = {
+        "css": "text/css; charset=utf-8",
+        "js": "text/javascript; charset=utf-8",
+        "png": "image/png",
+        "svg": "image/svg+xml",
+        "woff": "font/woff",
+        "woff2": "font/woff2",
+    }
+    return (
+        files("crypto_options_report")
+        .joinpath("static", "evidence", "assets", asset_name)
+        .read_bytes(),
+        content_types[suffix],
+    )
+
+
+def validate_evidence_bundle() -> None:
+    html = evidence_page_html()
+    asset_names = _EVIDENCE_BUNDLE_REFERENCE.findall(html)
+    if not asset_names:
+        raise FileNotFoundError("evidence bundle has no static assets")
+    for asset_name in asset_names:
+        evidence_asset(asset_name)
+
+
 def readiness_payload(
     runtime: RuntimeConfig,
     *,
     job_service: BacktestJobService | Any | None = None,
+    analysis_record: AnalysisRecord | None = None,
 ) -> dict[str, Any]:
     service_ready = False
     market_provider_ready = False
@@ -921,13 +1171,33 @@ def readiness_payload(
     try:
         runtime.validate(check_inputs=False)
         dashboard_page_html()
+        validate_evidence_bundle()
         service_ready = True
     except Exception as exc:
         _log_json("readiness_check_failed", error=type(exc).__name__)
         reason_codes.append("SERVICE_VALIDATION_FAILED")
 
     generated_at = market_utc_timestamp()
-    if runtime.snapshot_fixture:
+    if analysis_record is not None:
+        policy_catalog = analysis_record.policy_bundle.catalog
+        market_provider_ready = analysis_record.market_analysis.status == "validated"
+        last_trusted_snapshot_ready = (
+            analysis_record.trust_verdict == "trusted"
+        )
+        market_data_ready = (
+            market_provider_ready and last_trusted_snapshot_ready
+        )
+        account_data_ready = any(
+            evidence.kind == "account_snapshot"
+            and evidence.state.value == "trusted"
+            and evidence.is_current_at(
+                analysis_record.manifest.evaluation_clock,
+                max_age_seconds=policy_catalog.account_snapshot_max_age_seconds,
+            )
+            for evidence in analysis_record.evidence_lineage
+        )
+        model_ready = analysis_record.model_bundle.promoted_for
+    elif runtime.snapshot_fixture:
         try:
             snapshot = load_snapshot_fixture(runtime.snapshot_fixture)
             market_status = build_market_data_status(snapshot)
@@ -944,7 +1214,7 @@ def readiness_payload(
             _log_json("market_readiness_check_failed", error=type(exc).__name__)
             reason_codes.append("MARKET_DATA_CHECK_FAILED")
 
-    if runtime.account_snapshot_fixture:
+    if analysis_record is None and runtime.account_snapshot_fixture:
         try:
             account_payload = _load_account_snapshot(
                 runtime.account_snapshot_fixture
@@ -970,7 +1240,8 @@ def readiness_payload(
         job_service,
         job_readiness=job_readiness,
     )
-    model_ready = _model_dependency_ready(runtime)
+    if analysis_record is None:
+        model_ready = _model_dependency_ready(runtime)
 
     if not market_provider_ready:
         reason_codes.append("MARKET_PROVIDER_NOT_READY")
@@ -1246,6 +1517,7 @@ def _payload_for_path(
     query: str,
     *,
     runtime: RuntimeConfig | None = None,
+    analysis_record: AnalysisRecord | None = None,
 ) -> dict[str, Any]:
     if path in LIVENESS_PATHS:
         return {"status": "ok"}
@@ -1263,7 +1535,14 @@ def _payload_for_path(
             if report_id == "default":
                 return empty_backtest_lookup()
             raise
-    report = _report_from_query(query, runtime=runtime)
+    record = (
+        analysis_record
+        or _REQUEST_ANALYSIS_RECORD.get()
+        or _analysis_record_from_query(query, runtime=runtime)
+    )
+    if path == ANALYSIS_RESULT_PATH:
+        return record.to_dict()
+    report = record.project_research_report_v1()
     if path in REPORT_ALIASES:
         return report
     if path == "/market/chain":
@@ -1290,7 +1569,100 @@ def _report_from_query(
     *,
     runtime: RuntimeConfig | None = None,
 ) -> dict[str, Any]:
-    return build_api_report(**_report_options_from_query(query, runtime=runtime))
+    return _analysis_record_from_query(
+        query,
+        runtime=runtime,
+    ).project_research_report_v1()
+
+
+def _analysis_record_from_query(
+    query: str,
+    *,
+    runtime: RuntimeConfig | None = None,
+) -> AnalysisRecord:
+    return build_api_analysis_record(
+        **_report_options_from_query(query, runtime=runtime)
+    )
+
+
+def _analysis_cache_identity(options: dict[str, Any]) -> dict[str, Any]:
+    """Bind cached records to immutable local input artifact versions."""
+    paths: list[Path] = []
+    snapshot_fixture = options.get("snapshot_fixture")
+    if snapshot_fixture:
+        snapshot_path = Path(str(snapshot_fixture)).expanduser().resolve()
+        paths.extend((snapshot_path, snapshot_trust_state_path(snapshot_path)))
+    account_fixture = options.get("account_snapshot_fixture")
+    if account_fixture:
+        account_path = Path(str(account_fixture)).expanduser().resolve()
+        paths.extend((account_path, sidecar_auth_state_path(account_path)))
+    for key in (
+        "backtest_artifact_dir",
+        "paper_ledger_path",
+        "manual_approval_runbook_path",
+    ):
+        value = options.get(key)
+        if value:
+            paths.append(Path(str(value)).expanduser().resolve())
+    return {
+        "options": options,
+        "local_artifacts": [_path_version(path) for path in paths],
+    }
+
+
+def _analysis_cache_entry_current(
+    record: AnalysisRecord,
+    options: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Reuse implicit-clock runs only inside their shortest trust window."""
+    if options.get("generated_at") is not None:
+        return True
+    current = now or _analysis_cache_now()
+    if current.tzinfo is None:
+        raise ValueError("analysis cache clock must include a timezone")
+    evaluated_at = datetime.fromisoformat(
+        record.manifest.evaluation_clock.replace("Z", "+00:00")
+    )
+    deadlines = [
+        evaluated_at
+        + timedelta(
+            seconds=record.policy_bundle.catalog.market_snapshot_max_age_seconds
+        )
+    ]
+    for evidence in record.evidence_lineage:
+        if evidence.expires_at is None:
+            continue
+        expiry = datetime.fromisoformat(
+            evidence.expires_at.replace("Z", "+00:00")
+        )
+        if expiry > evaluated_at:
+            deadlines.append(expiry)
+    for decision in record.entry_admission_decisions:
+        expiry = datetime.fromisoformat(
+            decision.valid_until.replace("Z", "+00:00")
+        )
+        if expiry > evaluated_at:
+            deadlines.append(expiry)
+    return current.astimezone(timezone.utc) < min(deadlines)
+
+
+def _analysis_cache_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _path_version(path: Path) -> dict[str, Any]:
+    try:
+        metadata = path.stat()
+    except OSError:
+        return {"path": str(path), "exists": False}
+    return {
+        "path": str(path),
+        "exists": True,
+        "size": metadata.st_size,
+        "modified_ns": metadata.st_mtime_ns,
+    }
 
 
 def _report_options_from_query(
@@ -1320,11 +1692,12 @@ def _report_options_from_query(
     # HTTP always stays research_only for display/action consistency.
     mode = "research_only"
     snapshot_fixture = params.get("snapshot_fixture", [None])[0]
-    live_deribit = params.get("live_deribit", ["0"])[0].lower() in {
-        "1",
-        "true",
-        "yes",
-    }
+    live_deribit_value = params.get("live_deribit", [None])[0]
+    live_deribit = (
+        runtime.allow_live_fetch
+        if live_deribit_value is None
+        else live_deribit_value.lower() in {"1", "true", "yes"}
+    )
     currency = params.get("currency", ["BTC"])[0]
     # Client-supplied deribit_base_url is ignored on HTTP to prevent SSRF.
     deribit_base_url = DEFAULT_DERIBIT_BASE_URL
@@ -1333,7 +1706,10 @@ def _report_options_from_query(
     account_scenario = params.get("account_scenario", [None])[0]
     generated_at = params.get("generated_at", [None])[0]
     instrument_limit = _parse_optional_int(
-        params.get("instrument_limit", [None])[0],
+        params.get(
+            "instrument_limit",
+            [str(HTTP_MAX_INSTRUMENT_LIMIT) if live_deribit else None],
+        )[0],
         name="instrument_limit",
     )
     if instrument_limit is not None and instrument_limit < 1:
@@ -1483,7 +1859,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-live-fetch",
         action="store_true",
         default=_environment_flag("CRYPTO_OPTIONS_API_ALLOW_LIVE_FETCH"),
-        help="development-only HTTP live fetch gate",
+        help=(
+            "development-only: use bounded live Deribit data for the default "
+            "research report"
+        ),
     )
     parser.add_argument(
         "--historical-fixture",
@@ -1633,7 +2012,126 @@ def _load_account_snapshot(path: str | Path) -> dict[str, Any]:
 
 
 def _remote_bind_allowed() -> bool:
-    return _environment_flag("CRYPTO_OPTIONS_API_ALLOW_REMOTE")
+    return _environment_flag(ALLOW_REMOTE_ENV)
+
+
+def _load_remote_bearer_token(path: str | Path | None = None) -> str:
+    configured_path = path
+    if configured_path is None:
+        configured_path = os.environ.get(BEARER_TOKEN_FILE_ENV)
+        if configured_path in (None, ""):
+            raise ValueError(
+                "refusing non-loopback bind without "
+                f"{BEARER_TOKEN_FILE_ENV} pointing to a regular file with one "
+                f"ASCII token ({MIN_BEARER_TOKEN_LENGTH}-{MAX_BEARER_TOKEN_LENGTH} chars, "
+                "no whitespace)"
+            )
+    candidate = Path(os.path.abspath(Path(configured_path).expanduser()))
+    try:
+        raw = _read_stable_bearer_token_file(candidate)
+    except ValueError as exc:
+        raise ValueError(
+            f"{BEARER_TOKEN_FILE_ENV} must point to a regular file with one ASCII token "
+            f"({MIN_BEARER_TOKEN_LENGTH}-{MAX_BEARER_TOKEN_LENGTH} chars, no whitespace)"
+        ) from exc
+    except OSError as exc:
+        raise ValueError(
+            f"{BEARER_TOKEN_FILE_ENV} must be readable as a regular file"
+        ) from exc
+    if len(raw) > MAX_BEARER_TOKEN_LENGTH:
+        raise ValueError(
+            f"{BEARER_TOKEN_FILE_ENV} must contain exactly one ASCII token "
+            f"({MIN_BEARER_TOKEN_LENGTH}-{MAX_BEARER_TOKEN_LENGTH} chars, no whitespace)"
+        )
+    try:
+        return _validate_bearer_token(
+            raw.decode("ascii"),
+            source=BEARER_TOKEN_FILE_ENV,
+        )
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"{BEARER_TOKEN_FILE_ENV} must contain exactly one ASCII token "
+            f"({MIN_BEARER_TOKEN_LENGTH}-{MAX_BEARER_TOKEN_LENGTH} chars, no whitespace)"
+        ) from exc
+
+
+def _validate_bearer_token(value: str, *, source: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{source} must contain exactly one ASCII token "
+            f"({MIN_BEARER_TOKEN_LENGTH}-{MAX_BEARER_TOKEN_LENGTH} chars, no whitespace)"
+        )
+    if not MIN_BEARER_TOKEN_LENGTH <= len(value) <= MAX_BEARER_TOKEN_LENGTH:
+        raise ValueError(
+            f"{source} must contain exactly one ASCII token "
+            f"({MIN_BEARER_TOKEN_LENGTH}-{MAX_BEARER_TOKEN_LENGTH} chars, no whitespace)"
+        )
+    if any(ord(character) < 0x21 or ord(character) > 0x7E for character in value):
+        raise ValueError(
+            f"{source} must contain exactly one ASCII token "
+            f"({MIN_BEARER_TOKEN_LENGTH}-{MAX_BEARER_TOKEN_LENGTH} chars, no whitespace)"
+        )
+    return value
+
+
+def _read_stable_bearer_token_file(path: Path) -> bytes:
+    try:
+        before = os.lstat(path)
+    except OSError as exc:
+        raise ValueError("bearer token file is unavailable") from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError("bearer token path must be a real regular file")
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError("bearer token file cannot be opened safely") from exc
+    try:
+        opened = os.fstat(descriptor)
+        first = os.read(descriptor, MAX_BEARER_TOKEN_LENGTH + 1)
+        middle = os.fstat(descriptor)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        second = os.read(descriptor, MAX_BEARER_TOKEN_LENGTH + 1)
+        after = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError("bearer token file changed while it was read") from exc
+    finally:
+        os.close(descriptor)
+
+    try:
+        path_after = os.lstat(path)
+    except OSError as exc:
+        raise ValueError("bearer token file disappeared while it was read") from exc
+    signatures = {
+        (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+        for value in (before, opened, middle, after, path_after)
+    }
+    if (
+        len(signatures) != 1
+        or not stat.S_ISREG(opened.st_mode)
+        or stat.S_ISLNK(path_after.st_mode)
+        or not os.path.samestat(before, opened)
+        or not os.path.samestat(opened, path_after)
+        or first != second
+        or len(first) != after.st_size
+    ):
+        raise ValueError("bearer token file changed while it was read")
+    if os.name != "nt" and (
+        opened.st_mode & stat.S_IRWXO
+        or opened.st_mode & (stat.S_IWGRP | stat.S_IXGRP)
+    ):
+        raise ValueError(
+            "bearer token file permissions must be limited to its owner "
+            "and optional read-only service group"
+        )
+    return first
+
+
+def _request_requires_bearer_auth(method: str, path: str) -> bool:
+    return method != "GET" or (
+        path not in LIVENESS_PATHS and path != READINESS_PATH
+    )
 
 
 def _environment_flag(name: str) -> bool:

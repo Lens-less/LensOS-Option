@@ -17,6 +17,10 @@ PAPER_MODE_NOT_AUTHORIZED = "PAPER_MODE_NOT_AUTHORIZED"
 DEFAULT_MANUAL_APPROVAL_RUNBOOK_PATH = (
     Path(__file__).resolve().parent / "resources" / "manual-approval-runbook.md"
 )
+DEFAULT_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID = (
+    "crypto_options_report/resources/manual-approval-runbook.md"
+)
+CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID = "configured://manual-approval-runbook"
 
 
 def build_paper_proposal_ledger(
@@ -197,7 +201,7 @@ def manual_approval_runbook_evidence(
     candidate = candidate.expanduser().resolve()
     base = {
         "schema_version": "manual_approval_runbook_evidence.v1",
-        "path": str(candidate),
+        "path": _manual_approval_runbook_public_id(candidate),
         "status": "missing",
         "version": None,
         "sha256": None,
@@ -240,3 +244,9 @@ def manual_approval_runbook_evidence(
         "sha256": digest,
         "reason_codes": ["EXTERNAL_APPROVAL_PENDING"],
     }
+
+
+def _manual_approval_runbook_public_id(candidate: Path) -> str:
+    if candidate == DEFAULT_MANUAL_APPROVAL_RUNBOOK_PATH:
+        return DEFAULT_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID
+    return CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID

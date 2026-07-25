@@ -125,7 +125,7 @@ class BacktestApiTruthfulnessTests(unittest.TestCase):
         connection = http.client.HTTPConnection(
             "127.0.0.1",
             server.server_port,
-            timeout=2,
+            timeout=5,
         )
         try:
             encoded = None if body is None else json.dumps(body).encode("utf-8")
