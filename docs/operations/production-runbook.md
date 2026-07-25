@@ -36,6 +36,38 @@ location / {
 
 If the proxy injects the API bearer itself, source that value from the platform secret store or mounted file rather than checking it into config, command history, or logs.
 
+## Personal Chrome companion
+
+The unpacked Chrome Side Panel is an A-shape, single-user client for a loopback
+engine. It is not a supported remote-production client and does not contain a
+bearer token or any credential forwarding path.
+
+```powershell
+python -m crypto_options_report.api --host 127.0.0.1 --port 8000
+Set-Location web
+npm ci
+npm run build:extension
+```
+
+In Chrome 114 or later, open `chrome://extensions`, enable Developer mode, and
+load `web/dist/chrome-extension/` as an unpacked extension. Open Deribit and use
+the LensOS Option toolbar action to show the Side Panel.
+
+The default engine origin is `http://127.0.0.1:8000`. The settings field accepts
+only loopback HTTP origins (`127.0.0.1` or `localhost`) with an explicit port.
+The service worker constructs the fixed `/research/report` path itself; content
+scripts cannot provide a URL, method, headers, or request body. Reports are
+validated in full before a compact Side Panel projection enters
+`chrome.storage.session`; dense lineage and surface data stay in Evidence
+Console. The cached envelope retains the original HTTP receive time so reopening
+the panel cannot make stale market evidence appear fresh. Deribit context is
+stored under the sender tab ID and the panel resolves the active tab, so two
+open contract tabs cannot overwrite each other's instrument context.
+
+Do not expose the engine remotely to make this unpacked extension multi-user.
+Hosted distribution, authentication, licensing, and non-personal Deribit data
+use belong to a separate B-shape deployment decision.
+
 ## Container startup
 
 ```powershell
@@ -187,7 +219,7 @@ Expected readiness fields:
 - Logs are structured JSON on stderr in production. Collect them with the service manager; rotate outside the process.
 - Full capacity returns `503` with `Retry-After: 1`; clients should back off.
 - Responses are `no-store`, same-origin, frame-denied, and do not expose the Python version.
-- Dashboard requests are same-origin only. Do not add broad CORS or client-selectable API origins.
+- Evidence Console and legacy dashboard-alias requests are same-origin only. Do not add broad CORS or client-selectable API origins.
 - Alert webhook secrets come from `ALERT_WEBHOOK_SECRET`; webhook URLs must be HTTPS and the client refuses every redirect. Signed requests include `X-Webhook-Timestamp`, `X-Webhook-Delivery-Id`, and `X-Signature-SHA256`. The signature is HMAC-SHA256 over `timestamp.delivery_id.body` using the exact transmitted body bytes. Receivers must enforce a short timestamp-skew window and reject a repeated delivery id within that window.
 - Snapshot and alert-state writes use same-directory temporary files plus atomic replace. Run one scheduler writer per state file.
 - Report, dashboard, and readiness GET requests are read-only. The current paper/manual status is unsupported and performs no ledger write.
@@ -201,6 +233,12 @@ python -m pytest -q tests/test_market_snapshot_sidecar.py tests/test_public_feed
 python -m pytest -q
 python -m crypto_options_report.api --runtime-profile development --smoke
 python -m pip wheel --no-deps . -w dist
+Set-Location web
+npm ci
+npm run lint
+npm test
+npm run build
+npm run build:extension
 curl.exe -sS http://127.0.0.1:8000/livez
 curl.exe -sS http://127.0.0.1:8000/readyz
 curl.exe -sS -D - -o NUL http://127.0.0.1:8000/research/report
@@ -210,4 +248,4 @@ The final browser pass must cover desktop and mobile widths, report refresh, JSO
 
 ## Rollback
 
-Stop the new process, restore the previous immutable image or Git commit, and restart it on the same private port. Do not roll back by enabling live fetch or relaxing mode gates. Confirm `/readyz` and the dashboard both still report the research-only `NO-GO` posture.
+Stop the new process, restore the previous immutable image or Git commit, and restart it on the same private port. Do not roll back by enabling live fetch or relaxing mode gates. Confirm `/readyz`, `/evidence`, and the legacy dashboard alias all still report the research-only `NO-GO` posture. Reload the unpacked extension only after its build directory has been regenerated from the restored commit.

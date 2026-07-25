@@ -24,6 +24,9 @@ dist/
 web/node_modules/
 web/.vite/
 web/coverage/
+# Superseded local design experiments. The selected 2026-07-24 evidence is tracked.
+design-previews/2026-07-15-homepage-refactor/
+design-previews/2026-07-15-homepage-refactor-v2/
 *.log
 *.db
 *.sqlite

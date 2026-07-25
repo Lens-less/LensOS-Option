@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit --pretty false && vite build",
+    "build:extension": "tsc -p tsconfig.extension.json --noEmit --pretty false && vite build --config vite.extension.config.ts",
+    "build:all": "npm run build && npm run build:extension",
     "lint": "tsc --noEmit --pretty false --noUnusedLocals --noUnusedParameters",
     "test": "vitest run",
     "typecheck": "tsc --noEmit --pretty false"

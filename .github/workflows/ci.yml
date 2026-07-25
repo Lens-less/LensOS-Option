@@ -77,6 +77,16 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+      - run: npm run build:extension
+        working-directory: web
+      - name: Verify unpacked Chrome companion artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f web/dist/chrome-extension/manifest.json
+          test -f web/dist/chrome-extension/sidepanel.html
+          test -f web/dist/chrome-extension/assets/service-worker.js
+          test -f web/dist/chrome-extension/assets/content-script.js
       - name: Verify committed evidence bundle matches source
         run: git diff --exit-code -- crypto_options_report/static/evidence
 
@@ -156,13 +166,13 @@ jobs:
           }
           assert required_reasons.issubset(set(ready["reason_codes"]))
           PY
-          dashboard_auth="Authorization: Bearer $token_value"
+          console_auth="Authorization: Bearer $token_value"
           curl --fail --silent --show-error \
-            --header "$dashboard_auth" \
-            http://127.0.0.1:18000/dashboard.html >/dev/null
-          curl --fail --silent --show-error \
-            --header "$dashboard_auth" \
+            --header "$console_auth" \
             http://127.0.0.1:18000/evidence >/dev/null
+          curl --fail --silent --show-error \
+            --header "$console_auth" \
+            http://127.0.0.1:18000/dashboard.html >/dev/null
           healthy=false
           for attempt in {1..45}; do
             health="$(docker inspect --format='{{.State.Health.Status}}' crypto-options-research-console-ci)"

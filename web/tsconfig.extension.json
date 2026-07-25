@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/contracts.ts",
+    "src/extension/**/*.ts",
+    "src/sidepanel/**/*.ts",
+    "src/sidepanel/**/*.tsx",
+    "src/report/index.ts",
+    "src/report/runtime.ts",
+    "src/report/selectors.ts",
+    "src/report/testFixtures.ts",
+    "src/transport/index.ts",
+    "src/transport/http.ts",
+    "src/test/setup.ts",
+    "vite.extension.config.ts"
+  ]
+}

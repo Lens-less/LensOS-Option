@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "LensOS Deribit Companion",
+  "version": "0.1.0",
+  "description": "只读 Deribit 研究侧栏，由本地 LensOS 研究引擎提供报告。",
+  "minimum_chrome_version": "114",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "assets/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "打开 LensOS 期权研究伴侣"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.deribit.com/*", "https://deribit.com/*"],
+      "js": ["assets/content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -17,16 +17,16 @@ python -m crypto_options_report.api --host 127.0.0.1 --port 8000
 启动 API 后可访问：
 
 - `http://127.0.0.1:8000/evidence`（组件化证据控制台，推荐入口）
-- `http://127.0.0.1:8000/dashboard.html`
-- `http://127.0.0.1:8000/dashboard`
+- `http://127.0.0.1:8000/dashboard.html`（旧书签兼容入口，返回同一 Evidence Console）
+- `http://127.0.0.1:8000/dashboard`（兼容 JSON 投影，不是第二套页面）
 - `http://127.0.0.1:8000/research/report`
 - `http://127.0.0.1:8000/analysis/result`（不可变 `AnalysisRecord`）
 - `http://127.0.0.1:8000/health`
 - `http://127.0.0.1:8000/livez`
 - `http://127.0.0.1:8000/readyz`
 
-Dashboard 与 API 固定同源，避免跨源配置和浏览器参数改变生产报告语义。服务端对同一组输入只生成一次 `AnalysisRecord`；各 GET 投影复用同一 `X-Analysis-Run-ID` 与 ETag，不会重新拉取 live 数据或重算准入结论。
-`AnalysisRun.evaluate(AnalysisRequest)` 是最高层业务 seam，可信链路严格止于不可变的 `EntryAdmissionDecision`。`research_report.v1` 和其中的 `strategy_research.v1` 继续作为兼容投影供 `/evidence` 与旧客户端读取；其中既有退出状态机、持仓或 sizing shadow 叙述不属于可信 `AnalysisRecord`，也不能影响新的入场准入。`/dashboard.html` 继续作为兼容的 dependency-free 页面保留。
+Evidence Console 与 API 固定同源，避免跨源配置和浏览器参数改变生产报告语义。服务端对同一组输入只生成一次 `AnalysisRecord`；各 GET 投影复用同一 `X-Analysis-Run-ID` 与 ETag，不会重新拉取 live 数据或重算准入结论。
+`AnalysisRun.evaluate(AnalysisRequest)` 是最高层业务 seam，可信链路严格止于不可变的 `EntryAdmissionDecision`。`research_report.v1` 和其中的 `strategy_research.v1` 继续作为兼容投影供 `/evidence`、本地 Chrome 研究伴侣与旧客户端读取；其中既有退出状态机、持仓或 sizing shadow 叙述不属于可信 `AnalysisRecord`，也不能影响新的入场准入。`/dashboard.html` 只保留为指向同一 Evidence Console 的 URL 兼容层。
 `/livez` 只表示进程存活；production 的 `/readyz` 只有在服务契约、已绑定的市场信任证据、账户快照、历史/工件存储、作业队列和已提升模型全部可用时才返回 200，否则返回带原因码的 503。当前没有可提升模型，所以 production readiness 按设计保持 503；这不等于进程不健康。
 
 For implicit-clock HTTP runs, projection deduplication lasts only until the
@@ -110,7 +110,7 @@ curl.exe -sS -X POST http://127.0.0.1:8000/backtest/run `
   --data-binary $body
 ```
 
-当前 REST 连续快照达到短观察阈值后，只能标记为“研究证据可信”。生产发布门禁另外要求 WebSocket gap/resync、24 小时 soak 和连续 7 天证据；这些系统观察条件未满足前，Dashboard 必须继续显示产品 `NO-GO`。
+当前 REST 连续快照达到短观察阈值后，只能标记为“研究证据可信”。生产发布门禁另外要求 WebSocket gap/resync、24 小时 soak 和连续 7 天证据；这些系统观察条件未满足前，Evidence Console 与 Chrome Side Panel 必须继续显示外部发布授权 `NO-GO`。
 
 ## Common Checks
 
@@ -130,9 +130,30 @@ npm ci
 npm test
 npm run lint
 npm run build
+npm run build:extension
 ```
 
-`npm run build` 会更新 `crypto_options_report/static/evidence/`；该产物随 wheel 和容器一起发布。开发时可分别启动 Python API 与 `npm run dev`，Vite 会把 `/research` 请求代理到 `127.0.0.1:8000`。
+`npm run build` 会更新 `crypto_options_report/static/evidence/`；该产物随 wheel 和容器一起发布。`npm run build:extension` 会生成本地解压加载目录
+`web/dist/chrome-extension/`，不会进入 Python wheel。开发时可分别启动 Python API 与 `npm run dev`，Vite 会把 `/research` 请求代理到 `127.0.0.1:8000`。
+
+### Chrome 研究伴侣（个人本地）
+
+当前交付是 Chrome 114+ 的 Manifest V3 Side Panel，只面向个人本地使用：
+
+1. 运行 `python -m crypto_options_report.api --host 127.0.0.1 --port 8000`；
+2. 在 `web/` 中运行 `npm ci` 和 `npm run build:extension`；
+3. 打开 `chrome://extensions`，启用“开发者模式”；
+4. 选择“加载已解压的扩展程序”，指向本仓库的
+   `web/dist/chrome-extension/`；
+5. 打开 `https://www.deribit.com/`，点击工具栏中的 LensOS Option 图标。
+
+Side Panel 默认只读 `http://127.0.0.1:8000/research/report`。设置中可以修改端口，
+但只接受 `http://127.0.0.1:<port>` 或 `http://localhost:<port>`。扩展只识别当前
+Deribit 合约并展示研究上下文；它不包含订单、交易、张数或 sizing 控件。Chrome
+Web Store、托管引擎、用户认证和非个人数据分发不属于当前 A 形态。完整报告只在
+service worker 的 HTTP 边界内校验；发送给 Side Panel 的消息会剔除证据谱系和
+曲面等桌面专属数据。合约上下文按 Deribit 标签页隔离，切换标签页不会沿用另一
+合约的识别结果。
 
 ## Analysis Ops And Alerts
 
@@ -166,16 +187,18 @@ Exit codes for schedulers:
 
 Trading spine (paper/manual/live orders) remains **NO-GO** until external Definition of Done evidence exists. Alerts are risk-degradation first; candidate opportunity alerts stay gated by path-risk and calibration evidence.
 
-Dashboard visual smoke:
+Evidence Console visual smoke:
 
 ```powershell
-$env:DASHBOARD_URL = "http://127.0.0.1:8000/dashboard.html"
+$env:EVIDENCE_URL = "http://127.0.0.1:8000/evidence"
 node .workflow/verify-dashboard-cdp.mjs
 ```
 
 Optional environment overrides:
 
+- `EVIDENCE_URL`
 - `DASHBOARD_URL`
+- `EVIDENCE_MAX_OVERFLOW_PX`
 - `CHROME_PATH`
 - `CDP_PORT`
 
@@ -183,16 +206,16 @@ Optional environment overrides:
 
 - `crypto_options_report/analysis_run.py` owns the immutable mandate, evidence, policy, opportunity, strategy, manifest, domain-event, and entry-admission contracts.
 - `crypto_options_report/contract.py` builds the compatibility `research_report.v1` projection.
-- `crypto_options_report/api.py` serves the stdlib HTTP API, legacy dashboard, and `/evidence` bundle.
+- `crypto_options_report/api.py` serves the stdlib HTTP API, `/evidence` bundle, and legacy URL aliases.
 - `crypto_options_report/full_surface.py` declares CLI/API/dashboard surface descriptors.
-- `crypto_options_report/static/dashboard.html` is the dependency-free research console.
-- `web/` contains the typed React/Vite evidence console source; `crypto_options_report/static/evidence/` is its packaged build output.
+- `web/` contains the shared report boundary, typed Evidence Console, and local Chrome Side Panel source.
+- `crypto_options_report/static/evidence/` is the packaged Evidence Console build output; `web/dist/chrome-extension/` is the untracked unpacked-extension output.
 - `tests/` contains contract, API, data-quality, risk, fail-closed evidence, and unsupported-feature checks.
 - `issues/README.md` indexes core `ISSUE-001..015` and DQR remediation issues.
 - `docs/automation/goal-board.md` is the canonical acceptance board.
 - `docs/automation/project-acceptance-report.md` records current project acceptance.
 - `docs/research/` contains data-quality audits, remediation backlog, and integration research.
-- `DESIGN.md` anchors the dashboard visual/product style.
+- `DESIGN.md` anchors the Evidence Console and Chrome companion visual/product contract.
 
 ## Safety Boundary
 

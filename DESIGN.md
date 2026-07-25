@@ -242,7 +242,55 @@ Do not:
 - add trade, order, broker, sizing, or “execute” controls;
 - use decorative gradients, neon, glassmorphism, floating shadows, pill-heavy UI, or nested dashboard cards.
 
-## 12. P0 Pre-entry Decision Migration
+## 12. Chrome Companion Surface
+
+The unpacked Chrome extension is a personal, local-engine companion for
+`https://www.deribit.com/`. It is not a second dashboard and it must not imply
+that proximity to an order screen changes the research-only boundary.
+
+### Functional contract
+
+Within three seconds the side panel must answer:
+
+1. which Deribit instrument is currently in context, and whether the report
+   actually covers it;
+2. whether the report is current and trusted, including source and evidence
+   age;
+3. the current stance, structure, complete legs, and entry status;
+4. the governing maximum-risk, profit-taking, time-exit, monitoring, and review
+   rules.
+
+The only primary actions are `同步当前合约` and `刷新研究`. Manual instrument
+entry is a recovery path when Deribit DOM detection fails. `打开完整证据` is a
+secondary link to the local Evidence Console.
+
+### Composition
+
+- The Chrome Side Panel is the primary extension UI. The content script only
+  observes URL/title/limited semantic DOM and sends a typed context update; it
+  does not mount a second research overlay.
+- At 320–600px widths, the reading order is context → trust line → decision →
+  legs → entry conditions → risk/exit → monitoring/review → local settings.
+- Source, age, trust, full contract identifiers, and the `READ-ONLY` boundary
+  are never hidden to save space.
+- Long instrument names wrap. Tables and dense evidence remain in the full
+  console instead of forcing horizontal page overflow.
+- Current-context mismatch is explicit: a global BTC report must never be
+  presented as analysis of an uncovered Deribit contract.
+
+### Visual and interaction rules
+
+- Reuse the bright institutional research-paper palette, hairlines, square
+  structure, system Chinese stack, and tabular research numerals.
+- Density is 8/10, visual variance 3/10, and motion 2/10. The panel is compact,
+  not decorative.
+- Loading, engine-offline, invalid-report, expired, unmatched-context, and
+  empty-strategy states each state what happened and the next recovery action.
+- Settings accept loopback HTTP origins only for the personal-use release.
+- No order, trade, broker, contract-count, sizing, or execution control may be
+  introduced. Risk templates remain explicitly uncalibrated research guidance.
+
+## 13. P0 Pre-entry Decision Migration
 
 This section is the canonical cleanup and migration plan for the evidence-first
 pre-entry engine. It narrows the trusted domain to:

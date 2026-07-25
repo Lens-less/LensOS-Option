@@ -7,6 +7,11 @@
 artifacts
 build
 dist
+web/node_modules
+web/.vite
+web/coverage
+web/dist
+web/extension/dist
 docs
 issues
 tests

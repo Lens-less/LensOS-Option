@@ -11,6 +11,27 @@
 - **真正的乱不在代码质量，而在三处**：两个最核心模块从未提交、同一个产品有两套 UI 实现、5k 行项目管理元工具混在产品包里。
 - **最大的结构性问题**：`NO-GO` 在当前设计里是永久的，所以"收尾"没有定义。这必须先由你决定，否则任何清理都收不了尾。
 
+## 2026-07-25 实施决议
+
+本节覆盖下文尚未执行的原始建议；原文保留作为决策记录。
+
+- 当前交付选择 **A · 插件 + 本地引擎**，面向个人自用，以 unpacked
+  extension 交付；Chrome Web Store、托管引擎 B、用户认证和 Deribit
+  非个人数据许可全部后置。
+- 暂时继续提交 `static/evidence` 构建产物。当前 wheel 与 Docker 都不会运行
+  Node 构建；在多阶段发布链完成前停止追踪产物会让 clean checkout 缺少前端。
+  Content hash 保留，CI 继续验证源码构建后工作树无差异。
+- `options_coordination_v2` 仍被 active state、迁移 hash fence 和安全文档消费，
+  不执行 bulk delete。它继续与产品运行时隔离，未来只能连同状态、测试和历史证据
+  作为一个原子 aggregate 迁出。
+- 删除重复的 `static/dashboard.html` 渲染实现，但保留 `/dashboard` JSON/CLI
+  投影；旧页面 URL 兼容到同一 Evidence Console，避免无必要的 schema v2。
+- 不把 `NO-GO` schema 重写作为插件前置条件。现有执行边界、运行时 readiness
+  与外部发布授权已经分离；当前工作只改善用户可见语义，并继续保持 fail-closed
+  安全断言。
+- 实施顺序改为：可信基线 → 本地 A 垂直切片 → 共享 validator/view-model/transport
+  → 旧 UI 兼容退役 → 文档与治理隔离 → 全量验收。
+
 ---
 
 ## 第 0 部分 · 实测现状
