@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { App, EvidenceConsole } from "./App";
 import type { ResearchReport } from "./contracts";
+import evidenceStyles from "./styles.css?raw";
+import type { LoadedReport } from "./transport";
 
 const blockedReport: ResearchReport = {
   schema_version: "research_report.v1",
@@ -76,6 +78,17 @@ const blockedReport: ResearchReport = {
     },
   },
 };
+
+function loadedReport(
+  report: ResearchReport = blockedReport,
+  receivedAtMs = Date.parse("2026-07-24T08:00:00Z"),
+): LoadedReport {
+  return {
+    report,
+    receivedAtMs,
+    cached: false,
+  };
+}
 
 const strategyResearchFixture: NonNullable<
   ResearchReport["strategy_research"]
@@ -577,6 +590,39 @@ const liveResearchReport = {
 } as unknown as ResearchReport;
 
 describe("EvidenceConsole", () => {
+  it("keeps source, trust and the research loop visible at compact widths", () => {
+    for (const selector of [
+      ".source-indicator",
+      ".freshness-source",
+      ".read-only-indicator",
+      ".strategy-workflow",
+    ]) {
+      const escapedSelector = selector.replace(".", "\\.");
+      expect(evidenceStyles).not.toMatch(
+        new RegExp(
+          `${escapedSelector}\\s*\\{[^}]*display:\\s*none(?:\\s*!important)?`,
+          "s",
+        ),
+      );
+    }
+
+    render(
+      <EvidenceConsole
+        nowMs={Date.parse("2026-07-24T10:25:04Z")}
+        receivedAtMs={Date.parse("2026-07-24T10:25:04Z")}
+        report={liveResearchReport}
+      />,
+    );
+
+    expect(
+      screen.getByLabelText(/市场来源 Deribit live，数据年龄 4 秒/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("当前且可信")).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "完整策略工作流" }),
+    ).toHaveTextContent(/采集.*分析.*结构.*进场.*风控.*退出.*监控.*复盘/);
+  });
+
   it("leads with current market facts and real research candidates", () => {
     render(
       <EvidenceConsole
@@ -732,7 +778,7 @@ describe("EvidenceConsole", () => {
     expect(within(truthStrip).getByText("已连接并验证")).toBeInTheDocument();
     expect(within(truthStrip).getByText("市场证据")).toBeInTheDocument();
     expect(within(truthStrip).getByText("不可声明")).toBeInTheDocument();
-    expect(within(truthStrip).getByText("产品发布")).toBeInTheDocument();
+    expect(within(truthStrip).getByText("外部发布授权")).toBeInTheDocument();
     expect(within(truthStrip).getByText("NO-GO")).toBeInTheDocument();
     expect(within(truthStrip).getByText("执行边界")).toBeInTheDocument();
     expect(within(truthStrip).getByText("RESEARCH_ONLY · NO_TRADE")).toBeInTheDocument();
@@ -981,7 +1027,7 @@ describe("EvidenceConsole", () => {
 
   it("shows an honest retryable state when report evidence cannot be loaded", async () => {
     const loadReport = vi
-      .fn<() => Promise<ResearchReport>>()
+      .fn<() => Promise<LoadedReport>>()
       .mockRejectedValue(new Error("network unavailable"));
 
     render(<App loadReport={loadReport} />);
@@ -997,8 +1043,8 @@ describe("EvidenceConsole", () => {
 
   it("lets the operator explicitly refresh the evidence report", async () => {
     const loadReport = vi
-      .fn<() => Promise<ResearchReport>>()
-      .mockResolvedValue(blockedReport);
+      .fn<() => Promise<LoadedReport>>()
+      .mockResolvedValue(loadedReport());
 
     render(<App loadReport={loadReport} />);
 
@@ -1011,6 +1057,44 @@ describe("EvidenceConsole", () => {
     expect(
       await screen.findByRole("button", { name: "刷新数据" }),
     ).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("preserves transport receipt time when calculating evidence age", async () => {
+    const trustedReport: ResearchReport = {
+      ...blockedReport,
+      data_trust: {
+        verdict: "trusted",
+        source_class: "validated",
+        reason_codes: [],
+      },
+      data_status: {
+        status: "validated",
+        source: "deribit_live:https://www.deribit.com",
+        validated: true,
+        market_data_age_sec: 44,
+        quality_gate: {
+          passed: true,
+          thresholds: {
+            market_data_max_age_sec: 60,
+          },
+        },
+      },
+    };
+    const receivedAtMs = Date.now() - 16_000;
+
+    render(
+      <App
+        loadReport={() =>
+          Promise.resolve(loadedReport(trustedReport, receivedAtMs))
+        }
+      />,
+    );
+
+    expect(
+      within(
+        await screen.findByRole("region", { name: "市场证据新鲜度" }),
+      ).getByText("已失效"),
+    ).toBeInTheDocument();
   });
 
   it("rejects a report that attempts to enable trading semantics", async () => {
@@ -1030,7 +1114,7 @@ describe("EvidenceConsole", () => {
       },
     };
 
-    render(<App loadReport={() => Promise.resolve(unsafeReport)} />);
+    render(<App loadReport={() => Promise.resolve(loadedReport(unsafeReport))} />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("研究数据不可用");
     expect(screen.getByRole("alert")).toHaveTextContent("NO-GO · NO_TRADE");
@@ -1048,7 +1132,9 @@ describe("EvidenceConsole", () => {
       },
     };
 
-    render(<App loadReport={() => Promise.resolve(greenAccountReport)} />);
+    render(
+      <App loadReport={() => Promise.resolve(loadedReport(greenAccountReport))} />,
+    );
 
     const releaseBoundary = await screen.findByRole("region", {
       name: "发布与能力边界",
@@ -1067,7 +1153,11 @@ describe("EvidenceConsole", () => {
         action,
       };
 
-      render(<App loadReport={() => Promise.resolve(conservativeReport)} />);
+      render(
+        <App
+          loadReport={() => Promise.resolve(loadedReport(conservativeReport))}
+        />,
+      );
 
       expect(
         await screen.findByRole("region", { name: "发布与能力边界" }),

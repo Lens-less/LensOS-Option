@@ -228,7 +228,7 @@ p {
   gap: 8px;
   padding: 0 18px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.12em;
 }
@@ -2146,16 +2146,21 @@ p {
 
 @media (max-width: 899px) {
   .source-indicator {
-    display: none;
+    max-width: 172px;
+    padding: 0 12px;
+    font-size: 11px;
   }
 
   .brand {
     min-width: 0;
   }
 
-  .read-only-indicator,
   .text-link {
     display: none;
+  }
+
+  .read-only-indicator {
+    padding: 0 12px;
   }
 
   .market-brief {
@@ -2363,7 +2368,8 @@ p {
   }
 
   .freshness-source {
-    display: none !important;
+    grid-column: 2 / -1;
+    border-top: 1px solid var(--rule);
   }
 
   .market-metrics {
@@ -2600,13 +2606,28 @@ p {
 @media (max-width: 419px) {
   .brand {
     gap: 9px;
+    padding-right: 8px;
+    padding-left: 8px;
   }
 
-  .brand strong {
-    max-width: 132px;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+  .brand > span:last-child {
+    display: none;
+  }
+
+  .source-indicator {
+    max-width: none;
+    flex: 1 1 132px;
+    padding: 0 8px;
+    overflow: visible;
+    font-size: 11px;
+    line-height: 1.25;
+    white-space: normal;
+    text-overflow: clip;
+  }
+
+  .read-only-indicator {
+    padding: 0 8px;
+    font-size: 11px;
   }
 
   .masthead .refresh-button {
