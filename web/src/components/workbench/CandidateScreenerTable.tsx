@@ -1,19 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { CandidateAction } from "../../contracts";
+import { dte as formatDteValue, instrumentOf, money, signTone } from "../candidate/format";
+import {
+  EV_UNAVAILABLE,
+  structureLabel,
+  tierLabel,
+  tierTone,
+} from "../candidate/vocabulary";
 import type { CandidateViewRow, SortKey, SortState } from "./candidateModel";
-
-const TIER_LABELS: Record<CandidateAction, string> = {
-  RESEARCH_ONLY: "仅研究",
-  REVIEW: "待复核",
-  REJECT: "已拒绝",
-};
-
-const TIER_TONE: Record<CandidateAction, string> = {
-  RESEARCH_ONLY: "safe",
-  REVIEW: "warning",
-  REJECT: "danger",
-};
 
 const COLUMNS: Array<{ key: SortKey; label: string }> = [
   { key: "structureType", label: "合约 / 结构" },
@@ -32,44 +26,16 @@ const COLUMNS: Array<{ key: SortKey; label: string }> = [
  */
 const INITIAL_ROW_CAP = 60;
 
-function formatUsdcCell(value: number | null): string {
-  if (value === null) {
-    return "—";
-  }
-  // Negative money reads as -$120, never $-120.
-  const magnitude = Math.abs(value).toLocaleString("en-US", {
-    maximumFractionDigits: 2,
-  });
-  return `${value < 0 ? "-" : ""}$${magnitude}`;
-}
-
-function formatDte(value: number | null): string {
-  return value === null ? "—" : `${value.toLocaleString("zh-CN", {
-    maximumFractionDigits: 1,
-  })} 天`;
-}
-
-/**
- * The instrument is the row's identity, and it was the one thing the table did
- * not show: every row read `naked_short_call`, so a 72k strike was
- * indistinguishable from a 75k one.
- */
-function instrumentLabel(id: string): string {
-  return id.split(":")[0] ?? id;
-}
 
 function evCellContent(row: CandidateViewRow): React.JSX.Element {
   if (!row.hasValidatedEv) {
-    return <span className="ev-unavailable">无已验证路径证据</span>;
+    return <span className="ev-unavailable">{EV_UNAVAILABLE}</span>;
   }
-  return <>{formatUsdcCell(row.evAfterCostUsdc)}</>;
+  return <>{money(row.evAfterCostUsdc)}</>;
 }
 
 function evSign(row: CandidateViewRow): "positive" | "negative" | undefined {
-  if (!row.hasValidatedEv || row.evAfterCostUsdc === null) {
-    return undefined;
-  }
-  return row.evAfterCostUsdc >= 0 ? "positive" : "negative";
+  return row.hasValidatedEv ? signTone(row.evAfterCostUsdc) : undefined;
 }
 
 export function CandidateScreenerTable({
@@ -198,17 +164,17 @@ export function CandidateScreenerTable({
               tabIndex={index === activeIndex ? 0 : -1}
             >
               <td className="instrument-cell">
-                <strong>{instrumentLabel(row.id)}</strong>
-                <small>{row.structureType}</small>
+                <strong>{instrumentOf(row.id)}</strong>
+                <small>{structureLabel(row.structureType)}</small>
               </td>
               <td>
-                <span className="tier-badge" data-tone={TIER_TONE[row.action]}>
-                  {TIER_LABELS[row.action]}
+                <span className="tier-badge" data-tone={tierTone(row.action)}>
+                  {tierLabel(row.action)}
                 </span>
               </td>
-              <td className="numeric-cell">{formatDte(row.dteDays)}</td>
+              <td className="numeric-cell">{formatDteValue(row.dteDays)}</td>
               <td className="numeric-cell">
-                {formatUsdcCell(row.executableCreditUsdc)}
+                {money(row.executableCreditUsdc)}
               </td>
               <td className="numeric-cell" data-sign={evSign(row)}>
                 {evCellContent(row)}

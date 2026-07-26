@@ -6,6 +6,10 @@ import {
   evCandidateScannerOf,
 } from "./candidateModel";
 import type { CandidateViewRow } from "./candidateModel";
+import { money, signedMoney } from "../candidate/format";
+import { DivergingBars } from "../viz/DivergingBars";
+import { PayoffChart } from "../viz/PayoffChart";
+import { breakevens, lossIsBounded, parseLegs, payoffPoints } from "../viz/payoff";
 import { PayoffCurve } from "./PayoffCurve";
 import { RankExplanation } from "./RankExplanation";
 
@@ -80,6 +84,36 @@ export function CandidateDetailPanel({
   const marginSnapshot = row.raw.margin_snapshot;
   const fairIv = row.raw.fair_iv_diagnostics;
 
+  const legs = parseLegs(
+    (row.raw as { structure_legs?: unknown }).structure_legs,
+  );
+  const curvePoints =
+    legs.length > 0
+      ? payoffPoints(legs, {
+          entryCash: row.executableCreditUsdc ?? row.premiumUsdc ?? 0,
+          spot: spotUsdc,
+        })
+      : [];
+
+  const execution = (
+    absoluteEv as { execution_sensitivity?: Record<string, unknown> } | undefined
+  )?.execution_sensitivity;
+  const executionValues =
+    (execution?.ev_after_cost_usdc as Record<string, number> | undefined) ?? {};
+  const EXECUTION_LABELS: Array<[string, string]> = [
+    ["sell_at_bid", "卖出 @ 买价"],
+    ["sell_at_mid", "卖出 @ 中价"],
+    ["buy_at_mid", "买入 @ 中价"],
+    ["buy_at_ask", "买入 @ 卖价"],
+  ];
+  const executionRows = EXECUTION_LABELS.filter(
+    ([key]) => typeof executionValues[key] === "number",
+  ).map(([key, label]) => ({
+    key,
+    label,
+    value: executionValues[key],
+  }));
+
   return (
     <section aria-label="候选详情" className="candidate-detail-panel">
       <header className="candidate-detail-heading">
@@ -102,13 +136,57 @@ export function CandidateDetailPanel({
         </button>
       </header>
 
-      <PayoffCurve
-        creditUsdc={row.executableCreditUsdc ?? row.premiumUsdc}
-        longStrikeUsdc={row.legs.longStrikeUsdc}
-        shortStrikeUsdc={row.legs.shortStrikeUsdc}
-        spotUsdc={spotUsdc}
-        structureKind={row.structureKind}
-      />
+      {legs.length > 0 ? (
+        <div className="candidate-detail-block">
+          <h4>到期盈亏</h4>
+          <PayoffChart
+            ariaLabel={`${row.id} 的到期盈亏曲线`}
+            currentSpot={spotUsdc}
+            formatMoney={(value) => money(value, { digits: 0 })}
+            markers={breakevens(curvePoints).map((spot) => ({
+              spot,
+              label: "盈亏平衡",
+            }))}
+            series={[
+              {
+                key: row.id,
+                label: row.id,
+                emphasis: "subject",
+                points: curvePoints,
+              },
+            ]}
+          />
+          {!lossIsBounded(legs) ? (
+            <p className="candidate-detail-warning" role="note">
+              该结构在上行方向没有保护，亏损无上界；曲线右端会持续下行。
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <PayoffCurve
+          creditUsdc={row.executableCreditUsdc ?? row.premiumUsdc}
+          longStrikeUsdc={row.legs.longStrikeUsdc}
+          shortStrikeUsdc={row.legs.shortStrikeUsdc}
+          spotUsdc={spotUsdc}
+          structureKind={row.structureKind}
+        />
+      )}
+
+      {executionRows.length > 0 ? (
+        <div className="candidate-detail-block">
+          <h4>edge 在价差的哪一侧</h4>
+          <p className="candidate-detail-note">
+            预期赔付与开仓价格无关，所以这四个变体是同一次路径重放上的算术。
+            两边都为负说明公允价落在买卖价之间——那是正常报价市场的样子，不是发现。
+          </p>
+          <DivergingBars
+            ariaLabel="买卖两个方向在买价、中价、卖价上的预期价值"
+            format={(value) => signedMoney(value)}
+            rows={executionRows}
+            unit="USDC"
+          />
+        </div>
+      ) : null}
 
       <RankExplanation
         explanation={explanation}

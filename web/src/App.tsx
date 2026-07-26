@@ -8,6 +8,10 @@ import {
 } from "./components/evidence/EvidenceConsole";
 import { AppShell } from "./components/shell/AppShell";
 import type { AppView } from "./components/shell/AppShell";
+import {
+  SignalValidationView,
+  useSignalArtifact,
+} from "./components/signal/SignalValidationView";
 import { ResearchWorkbench } from "./components/workbench/ResearchWorkbench";
 import { validateResearchReport } from "./report";
 import { loadResearchReportHttp } from "./transport";
@@ -26,10 +30,8 @@ function readViewFromLocation(): AppView {
   if (typeof window === "undefined") {
     return "evidence";
   }
-  return new URLSearchParams(window.location.search).get("view") ===
-    "workbench"
-    ? "workbench"
-    : "evidence";
+  const view = new URLSearchParams(window.location.search).get("view");
+  return view === "workbench" || view === "signal" ? view : "evidence";
 }
 
 type AppState =
@@ -99,15 +101,16 @@ export function App({
   const [state, setState] = useState<AppState>({ status: "loading" });
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [view, setView] = useState<AppView>(() => readViewFromLocation());
+  const signalArtifact = useSignalArtifact();
   const requestSequence = useRef(0);
 
   const switchView = useCallback((nextView: AppView) => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
-      if (nextView === "workbench") {
-        params.set("view", "workbench");
-      } else {
+      if (nextView === "evidence") {
         params.delete("view");
+      } else {
+        params.set("view", nextView);
       }
       const query = params.toString();
       const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
@@ -210,7 +213,9 @@ export function App({
       source={friendlySource(report.data_status?.source)}
       view={view}
     >
-      {view === "workbench" ? (
+      {view === "signal" ? (
+        <SignalValidationView artifact={signalArtifact} />
+      ) : view === "workbench" ? (
         <ResearchWorkbench {...consoleProps} embedded />
       ) : (
         <EvidenceConsole {...consoleProps} embedded />

@@ -24,8 +24,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .edge_score import normalize_premium_to_usd
-from .ev_scanner import build_absolute_ev
+from .ev_scanner import (
+    build_absolute_ev,
+    executable_quotes_usd,
+)
+from .ev_scanner import (
+    execution_sensitivity as _execution_sensitivity,
+)
 
 EV_ROBUSTNESS_SCHEMA_VERSION = "ev_robustness_report.v1"
 
@@ -66,7 +71,7 @@ def build_ev_robustness_report(
         "period_slices_requested": period_slices,
     }
 
-    quotes = _executable_quotes(candidate)
+    quotes = executable_quotes_usd(candidate)
     if quotes is None:
         return {**base, "status": "unavailable", "reason_code": MISSING_QUOTES}
 
@@ -85,7 +90,7 @@ def build_ev_robustness_report(
             "reason_code": reference.get("reason_code") or MISSING_BASE_EV,
         }
 
-    execution = _execution_sensitivity(reference=reference, quotes=quotes)
+    execution = _execution_variants(reference=reference, quotes=quotes)
     periods = _period_sensitivity(
         candidate=candidate,
         structure_type=structure_type,
@@ -123,83 +128,17 @@ def build_ev_robustness_report(
     }
 
 
-def _executable_quotes(candidate: dict[str, Any]) -> dict[str, float] | None:
-    """The credit or debit implied by each side of the quoted book, in USD.
-
-    A structure carries a net credit built from selling at the bid and buying at
-    the ask; a single leg carries its own bid and ask. Both reduce to the same
-    four numbers: what the seller receives crossing or resting, and what the
-    buyer pays doing the same.
-    """
-    spot = candidate.get("underlying_price")
-    unit = candidate.get("premium_unit")
-
-    def usd(value: Any) -> float | None:
-        return normalize_premium_to_usd(
-            value, premium_unit=unit, underlying_price=spot
-        )
-
-    if candidate.get("net_credit") is not None:
-        executable = usd(candidate.get("net_credit"))
-        mid = usd(candidate.get("mid_credit"))
-        if executable is None or mid is None:
-            return None
-        # The buyer of the same structure pays the mirror of what the seller
-        # receives: the seller's spread cost measured from the mid, applied the
-        # other way.
-        spread = mid - executable
-        buy_at_ask = mid + spread
-    else:
-        bid = usd(candidate.get("market_bid"))
-        ask = usd(candidate.get("market_ask"))
-        if bid is None or ask is None:
-            return None
-        executable, mid, buy_at_ask = bid, (bid + ask) / 2.0, ask
-
-    if executable <= 0 or mid <= 0:
-        return None
-    return {
-        "sell_at_bid": round(executable, 6),
-        "mid": round(mid, 6),
-        "buy_at_ask": round(buy_at_ask, 6),
-        "spread_cost_usdc": round(mid - executable, 6),
-    }
-
-
-def _execution_sensitivity(
+def _execution_variants(
     *, reference: dict[str, Any], quotes: dict[str, float]
 ) -> dict[str, Any]:
-    """Expected value at each side of the book, both directions.
-
-    No path is replayed here. The expected payout is a property of the
-    underlying's distribution and does not change with the price paid, so every
-    variant below is the same payout against a different entry.
-    """
-    payout = float(reference["expected_payout_usdc"])
-    fees = float(reference["modelled_fees_usdc"]["total_usdc"])
-
-    variants = {
-        "sell_at_bid": round(quotes["sell_at_bid"] - payout - fees, 6),
-        "sell_at_mid": round(quotes["mid"] - payout - fees, 6),
-        "buy_at_mid": round(payout - quotes["mid"] - fees, 6),
-        "buy_at_ask": round(payout - quotes["buy_at_ask"] - fees, 6),
-    }
-    both_sides_negative = variants["sell_at_bid"] < 0 and variants["buy_at_ask"] < 0
-    mid_would_flip = variants["sell_at_bid"] < 0 <= variants["sell_at_mid"]
-
+    """Delegates to the scanner's implementation so the two cannot drift."""
     return {
-        "ev_after_cost_usdc": variants,
-        "spread_cost_usdc": quotes["spread_cost_usdc"],
-        "modelled_fees_usdc": fees,
-        # When crossing the spread loses on both sides, whatever edge the model
-        # sees is smaller than the cost of reaching it.
-        "both_directions_negative_at_the_touch": both_sides_negative,
-        "mid_execution_would_flip_the_sign": mid_would_flip,
-        "basis": "expected_payout_is_invariant_to_entry_price",
-        # The fee model is the seller's: an entry fee plus an assignment-weighted
-        # delivery fee. Reusing it on the buy side is an approximation, and it
-        # is named rather than absorbed because it moves the buy-side figures.
-        "buy_side_fee_basis": "seller_fee_model_reused",
+        **_execution_sensitivity(
+            quotes=quotes,
+            expected_payout_usdc=float(reference["expected_payout_usdc"]),
+            fees_usdc=float(reference["modelled_fees_usdc"]["total_usdc"]),
+        ),
+        "modelled_fees_usdc": float(reference["modelled_fees_usdc"]["total_usdc"]),
     }
 
 

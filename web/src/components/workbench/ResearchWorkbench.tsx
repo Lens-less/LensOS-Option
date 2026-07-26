@@ -31,6 +31,7 @@ import { ScreenerControls } from "./ScreenerControls";
 import { ScreenerEmptyState } from "./ScreenerEmptyState";
 import { ScoreProvenance } from "./ScoreProvenance";
 import { ReasonCodeNotice } from "../shell/ReasonCodeNotice";
+import { CombinationRiskPanel } from "./CombinationRiskPanel";
 
 const FILTER_PARAM_KEYS = [
   "structure",
@@ -272,6 +273,8 @@ export function ResearchWorkbench({
               spotUsdc={spotUsdc}
             />
           ) : null}
+
+          <CombinationRiskPanel report={report} spotUsdc={spotUsdc} />
 
           {/* Provenance belongs with the ranking it qualifies, but it is read
               once and then trusted, so it sits below the table rather than

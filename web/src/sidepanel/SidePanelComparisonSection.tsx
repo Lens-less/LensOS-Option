@@ -1,20 +1,10 @@
 import React from "react";
 import type { ContractComparison, ContractComparisonRow } from "../report";
+import { signed as signedNumber } from "../components/candidate/format";
+import { tierLabel as actionLabel } from "../components/candidate/vocabulary";
 
 const MAX_VISIBLE_ROWS = 8;
 
-function actionLabel(action: string | null): string {
-  switch (action) {
-    case "RESEARCH_ONLY":
-      return "仅供研究";
-    case "REVIEW":
-      return "待复核";
-    case "REJECT":
-      return "已剔除";
-    default:
-      return "未分类";
-  }
-}
 
 function arrowFor(value: number | null): string {
   if (value === null || value === 0) {
@@ -23,23 +13,12 @@ function arrowFor(value: number | null): string {
   return value > 0 ? "▲" : "▼";
 }
 
-/** Always renders an explicit sign; colour is never the only signal. */
-function signedNumber(value: number | null, digits = 1): string {
-  if (value === null) {
-    return "未评估";
-  }
-  if (value === 0) {
-    return "±0";
-  }
-  const formatted = Math.abs(value).toFixed(digits);
-  return value > 0 ? `+${formatted}` : `-${formatted}`;
-}
 
 function formatEv(value: number | null): string {
   if (value === null) {
     return "未评估（缺少已验证路径风险）";
   }
-  return `${signedNumber(value, 2)} USDC`;
+  return `${signedNumber(value, { digits: 2 })} USDC`;
 }
 
 function formatReferenceCredit(value: number | null): string {
@@ -171,7 +150,7 @@ export function SidePanelComparisonSection({
                 <li key={delta.key}>
                   <span aria-hidden="true">{arrowFor(delta.value)}</span>{" "}
                   <span>
-                    {`${delta.label} ${signedNumber(delta.value)} ${delta.unit}`}
+                    {`${delta.label} ${signedNumber(delta.value, { digits: 1 })} ${delta.unit}`}
                   </span>
                 </li>
               ))}

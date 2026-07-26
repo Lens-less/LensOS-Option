@@ -776,6 +776,7 @@ def build_absolute_ev(
         return {"status": "unavailable", "reason_code": "PREMIUM_UNIT_UNKNOWN"}
 
     bound = report.get("independent_sample_bound") or {}
+    quotes = executable_quotes_usd(candidate)
     ev = float(entry_credit_usdc) - float(expected_payout) - fees["total_usdc"]
     return {
         "status": "validated",
@@ -793,6 +794,19 @@ def build_absolute_ev(
         "evidence_class": evidence.get("evidence_class"),
         "nav_relative_metrics_available": False,
         "regime_similarity_applied": regime_similarity_applied,
+        # Where the edge sits relative to the quoted spread. A negative figure
+        # at the bid means nothing on its own: it can mean the structure is
+        # unprofitable, or that the fair value simply lies inside the spread and
+        # neither side can capture it. The four variants separate those.
+        "execution_sensitivity": (
+            execution_sensitivity(
+                quotes=quotes,
+                expected_payout_usdc=float(expected_payout),
+                fees_usdc=fees["total_usdc"],
+            )
+            if quotes
+            else None
+        ),
         "measure": "physical_realized_return_distribution",
         # Echoed so the reader can see that the distribution behind this number
         # is the underlying's own history, not a history rescaled to an assumed
@@ -836,6 +850,82 @@ def _modelled_fees(
         "expected_delivery_fee_usdc": round(weighted_delivery, 6),
         "delivery_fee_weighted_by": "p_itm",
         "total_usdc": round(entry + weighted_delivery, 6),
+    }
+
+
+def executable_quotes_usd(candidate: dict[str, Any]) -> dict[str, float] | None:
+    """What each side of the quoted book implies, in USD.
+
+    A multi-leg structure carries a net credit built from selling at the bid and
+    buying at the ask; a single leg carries its own bid and ask. Both reduce to
+    the same four numbers: what a seller receives crossing or resting, and what a
+    buyer pays doing the same.
+    """
+    spot = candidate.get("underlying_price")
+    unit = candidate.get("premium_unit")
+
+    def usd(value: Any) -> float | None:
+        return normalize_premium_to_usd(
+            value, premium_unit=unit, underlying_price=spot
+        )
+
+    if candidate.get("net_credit") is not None:
+        executable = usd(candidate.get("net_credit"))
+        mid = usd(candidate.get("mid_credit"))
+        if executable is None or mid is None:
+            return None
+        # The buyer pays the mirror of what the seller receives: the seller's
+        # distance from the mid, applied the other way.
+        buy_at_ask = mid + (mid - executable)
+    else:
+        bid = usd(candidate.get("market_bid"))
+        ask = usd(candidate.get("market_ask"))
+        if bid is None or ask is None:
+            return None
+        executable, mid, buy_at_ask = bid, (bid + ask) / 2.0, ask
+
+    if executable <= 0 or mid <= 0:
+        return None
+    return {
+        "sell_at_bid": round(executable, 6),
+        "mid": round(mid, 6),
+        "buy_at_ask": round(buy_at_ask, 6),
+        "spread_cost_usdc": round(mid - executable, 6),
+    }
+
+
+def execution_sensitivity(
+    *,
+    quotes: dict[str, float],
+    expected_payout_usdc: float,
+    fees_usdc: float,
+) -> dict[str, Any]:
+    """Expected value at each side of the book, in both directions.
+
+    No path is replayed. The expected payout is a property of the underlying's
+    distribution and does not change with the price paid, so every variant is the
+    same payout measured against a different entry — which is why this belongs in
+    the report while the period slices stay behind a command.
+    """
+    variants = {
+        "sell_at_bid": round(quotes["sell_at_bid"] - expected_payout_usdc - fees_usdc, 6),
+        "sell_at_mid": round(quotes["mid"] - expected_payout_usdc - fees_usdc, 6),
+        "buy_at_mid": round(expected_payout_usdc - quotes["mid"] - fees_usdc, 6),
+        "buy_at_ask": round(
+            expected_payout_usdc - quotes["buy_at_ask"] - fees_usdc, 6
+        ),
+    }
+    return {
+        "ev_after_cost_usdc": variants,
+        "spread_cost_usdc": quotes["spread_cost_usdc"],
+        "both_directions_negative_at_the_touch": (
+            variants["sell_at_bid"] < 0 and variants["buy_at_ask"] < 0
+        ),
+        "mid_execution_would_flip_the_sign": (
+            variants["sell_at_bid"] < 0 <= variants["sell_at_mid"]
+        ),
+        "basis": "expected_payout_is_invariant_to_entry_price",
+        "buy_side_fee_basis": "seller_fee_model_reused",
     }
 
 

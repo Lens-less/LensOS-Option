@@ -200,6 +200,14 @@ crypto-options-report validate-signal --preflight `
 
 它按到期日列出已结算 / 待结算的 cohort、每个能贡献多少观测、以及被什么挡住了。
 
+把产物交给引擎，就能在界面的「信号验证」页里读，不必反复跑命令看 JSON：
+
+```powershell
+python -m crypto_options_report.api --replay `
+  --snapshot-fixture <快照> --underlying-history-fixture artifacts/history/btc-daily.json `
+  --signal-artifact artifacts/reports/signal-preflight.json
+```
+
 攒够之后：
 
 ```powershell

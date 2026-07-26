@@ -43,6 +43,7 @@ from .full_surface import build_recommendation_projection
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     HTTP_MAX_INSTRUMENT_LIMIT,
+    MAX_MARKET_SNAPSHOT_BYTES,
     build_market_data_status,
     default_http_fixture_roots,
     fetch_deribit_option_chain_snapshot,
@@ -63,6 +64,7 @@ from .sidecar_auth import (
 from .storage import read_json_object_from_regular_file
 
 REPORT_PATH = "/research/report"
+SIGNAL_PATH = "/research/signal"
 REPORT_ALIASES = {REPORT_PATH, "/report"}
 ANALYSIS_RESULT_PATH = "/analysis/result"
 DASHBOARD_PAGE_PATH = "/dashboard.html"
@@ -223,6 +225,10 @@ class RuntimeConfig:
     backtest_artifact_dir: str | None = None
     paper_ledger_path: str | None = None
     manual_approval_runbook_path: str | None = None
+    # A signal-validation or preflight artifact produced by the CLI. Served
+    # read-only so the accumulating sample can be watched from the console
+    # instead of by re-running a command and reading JSON.
+    signal_artifact: str | None = None
 
     @property
     def production(self) -> bool:
@@ -245,6 +251,8 @@ class RuntimeConfig:
             raise ValueError(
                 "production HTTP live fetch is unsupported; capture a snapshot with the CLI"
             )
+        if self.signal_artifact and not Path(self.signal_artifact).expanduser().is_file():
+            raise ValueError("signal_artifact not found")
         if self.replay and not self.snapshot_fixture:
             raise ValueError("replay requires a snapshot fixture to replay")
         if self.replay and self.allow_live_fetch:
@@ -631,6 +639,7 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         backtest_lookup = _is_backtest_report_path(parsed.path)
         if (
             parsed.path not in REPORT_ALIASES
+            and parsed.path != SIGNAL_PATH
             and parsed.path not in GET_SURFACE_PATHS
             and not backtest_lookup
         ):
@@ -1545,6 +1554,8 @@ def _payload_for_path(
 ) -> dict[str, Any]:
     if path in LIVENESS_PATHS:
         return {"status": "ok"}
+    if path == SIGNAL_PATH:
+        return _signal_artifact_payload(runtime or RuntimeConfig())
     if _is_backtest_report_path(path):
         _report_options_from_query(query, runtime=runtime)
         configured_dir = (runtime or RuntimeConfig()).backtest_artifact_dir
@@ -1592,6 +1603,34 @@ def _payload_for_path(
     if path == "/dashboard":
         return report["full_system_surface"]["dashboard"]
     raise ValueError(f"unsupported path: {path}")
+
+
+def _signal_artifact_payload(runtime: RuntimeConfig) -> dict[str, Any]:
+    """Serve the operator's signal artifact, or say plainly that none is configured.
+
+    The sample this artifact describes cannot be backfilled, so it accumulates
+    for weeks before it can be measured. Reading it should not require re-running
+    a command; an unconfigured console should say so rather than 404.
+    """
+    if not runtime.signal_artifact:
+        return {
+            "schema_version": "signal_artifact_lookup.v1",
+            "status": "not_configured",
+            "reason_code": "SIGNAL_ARTIFACT_NOT_CONFIGURED",
+            "detail": (
+                "Start the API with --signal-artifact pointing at the JSON "
+                "written by `validate-signal` (with or without --preflight)."
+            ),
+        }
+    try:
+        payload = read_json_object_from_regular_file(
+            runtime.signal_artifact,
+            max_bytes=MAX_MARKET_SNAPSHOT_BYTES,
+            description="signal artifact",
+        )
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"signal artifact could not be read: {exc}") from exc
+    return payload
 
 
 def _report_from_query(
@@ -1960,6 +1999,13 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--signal-artifact",
+        help=(
+            "JSON written by validate-signal (with or without --preflight); "
+            "served read-only at /research/signal"
+        ),
+    )
+    parser.add_argument(
         "--replay",
         action="store_true",
         default=_environment_flag("CRYPTO_OPTIONS_API_REPLAY"),
@@ -2025,6 +2071,7 @@ def main(argv: list[str] | None = None) -> int:
         account_snapshot_fixture=args.account_snapshot_fixture,
         allow_live_fetch=args.allow_live_fetch,
         replay=args.replay,
+        signal_artifact=args.signal_artifact,
         access_log=args.access_log,
         historical_fixture=args.historical_fixture,
         underlying_history_fixture=args.underlying_history_fixture,

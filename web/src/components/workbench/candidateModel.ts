@@ -165,6 +165,12 @@ function parseRankedCandidate(value: unknown): RankedCandidate | null {
     hazard_zone: isRecord(value.hazard_zone)
       ? (value.hazard_zone as HazardZone)
       : undefined,
+    // Carried through so the payoff curve can be drawn from the legs rather
+    // than reconstructed from a strike pair, which could only ever express the
+    // two upside-only shapes the product used to have.
+    structure_legs: Array.isArray(value.structure_legs)
+      ? (value.structure_legs as unknown[])
+      : undefined,
     kill_conditions: asStringArray(value.kill_conditions),
     reason_codes: asStringArray(value.reason_codes),
     edge_components: edgeComponents,

@@ -421,6 +421,8 @@ export interface DominatedExplanation {
 export interface RankedCandidate {
   candidate_id: string;
   structure_type?: string | null;
+  /** Signed legs; the payoff curve is derived from these, not from a strike pair. */
+  structure_legs?: unknown[];
   action: CandidateAction;
   score_status?: string | null;
   ranking_score?: number | null;
@@ -478,6 +480,13 @@ export interface RuntimeContext {
 export interface ResearchReport {
   schema_version: "research_report.v1";
   runtime_context?: RuntimeContext;
+  /**
+   * What the leading candidates do held together. Left `unknown` like the
+   * scanner beside it: the shape is parsed defensively at the edge rather than
+   * asserted here, so a server that omits a field degrades a panel instead of
+   * throwing through the app.
+   */
+  combination_risk?: unknown;
   generated_at?: string | null;
   action?: string;
   mode?: string;

@@ -2,11 +2,12 @@ import type { ResearchReport } from "../../contracts";
 import type { Freshness } from "../evidence/reportModel";
 import { ReplayBanner } from "./ReplayBanner";
 
-export type AppView = "evidence" | "workbench";
+export type AppView = "evidence" | "workbench" | "signal";
 
 const VIEWS: Array<{ id: AppView; label: string; hint: string }> = [
   { id: "evidence", label: "证据台", hint: "结论与它依赖的每一份证据" },
   { id: "workbench", label: "候选工作台", hint: "筛选、排序、并排比较候选" },
+  { id: "signal", label: "信号验证", hint: "排序信号有没有预测力，以及样本攒到哪一步" },
 ];
 
 function releaseStatus(report: ResearchReport): string {
