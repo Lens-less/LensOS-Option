@@ -175,7 +175,24 @@ Register-ScheduledTask -TaskName "LensOS-Option-DailyCapture" `
 采集日志在 `artifacts/logs/capture-daily.log`。同一天跑多次是安全的：验证器按
 「日期 × 合约」去重并报告丢弃了多少条，不会让重复行把当日横截面的相关性拉紧。
 
-攒够 8 个已结算的到期日 cohort（BTC 有日到期，按天采集约 2–3 周）后：
+**攒够 8 个 cohort 需要约 2 个月，不是几周。** 7–35 天窗口内同时只挂着 3 个到期日，新的
+周度到期日每周才进来一个。Deribit 确实有 1–5 天的日到期合约（看起来能把速度提高八倍），
+但实测**它们过不了数据质量门禁**（`INVALID_BID_IV` / `INSUFFICIENT_VALID_QUOTES`），而且
+门禁是整份快照评估的，把它们混进来会连健康的研究窗口报价一起废掉。为验证方便放宽门禁，
+正是这个项目存在的意义所反对的，所以采集窗口保持在 7–35 天。
+
+等待期间用 preflight 监控采集是否真的在产出观测——**采集不可回补，一个缺陷不被发现多久
+就浪费多久**：
+
+```powershell
+crypto-options-report validate-signal --preflight `
+  --snapshot-dir artifacts/snapshots/btc-series `
+  --underlying-history-fixture artifacts/history/btc-daily.json --compact
+```
+
+它按到期日列出已结算 / 待结算的 cohort、每个能贡献多少观测、以及被什么挡住了。
+
+攒够之后：
 
 ```powershell
 crypto-options-report validate-signal `

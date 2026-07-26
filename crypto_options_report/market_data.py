@@ -64,12 +64,27 @@ DEFAULT_QUALITY_LIMITS = {
 # has to cover 2 x that per expiry before more than one expiry fits. At 20 the
 # collector could fill exactly one side of one expiry, which is why the put
 # tables stayed empty on live chains.
-DEFAULT_TICKER_REQUEST_BUDGET = 64
+DEFAULT_TICKER_REQUEST_BUDGET = 96
 HTTP_MAX_INSTRUMENT_LIMIT = DEFAULT_TICKER_REQUEST_BUDGET
 MAX_MARKET_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_MARKET_SNAPSHOT_BYTES = 16 * 1024 * 1024
 MAX_MARKET_TRUST_STATE_BYTES = 1024 * 1024
 RESEARCH_DTE_RANGE_DAYS = (7, 35)
+# Collection deliberately does *not* reach below the research window, and the
+# reason is measured rather than assumed.
+#
+# Only three listed expiries sit inside 7-35 days at any time and new weeklies
+# enter at roughly one a week, so a validation sample counted in settled expiry
+# cohorts accumulates slowly. Deribit's daily expiries at one to five days look
+# like an eightfold acceleration, and collecting them was tried.
+#
+# They do not survive the data-quality gate. On a live chain the short-dated
+# band failed with INVALID_BID_IV, INSUFFICIENT_VALID_QUOTES and
+# BAD_QUOTE_RATIO_EXCEEDED while the 7-35 band passed cleanly - and because the
+# gate is evaluated over the whole snapshot, mixing them in blocked the healthy
+# research-window quotes too. Widening the band would therefore have cost the
+# report its own data to buy validation cohorts that the gate rejects anyway.
+COLLECTION_DTE_RANGE_DAYS = RESEARCH_DTE_RANGE_DAYS
 # Out-of-the-money bands, mirrored around spot. The put band is the reflection
 # of the call band, not a copy of it: reusing the call band for puts selects
 # deep in-the-money strikes.
@@ -706,9 +721,13 @@ def _select_research_summaries(
             dte_days = None
             option_type = "unknown"
             moneyness = None
-        in_target_dte = (
+        in_research_dte = (
             dte_days is not None
             and RESEARCH_DTE_RANGE_DAYS[0] <= dte_days <= RESEARCH_DTE_RANGE_DAYS[1]
+        )
+        in_target_dte = (
+            dte_days is not None
+            and COLLECTION_DTE_RANGE_DAYS[0] <= dte_days <= COLLECTION_DTE_RANGE_DAYS[1]
         )
         liquid = _summary_has_preferred_liquidity(summary)
         ranked.append(
@@ -720,6 +739,7 @@ def _select_research_summaries(
                 "option_type": option_type,
                 "moneyness": moneyness,
                 "in_target_dte": in_target_dte,
+                "in_research_dte": in_research_dte,
                 "preferred_liquidity": liquid,
             }
         )
@@ -741,9 +761,19 @@ def _select_research_summaries(
     for rows in preferred_groups.values():
         rows.sort(key=_research_summary_sort_key)
 
+    # Research-window expiries are filled first. The wider collection band must
+    # never starve the band the product actually screens: a short-dated group
+    # taking budget from a 20-day one would trade the report's own data for
+    # validation cohorts.
     qualifying_groups = [
         (key, rows)
-        for key, rows in sorted(preferred_groups.items())
+        for key, rows in sorted(
+            preferred_groups.items(),
+            key=lambda item: (
+                not any(row["in_research_dte"] for row in item[1]),
+                item[0],
+            ),
+        )
         if len(rows) >= min_per_expiry
     ]
     selected_items: list[dict[str, Any]] = []
@@ -792,6 +822,8 @@ def _select_research_summaries(
         "ticker_request_budget": DEFAULT_TICKER_REQUEST_BUDGET,
         "effective_limit": effective_limit,
         "preferred_dte_days": list(RESEARCH_DTE_RANGE_DAYS),
+        "collection_dte_days": list(COLLECTION_DTE_RANGE_DAYS),
+        "research_window_filled_first": True,
         "preferred_option_types": ["call", "put"],
         "stratification": "expiry_and_option_type",
         "preferred_call_moneyness": list(RESEARCH_CALL_MONEYNESS_BAND),

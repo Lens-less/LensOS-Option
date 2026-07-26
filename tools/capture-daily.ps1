@@ -22,7 +22,7 @@
 [CmdletBinding()]
 param(
     [string] $Currency = 'BTC',
-    [int]    $InstrumentLimit = 64,
+    [int]    $InstrumentLimit = 96,
     [int]    $HistoryDays = 1200,
     [string] $RepoRoot
 )

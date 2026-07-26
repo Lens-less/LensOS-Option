@@ -42,7 +42,10 @@ from .path_risk import (
     build_path_risk_report_from_historical_report,
 )
 from .pnl import build_pnl_evidence_report
-from .signal_validation import build_signal_validation_report
+from .signal_validation import (
+    build_signal_preflight_report,
+    build_signal_validation_report,
+)
 from .surface import build_vol_surface_and_candidate_research
 
 # Process exit codes for scheduled analysis / alerts.
@@ -227,6 +230,25 @@ def build_parser() -> argparse.ArgumentParser:
     validate_signal.add_argument(
         "--generated-at",
         help="optional ISO timestamp used to keep report output deterministic",
+    )
+    validate_signal.add_argument(
+        "--preflight",
+        action="store_true",
+        help=(
+            "report what the captured series will contribute once its expiries "
+            "settle, instead of measuring; use it to catch a collection defect "
+            "on day one rather than on day sixty"
+        ),
+    )
+    validate_signal.add_argument(
+        "--min-dte-days",
+        type=float,
+        help="lower bound of the tenor band to measure (default 1)",
+    )
+    validate_signal.add_argument(
+        "--max-dte-days",
+        type=float,
+        help="upper bound of the tenor band to measure (default 45)",
     )
     validate_signal.add_argument("--output", help="optional path to write JSON")
     validate_signal.add_argument("--compact", action="store_true")
@@ -539,10 +561,20 @@ def _cmd_validate_signal(args: argparse.Namespace) -> int:
 
     snapshots = [load_snapshot_fixture(path) for path in paths]
     history = load_underlying_history_fixture(args.underlying_history_fixture)
-    report = build_signal_validation_report(
+    config: dict[str, Any] = {}
+    if args.min_dte_days is not None:
+        config["min_dte_days"] = args.min_dte_days
+    if args.max_dte_days is not None:
+        config["max_dte_days"] = args.max_dte_days
+
+    builder = (
+        build_signal_preflight_report if args.preflight else build_signal_validation_report
+    )
+    report = builder(
         snapshots=snapshots,
         underlying_history=history,
         generated_at=args.generated_at or utc_timestamp(),
+        config=config or None,
     )
     _emit_json(report, compact=args.compact, output=args.output)
     if args.fail_on_blocked and report.get("status") != "measured":

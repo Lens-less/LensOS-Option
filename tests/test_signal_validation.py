@@ -28,6 +28,7 @@ from crypto_options_report.signal_validation import (
     SIGNAL_DEFINITIONS,
     SIGNAL_VALIDATION_SCHEMA_VERSION,
     T_STAT_THRESHOLD,
+    build_signal_preflight_report,
     build_signal_validation_report,
 )
 
@@ -461,6 +462,89 @@ class MoneynessConfounderTests(unittest.TestCase):
             coefficient["neutralization"], "quadratic_in_log_moneyness_within_date"
         )
         self.assertIn("moneyness_neutral", coefficient["method"])
+
+
+class PreflightTests(unittest.TestCase):
+    """A sample that cannot be backfilled must be monitored while it accumulates.
+
+    A defect in collection costs however long it goes unnoticed. Discovering
+    after two months that every quote was dropped for an undeclared premium unit
+    would waste the entire wait, so the projection walks the same surface
+    construction the measurement uses and reports what each captured expiry
+    would contribute once it settles.
+    """
+
+    def test_settled_cohorts_are_counted_once_the_history_covers_them(self) -> None:
+        snapshots, history = _build_series(richness_reaches_quote=True)
+
+        report = build_signal_preflight_report(
+            snapshots=snapshots,
+            underlying_history=history,
+            generated_at="2026-12-01T00:00:00Z",
+        )
+
+        self.assertEqual(report["status"], "projected")
+        self.assertTrue(report["cohorts"])
+        for cohort in report["cohorts"]:
+            with self.subTest(expiry=cohort["expiry_date"]):
+                self.assertTrue(cohort["settlement_close_available"])
+                self.assertGreater(cohort["prospective_observation_count"], 0)
+
+    def test_an_expiry_with_no_settlement_close_is_pending_not_dropped(self) -> None:
+        snapshots, history = _build_series(richness_reaches_quote=True)
+        # Truncate the history so the last expiries have not settled yet, which
+        # is the state a live capture series sits in for weeks.
+        history["observations"] = history["observations"][:120]
+
+        report = build_signal_preflight_report(
+            snapshots=snapshots,
+            underlying_history=history,
+            generated_at="2026-12-01T00:00:00Z",
+        )
+
+        band = report["bands"]["research_window"]
+        self.assertGreater(band["pending_cohorts"], 0)
+        self.assertGreater(band["pending_observation_count"], 0)
+        self.assertEqual(
+            band["cohorts_short_by"],
+            max(band["cohorts_required"] - band["settled_cohorts"], 0),
+        )
+
+    def test_unusable_quotes_are_reported_as_named_blocking_reasons(self) -> None:
+        snapshots, history = _build_series(richness_reaches_quote=True)
+        for snapshot in snapshots:
+            for row in snapshot["rows"]:
+                row["summary"]["quote_currency"] = "UNKNOWN"
+                row["summary"]["settlement_currency"] = "UNKNOWN"
+
+        report = build_signal_preflight_report(
+            snapshots=snapshots,
+            underlying_history=history,
+            generated_at="2026-12-01T00:00:00Z",
+        )
+
+        # Either the chain stops validating outright or the quotes are named as
+        # unusable; silently producing zero observations with no reason is the
+        # outcome this exists to prevent.
+        blocked = report["excluded_snapshots"] or [
+            cohort
+            for cohort in report["cohorts"]
+            if cohort["blocking_reasons"]
+            or cohort["prospective_observation_count"] == 0
+        ]
+        self.assertTrue(blocked)
+
+    def test_the_projection_declares_that_it_is_not_a_measurement(self) -> None:
+        snapshots, history = _build_series(richness_reaches_quote=True)
+
+        report = build_signal_preflight_report(
+            snapshots=snapshots,
+            underlying_history=history,
+            generated_at="2026-12-01T00:00:00Z",
+        )
+
+        self.assertIn("not measurements", report["note"])
+        self.assertNotIn("signals", report)
 
 
 class CollinearityTests(unittest.TestCase):

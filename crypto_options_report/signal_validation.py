@@ -92,6 +92,12 @@ DEGENERATE_SIGNAL = "SIGNAL_HAS_NO_CROSS_SECTIONAL_VARIATION"
 
 SETTLEMENT_BASIS = "daily_close_proxy"
 
+# The band the product actually screens. Preflight uses it to separate cohorts
+# that will answer the shipped question from short-dated ones that arrive sooner
+# but describe a different tenor regime.
+DEFAULT_SURFACE_MIN_DTE = 7.0
+DEFAULT_SURFACE_MAX_DTE = 35.0
+
 # Value signals are oriented so that a *higher* value means "the seller is being
 # paid more than some reference says this option is worth". Keeping one
 # orientation means a negative coefficient reads as "the ordering is backwards",
@@ -308,6 +314,200 @@ def build_signal_validation_report(
             "daily close proxy; an early-exit rule would produce a different "
             "distribution.",
         ],
+    }
+
+
+def build_signal_preflight_report(
+    *,
+    snapshots: list[dict[str, Any]],
+    underlying_history: dict[str, Any] | None,
+    generated_at: str,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """What the accumulating capture series will yield, before it can be measured.
+
+    The sample cannot be backfilled, so a defect in collection costs however long
+    it goes unnoticed. Discovering after two months that every observation was
+    dropped for an undeclared premium unit, or that a chain never fitted, would
+    waste the entire wait.
+
+    This walks the same surface construction the measurement uses and reports
+    what each captured expiry would contribute once it settles - so a series
+    producing nothing says so on day one rather than on day sixty.
+    """
+    merged = dict(DEFAULT_SIGNAL_VALIDATION_CONFIG)
+    merged.update(config or {})
+    closes_by_date, _ = _close_series(underlying_history)
+
+    cohorts: dict[str, dict[str, Any]] = {}
+    excluded: list[dict[str, Any]] = []
+
+    for snapshot in sorted(
+        [item for item in snapshots if isinstance(item, dict)],
+        key=lambda item: str(item.get("captured_at") or ""),
+    ):
+        captured_at = str(snapshot.get("captured_at") or "")
+        if not captured_at:
+            continue
+        try:
+            evaluation_now_ms = parse_timestamp_ms(captured_at)
+        except (ValueError, TypeError):
+            excluded.append(
+                {"captured_at": captured_at, "reason_code": "UNPARSEABLE_CAPTURED_AT"}
+            )
+            continue
+        data_status = build_market_data_status(snapshot, now_ms=evaluation_now_ms)
+        if data_status.get("status") != "validated":
+            excluded.append(
+                {
+                    "captured_at": captured_at,
+                    "reason_code": data_status.get("reason_code")
+                    or "MARKET_DATA_NOT_VALIDATED",
+                }
+            )
+            continue
+
+        vol_surface_status, _ = build_vol_surface_and_candidate_research(
+            market_snapshot=snapshot,
+            generated_at=captured_at,
+            data_status=data_status,
+            pnl_evidence={"status": "pass"},
+        )
+        for expiry in vol_surface_status.get("expiries") or []:
+            if not isinstance(expiry, dict):
+                continue
+            expiry_date = str(expiry.get("expiry_date") or "")
+            dte_days = expiry.get("dte_days")
+            if not expiry_date or not isinstance(dte_days, (int, float)):
+                continue
+            points = list(expiry.get("surface_points") or []) + list(
+                expiry.get("put_surface_points") or []
+            )
+            cohort = cohorts.setdefault(
+                expiry_date,
+                {
+                    "expiry_date": expiry_date,
+                    "capture_dates": [],
+                    "observation_count": 0,
+                    "dte_days_observed": [],
+                    "fitted_captures": 0,
+                    "blocking_reasons": {},
+                },
+            )
+            cohort["capture_dates"].append(captured_at[:10])
+            cohort["dte_days_observed"].append(round(float(dte_days), 3))
+            if not expiry.get("candidate_eligible") and not expiry.get(
+                "put_candidate_eligible"
+            ):
+                _count(cohort["blocking_reasons"], "SURFACE_NOT_ELIGIBLE")
+                continue
+            cohort["fitted_captures"] += 1
+            for point in points:
+                reason = _preflight_blocking_reason(point)
+                if reason is None:
+                    cohort["observation_count"] += 1
+                else:
+                    _count(cohort["blocking_reasons"], reason)
+
+    rows = [_preflight_cohort(cohort, closes_by_date) for cohort in cohorts.values()]
+    rows.sort(key=lambda row: row["expiry_date"])
+    return {
+        **_base(generated_at, merged),
+        "status": "projected",
+        "reason_codes": [],
+        "snapshot_count": len(snapshots),
+        "excluded_snapshots": excluded,
+        "cohorts": rows,
+        "bands": {
+            band: _preflight_band(rows, band=band, config=merged)
+            for band in ("research_window", "short_dated")
+        },
+        "note": (
+            "Projected contributions, not measurements. A cohort counts only "
+            "once its expiry has settled and the underlying history carries a "
+            "close for that date."
+        ),
+    }
+
+
+def _count(counter: dict[str, int], key: str) -> None:
+    counter[key] = counter.get(key, 0) + 1
+
+
+def _preflight_blocking_reason(point: dict[str, Any]) -> str | None:
+    """Why this quote would not become an observation, checked today."""
+    if _number(point.get("fit_residual_iv")) is None:
+        return "MISSING_FIT_RESIDUAL"
+    if _number(point.get("model_vega")) is None:
+        return "MISSING_GREEKS"
+    spot = _number(point.get("underlying_price"))
+    if spot is None or spot <= 0:
+        return "MISSING_UNDERLYING_PRICE"
+    credit = normalize_premium_to_usd(
+        _number(point.get("market_bid")),
+        premium_unit=point.get("premium_unit"),
+        underlying_price=spot,
+    )
+    if credit is None:
+        return "PREMIUM_UNIT_UNKNOWN"
+    if credit <= 0:
+        return "NON_POSITIVE_BID"
+    return None
+
+
+def _preflight_cohort(
+    cohort: dict[str, Any], closes_by_date: dict[str, float]
+) -> dict[str, Any]:
+    observed = cohort["dte_days_observed"]
+    capture_dates = sorted(set(cohort["capture_dates"]))
+    in_research = any(
+        DEFAULT_SURFACE_MIN_DTE <= value <= DEFAULT_SURFACE_MAX_DTE
+        for value in observed
+    )
+    return {
+        "expiry_date": cohort["expiry_date"],
+        "capture_date_count": len(capture_dates),
+        "first_capture_date": capture_dates[0] if capture_dates else None,
+        "last_capture_date": capture_dates[-1] if capture_dates else None,
+        "dte_days_min": round(min(observed), 3) if observed else None,
+        "dte_days_max": round(max(observed), 3) if observed else None,
+        "band": "research_window" if in_research else "short_dated",
+        "prospective_observation_count": cohort["observation_count"],
+        "fitted_capture_count": cohort["fitted_captures"],
+        # Settled means the expiry is behind us *and* the history carries the
+        # close that settles it. Either alone is not enough.
+        "settlement_close_available": cohort["expiry_date"] in closes_by_date,
+        "blocking_reasons": dict(sorted(cohort["blocking_reasons"].items())),
+    }
+
+
+def _preflight_band(
+    rows: list[dict[str, Any]], *, band: str, config: dict[str, Any]
+) -> dict[str, Any]:
+    in_band = [row for row in rows if row["band"] == band]
+    settled = [row for row in in_band if row["settlement_close_available"]]
+    pending = [row for row in in_band if not row["settlement_close_available"]]
+    required = int(config["min_independent_cohorts"])
+    return {
+        "cohorts_seen": len(in_band),
+        "settled_cohorts": len(settled),
+        "pending_cohorts": len(pending),
+        "cohorts_required": required,
+        "cohorts_short_by": max(required - len(settled), 0),
+        "settled_observation_count": sum(
+            row["prospective_observation_count"] for row in settled
+        ),
+        "pending_observation_count": sum(
+            row["prospective_observation_count"] for row in pending
+        ),
+        "next_pending_expiry": pending[0]["expiry_date"] if pending else None,
+        "would_be_ready_after_expiry": (
+            sorted(row["expiry_date"] for row in pending)[
+                required - len(settled) - 1
+            ]
+            if len(pending) >= required - len(settled) > 0
+            else None
+        ),
     }
 
 
