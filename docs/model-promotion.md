@@ -17,11 +17,50 @@ its first information coefficient, and if it is positive there is currently no
 specified path from *"the ranking axis has measured predictive power"* to
 *"the model is promoted"*. This document specifies that path.
 
-**Status: proposal.** The mechanism below is a design; the numeric thresholds in
-§3 and the scope in §5 are decisions for the operator, not defaults to inherit.
-Nothing here is implemented, and it should not be implemented before the
-thresholds are agreed — picking them after seeing the result is the failure this
-whole apparatus exists to prevent.
+**Status: decided, not implemented.** The three decisions §8 asked for were
+taken on 2026-07-27 and are recorded in §0 and §3.3. The mechanism itself is
+still unimplemented, deliberately: nothing here should be built until there is a
+sample to build it against.
+
+---
+
+## 0. Pre-registration — 2026-07-27
+
+Route **(a)** of §3.3 is taken. This section is the registration; the commit that
+introduced it is its timestamp.
+
+> **The axis nominated for promotion is `smile_residual_z`.**
+> The threshold that applies to it is `|t| ≥ 2.0` on the moneyness-neutralized
+> information coefficient, computed against the independent expiry-cohort count.
+
+**Why this axis.** It is the ranking the product actually ships — `edge_score`
+orders on the standardized smile residual, and `ev_scanner` publishes it as
+`primary_axis`. Registering anything else would be registering a candidate the
+product does not use. The standardization is not a tuning choice either: raw IV
+points are not comparable between chains, so the z-scored form is the only
+version of this axis that can be measured across a sample at all.
+
+**Sample state at registration** — the fact that makes this a pre-registration
+rather than a claim about one:
+
+| | |
+|---|---|
+| Settled expiry cohorts | **0** of 8 required |
+| Cohorts pending settlement | 3 (2026-08-07, 08-14, 08-28) |
+| Capture dates in series | 1 |
+| Repository HEAD | `42c4c2f` (2026-07-27) |
+
+No outcome data existed when this was written. `validate-signal --preflight`
+reproduces this table from the capture series, so the claim is checkable rather
+than asserted.
+
+**What this forecloses.** The other nine measured signals — and the roughly six
+further distinct orderings among them — are **exploratory for this sample and can
+never be promoted from it**. If one of them turns out to score higher, that is
+information for designing the *next* registration, on a *later* sample. It is not
+grounds for promotion, and the corrected threshold of §3.3(b) is not available
+retroactively: the whole value of route (a) is that it was chosen before the
+result was visible.
 
 ---
 
@@ -60,16 +99,19 @@ What does not change:
 - Every `cannot_tell` line that is about the measurement rather than the
   calibration.
 
-## 3. Evidence required — the proposal
+## 3. Evidence required
 
 Each of these is necessary; none alone is sufficient.
+
+*Thresholds confirmed 2026-07-27. They are now the contract, not proposals.*
 
 **3.1 Sample.** At least **8 independent expiry cohorts** (the existing
 `min_independent_cohorts`) with settled outcomes, drawn from captures that
 passed the market-data gate. Cohorts, never observations.
 
 **3.2 Effect.** The moneyness-neutralized information coefficient is positive
-with `|t| ≥ T`, computed against the cohort count.
+with `|t| ≥ 2.0` — the registered threshold of §0 — computed against the cohort
+count, never the observation count.
 
 **3.3 The multiplicity problem — the part that is easy to get wrong.**
 
@@ -89,9 +131,10 @@ Two acceptable resolutions. Pick one before the sample completes:
   near **`t ≥ 2.8`**. Use `collinearity.distinct_signal_estimate` as the count,
   not the raw signal count, since rank-equivalent signals are one test.
 
-Option (a) is stronger evidence and cheaper to satisfy. It costs the ability to
-promote a signal that turns out to be the good one. **This is the operator's
-call and it must be made before the data lands.**
+**Decision (2026-07-27): route (a).** `smile_residual_z` is registered in §0 at
+`|t| ≥ 2.0`. Route (b) is not available for this sample — choosing it later,
+after seeing which axis scored best, would be the selection this section exists
+to prevent.
 
 **3.4 Out-of-sample confirmation.** The effect holds on cohorts that settled
 *after* the promotion evidence was assembled — at minimum **4 further cohorts**,
@@ -133,7 +176,7 @@ The evidence block records the threshold **that was applied**, not the default,
 so a promotion made under the corrected threshold cannot later be read as though
 it cleared the pre-registered one.
 
-## 5. Scope of a promotion — operator decision
+## 5. Scope of a promotion — confirmed 2026-07-27
 
 A promotion is not global. It is scoped, and the scope has to be written down
 because the evidence only covers the scope:
@@ -176,12 +219,27 @@ this spec it asserts instead:
 
 The wall keeps doing its job. It stops being a wall with nothing behind it.
 
-## 8. What to do now, before any data exists
+## 8. Decisions — closed 2026-07-27
 
-1. **Choose §3.3 (a) or (b).** If (a), nominate the axis in this file, dated,
-   and commit it. That commit is the pre-registration.
-2. **Confirm or change the thresholds in §3** — they are proposals.
-3. **Confirm the scope in §5.**
+1. **§3.3 route** — (a) pre-registration. `smile_residual_z` at `|t| ≥ 2.0`,
+   recorded in §0.
+2. **§3 thresholds** — confirmed as written.
+3. **§5 scope** — confirmed: BTC, the 7–35 day research window, the structures
+   present in the validated sample.
 
-None of this needs the sample. All of it becomes impossible to do honestly once
-the sample exists.
+All three were taken while 0 of 8 cohorts had settled. None of them can be
+revisited for this sample without voiding the registration; they can of course
+be set differently for the next one.
+
+## 9. What remains unimplemented, and when to build it
+
+Nothing in §4, §6 or §7 exists in code, and that is the correct state today —
+there is no artifact to produce and nothing to demote. Build it when the sample
+is close to complete, not before: an implementation written now would be tested
+against data invented for the purpose, which is how fabricated calibration got
+into this product the first time.
+
+The one piece that *is* worth carrying now is visibility: the measurement
+surface names the registered axis beside the exploratory ones, so the
+distinction is legible at the moment the coefficient appears rather than
+recoverable from this file afterwards.

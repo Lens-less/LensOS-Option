@@ -24,6 +24,7 @@ from itertools import pairwise
 from statistics import NormalDist
 
 from crypto_options_report.signal_validation import (
+    PRE_REGISTERED_AXIS,
     RANK_EQUIVALENCE_THRESHOLD,
     SIGNAL_DEFINITIONS,
     SIGNAL_VALIDATION_SCHEMA_VERSION,
@@ -322,8 +323,9 @@ class SignalValidationHarnessTests(unittest.TestCase):
             abs(residual["information_coefficient"]["t_stat"]), T_STAT_THRESHOLD
         )
         self.assertEqual(
-            report["summary"]["ranking_axis_verdict"], "no_detectable_edge"
+            report["summary"]["pre_registered_axis_verdict"], "no_detectable_edge"
         )
+        self.assertIs(report["summary"]["promotion_eligible"], False)
 
     def test_sample_size_is_counted_in_expiry_cohorts_not_observations(self) -> None:
         snapshots, history = _build_series(richness_reaches_quote=True)
@@ -545,6 +547,70 @@ class PreflightTests(unittest.TestCase):
 
         self.assertIn("not measurements", report["note"])
         self.assertNotIn("signals", report)
+
+
+class PreRegistrationTests(unittest.TestCase):
+    """Ten signals are measured; exactly one was nominated in advance.
+
+    Promoting whichever scored highest would be selection on the sample that
+    produced the score, and at roughly seven distinct orderings a conventional
+    threshold produces a winner from noise often enough to matter. The
+    registration is surfaced beside the measurement rather than left in a
+    document, because the moment the coefficient appears is the moment the
+    distinction is most tempting to forget.
+    """
+
+    def _report(self, *, reaches_quote: bool) -> dict:
+        snapshots, history = _build_series(richness_reaches_quote=reaches_quote)
+        return build_signal_validation_report(
+            snapshots=snapshots,
+            underlying_history=history,
+            generated_at="2026-12-01T00:00:00Z",
+        )
+
+    def test_the_registered_axis_travels_with_the_measurement(self) -> None:
+        registration = self._report(reaches_quote=True)["pre_registration"]
+
+        self.assertEqual(registration["axis"], PRE_REGISTERED_AXIS)
+        self.assertEqual(registration["threshold"], T_STAT_THRESHOLD)
+        self.assertEqual(registration["document"], "docs/model-promotion.md")
+        self.assertIn("exploratory", registration["note"])
+
+    def test_the_registered_axis_is_one_the_product_actually_ranks_on(self) -> None:
+        self.assertIn(PRE_REGISTERED_AXIS, SIGNAL_DEFINITIONS)
+
+    def test_eligibility_follows_the_registered_axis_not_the_best_score(
+        self,
+    ) -> None:
+        report = self._report(reaches_quote=True)
+        summary = report["summary"]
+
+        self.assertEqual(summary["pre_registered_axis"], PRE_REGISTERED_AXIS)
+        self.assertEqual(
+            summary["promotion_eligible"],
+            report["signals"][PRE_REGISTERED_AXIS]["evidence_verdict"]
+            == "positive_ic",
+        )
+
+    def test_the_strongest_signal_is_labelled_exploratory(self) -> None:
+        """`tenor_iv_premium` outscores the registered axis in this fixture.
+
+        It is still not promotable, and the summary key says so in its name.
+        """
+        summary = self._report(reaches_quote=True)["summary"]
+
+        self.assertIn("best_exploratory_signal", summary)
+        self.assertNotIn("best_signal", summary)
+
+    def test_a_dead_registered_axis_is_not_rescued_by_a_live_other_one(
+        self,
+    ) -> None:
+        report = self._report(reaches_quote=False)
+
+        # In this arm the residual carries nothing, while the tenor premium
+        # still scores: promotion must follow the registration regardless.
+        self.assertIs(report["summary"]["promotion_eligible"], False)
+        self.assertGreater(report["summary"]["signals_with_detectable_ic"], 0)
 
 
 class CollinearityTests(unittest.TestCase):

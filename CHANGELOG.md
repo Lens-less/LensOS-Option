@@ -33,7 +33,18 @@
     在命令行上选的路径——沙箱 operator 自己的选择，正是拒绝掉 `tests/fixtures` 之外
     每一份采集的原因。production 的参数拒绝策略与实时时钟保持不变。
 - **候选行补上 `dte_days`**。DTE 列与 DTE 筛选器读的字段从未被发布过，两者一直是死的。
-- **模型提升规格**（[docs/model-promotion.md](docs/model-promotion.md)，**提案**）。
+- **事前登记已落笔**（2026-07-27，当时 **0/8 个 cohort 已结算**）。走 §3.3 路线 (a)：
+  登记 `smile_residual_z`，阈值 `|t| ≥ 2.0`。选它是因为它就是产品实际发布的排序主轴
+  （`edge_score` 按它排序、`ev_scanner` 以 `primary_axis` 发布它），登记别的等于登记一个
+  产品不用的候选。
+  - 登记时刻的样本状态被写进文档并可由 `validate-signal --preflight` 复现——**「事前」
+    是可审计的事实，不是一句断言**。
+  - `signal_validation` 输出新增 `pre_registration` 块，`summary` 把
+    `best_signal` 改名为 `best_exploratory_signal`，并新增 `promotion_eligible`
+    ——**它跟随登记轴，不跟随最高分**。界面在 t 值图上方单独说明这件事，并给登记轴加星标。
+  - 合成样本上正好演示了这个纪律：得分最高的是 `tenor_iv_premium`（t=16.98），登记轴
+    `smile_residual_z` 是 t=2.40，而产物与界面都明确写出前者**不可提升**。
+- **模型提升规格**（[docs/model-promotion.md](docs/model-promotion.md)，已定稿）。
   `calibration.py` 被契约测试锁死在 `not_implemented`——这是一堵刻意的墙（伪造的校准统计
   被移除过一次），但**墙后面没有门**：IC 出来那天，没有任何路径从「排序被测出有预测力」
   走到「模型被提升」。文档把这条路径写出来，并明确标注哪些是待你拍板的决定。
@@ -46,6 +57,8 @@
     变弱一档。
   - 规格里包含**降级**：90 天过期、连续 3 个 out-of-sample cohort 反向即刻降级、
     以及曲面／残差定义／筛选／费用模型任一变更都机械性作废证据。
+  - §4、§6、§7 的机制**刻意仍未实现**：现在写实现只能对着为此发明的数据测试，而那正是
+    伪造的校准第一次进入这个产品的方式。等样本接近完成再建。
 - **序列历史**（`series_history.py`、CLI `series-history`、`/research/series`、「序列历史」视图）。
   每日采集本来只为验证样本而攒，硬盘上的数据其实一直在回答另一个问题：这个行权价昨天也
   这么贵吗。热力图按**合约 × 采集日**呈现标准化残差。

@@ -88,7 +88,7 @@ HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标�
 | --- | --- |
 | 本地确定性 / 回放研究工具链 | **GO** |
 | paper / manual 交易、自动下单、真实账户执行 | **NO-GO** |
-| 校准与模型提升（model promotion） | 未实现（规格见 [model-promotion.md](docs/model-promotion.md)，待定稿） |
+| 校准与模型提升（model promotion） | 未实现；规格已定稿、轴已事前登记（见 [model-promotion.md](docs/model-promotion.md)） |
 | 对外发布授权 | **NO-GO** |
 
 对外发布门禁要求 WebSocket gap/resync、24 小时 soak 与连续 7 天证据。这些系统观察
@@ -275,6 +275,12 @@ crypto-options-report ev-robustness `
   看见这个混淆有多大。
 
 排序主轴自身也在被度量之列，结果可能是 `no_detectable_edge`。**这正是它存在的意义。**
+
+**只有一个轴可以从这份样本被提升。** 2026-07-27（当时 0/8 个 cohort 已结算）事前登记了
+`smile_residual_z`，阈值 `|t| ≥ 2.0`。其余九个信号是探索性的——即使某个得分更高，也只能
+用于设计下一次登记，不能从这份样本提升。理由是多重比较：约 7 个不同排序下，在同一份样本上
+挑最高分再提升，常规阈值有相当概率从噪声里挑出「赢家」。登记内容随验证产物一起发布
+（`pre_registration`），界面上也会标出登记轴与本样本得分最高者的区别。
 
 ### CLI（内部管道）
 

@@ -78,6 +78,21 @@ DEFAULT_SIGNAL_VALIDATION_CONFIG = {
 # explicitly rather than guess what "significant" meant here.
 T_STAT_THRESHOLD = 2.0
 
+# The axis pre-registered for promotion, recorded in docs/model-promotion.md §0
+# on 2026-07-27 while zero of the eight required cohorts had settled.
+#
+# Ten signals are measured here and they collapse to about seven distinct
+# orderings. Promoting whichever scores highest would be selection on the sample
+# that produced the score, so exactly one axis was nominated in advance and the
+# rest are exploratory: they can inform the *next* registration on a *later*
+# sample, and can never be promoted from this one.
+#
+# It is surfaced beside the measurement rather than left in the document so the
+# distinction is legible at the moment the coefficient appears, which is the
+# moment it is most tempting to forget.
+PRE_REGISTERED_AXIS = "smile_residual_z"
+PRE_REGISTERED_AT = "2026-07-27"
+
 # Above this mean pairwise rank correlation two signals order candidates the
 # same way, whatever their economics claim to measure.
 RANK_EQUIVALENCE_THRESHOLD = 0.95
@@ -518,6 +533,17 @@ def _base(generated_at: str, config: dict[str, Any]) -> dict[str, Any]:
         "research_only": True,
         "config": dict(config),
         "t_stat_threshold": T_STAT_THRESHOLD,
+        "pre_registration": {
+            "axis": PRE_REGISTERED_AXIS,
+            "registered_at": PRE_REGISTERED_AT,
+            "threshold": T_STAT_THRESHOLD,
+            "document": "docs/model-promotion.md",
+            "note": (
+                "Only this axis is eligible for promotion from this sample. "
+                "Every other signal here is exploratory: a higher score on one "
+                "of them informs the next registration, not this one."
+            ),
+        },
         "signal_definitions": dict(SIGNAL_DEFINITIONS),
     }
 
@@ -1271,13 +1297,19 @@ def _summary(signals: dict[str, dict[str, Any]]) -> dict[str, Any]:
                 entry[1]["information_coefficient"]["t_stat"] or 0.0
             ),
         )[0]
+    registered = signals.get(PRE_REGISTERED_AXIS, {})
     return {
         "signals_measured": len(measured),
         "signals_with_detectable_ic": len(detectable),
-        "best_signal": best,
-        "ranking_axis_in_product": "smile_residual_iv_points",
-        "ranking_axis_verdict": signals.get("smile_residual_iv_points", {}).get(
-            "evidence_verdict"
+        # The strongest score in the set, which is *not* the promotable one
+        # unless it happens to be the registered axis. Named as such so the two
+        # are never confused.
+        "best_exploratory_signal": best,
+        "pre_registered_axis": PRE_REGISTERED_AXIS,
+        "pre_registered_axis_verdict": registered.get("evidence_verdict"),
+        "promotion_eligible": registered.get("evidence_verdict") == "positive_ic",
+        "promotion_eligibility_basis": (
+            "pre_registered_axis_only; see docs/model-promotion.md"
         ),
     }
 

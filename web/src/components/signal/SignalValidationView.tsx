@@ -18,6 +18,7 @@ interface SignalArtifact {
   signals?: Record<string, Record<string, unknown>>;
   collinearity?: Record<string, unknown>;
   summary?: Record<string, unknown>;
+  pre_registration?: Record<string, unknown>;
 }
 
 function num(value: unknown): number | null {
@@ -230,6 +231,10 @@ function MeasuredSections({
       "",
   );
 
+  const registration = artifact.pre_registration ?? {};
+  const registeredAxis = String(registration.axis ?? "");
+  const summary = artifact.summary ?? {};
+
   const rows: DivergingRow[] = Object.entries(signals).map(([name, item]) => {
     const ic = item.information_coefficient as
       | Record<string, unknown>
@@ -270,6 +275,55 @@ function MeasuredSections({
           </dd>
         </div>
       </div>
+
+      {registeredAxis ? (
+        <section className="signal-block signal-registration">
+          <h2>事前登记的轴</h2>
+          <p className="signal-note">
+            这里同时度量 10 个信号（约 7 个不同排序）。在同一份样本上挑出得分最高的
+            那个再提升，就是在样本上做选择。所以<strong>只有一个轴</strong>在样本产生之前就被登记，
+            其余全部是探索性的：它们的高分只能用于设计下一次登记，永远不能从这份样本
+            里被提升。
+          </p>
+          <dl className="signal-registration-grid">
+            <div>
+              <dt>登记的轴</dt>
+              <dd>
+                <code>{registeredAxis}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>登记时间</dt>
+              <dd>{String(registration.registered_at ?? "—")}</dd>
+            </div>
+            <div>
+              <dt>适用阈值</dt>
+              <dd>|t| ≥ {String(registration.threshold ?? threshold)}</dd>
+            </div>
+            <div>
+              <dt>该轴的判定</dt>
+              <dd>
+                <span
+                  className="tier-badge"
+                  data-tone={
+                    summary.promotion_eligible === true ? "safe" : "warning"
+                  }
+                >
+                  {String(summary.pre_registered_axis_verdict ?? "未度量")}
+                </span>
+              </dd>
+            </div>
+          </dl>
+          {summary.best_exploratory_signal &&
+          summary.best_exploratory_signal !== registeredAxis ? (
+            <p className="signal-note">
+              本样本里得分最高的是{" "}
+              <code>{String(summary.best_exploratory_signal)}</code>
+              ，它<strong>不可提升</strong>——记录它，用于下一次登记。
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="signal-block">
         <h2>各信号的 t 值</h2>
