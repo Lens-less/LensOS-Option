@@ -42,6 +42,7 @@ from .path_risk import (
     build_path_risk_report_from_historical_report,
 )
 from .pnl import build_pnl_evidence_report
+from .series_history import build_series_history_report
 from .signal_validation import (
     build_signal_preflight_report,
     build_signal_validation_report,
@@ -258,6 +259,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="exit 10 when the sample is too small to publish statistics",
     )
 
+    series_history = subcommands.add_parser(
+        "series-history",
+        help="track each instrument's readings across the capture series",
+    )
+    series_history.add_argument(
+        "--snapshot-dir",
+        required=True,
+        help="directory of chain snapshots captured over time",
+    )
+    series_history.add_argument(
+        "--min-capture-dates",
+        type=int,
+        help="drop instruments seen on fewer dates than this (default 3)",
+    )
+    series_history.add_argument(
+        "--max-instruments",
+        type=int,
+        help="how many instruments to publish (default 60)",
+    )
+    series_history.add_argument(
+        "--generated-at",
+        help="optional ISO timestamp used to keep report output deterministic",
+    )
+    series_history.add_argument("--output", help="optional path to write JSON")
+    series_history.add_argument("--compact", action="store_true")
+
     ev_robustness = subcommands.add_parser(
         "ev-robustness",
         help="test whether an expected-value sign survives period and execution choices",
@@ -407,6 +434,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "ev-robustness":
             return _cmd_ev_robustness(args)
 
+        if args.command == "series-history":
+            return _cmd_series_history(args)
+
         if args.command == "path-risk":
             if args.fixture:
                 report = build_path_risk_report_from_fixture(
@@ -466,6 +496,39 @@ def _cmd_pull_snapshot(args: argparse.Namespace) -> int:
     if snapshot.get("fetch_errors") and not snapshot.get("rows"):
         return EXIT_QUALITY_BLOCKED
     return EXIT_OK
+
+
+def _cmd_series_history(args: argparse.Namespace) -> int:
+    """Read every capture in the series and align each instrument to its dates."""
+    snapshots = _load_snapshot_series(args.snapshot_dir)
+    config: dict[str, Any] = {}
+    if args.min_capture_dates is not None:
+        config["min_capture_dates"] = args.min_capture_dates
+    if args.max_instruments is not None:
+        config["max_instruments"] = args.max_instruments
+
+    report = build_series_history_report(
+        snapshots=snapshots,
+        generated_at=args.generated_at or utc_timestamp(),
+        config=config or None,
+    )
+    _emit_json(report, compact=args.compact, output=args.output)
+    return EXIT_OK
+
+
+def _load_snapshot_series(directory_path: str) -> list[dict[str, Any]]:
+    """Load every snapshot in a capture directory, failing loudly on a stray file.
+
+    A directory holding something other than a snapshot must not become a
+    silently smaller sample.
+    """
+    directory = Path(directory_path)
+    if not directory.is_dir():
+        raise ValueError(f"snapshot dir is not a directory: {directory_path}")
+    paths = sorted(directory.glob("*.json"))
+    if not paths:
+        raise ValueError(f"no snapshot JSON files found in {directory_path}")
+    return [load_snapshot_fixture(path) for path in paths]
 
 
 def _cmd_ev_robustness(args: argparse.Namespace) -> int:
@@ -552,14 +615,7 @@ def _cmd_validate_signal(args: argparse.Namespace) -> int:
     a directory holding something other than a snapshot fails loudly here rather
     than becoming a silently smaller sample.
     """
-    directory = Path(args.snapshot_dir)
-    if not directory.is_dir():
-        raise ValueError(f"snapshot dir is not a directory: {args.snapshot_dir}")
-    paths = sorted(directory.glob("*.json"))
-    if not paths:
-        raise ValueError(f"no snapshot JSON files found in {args.snapshot_dir}")
-
-    snapshots = [load_snapshot_fixture(path) for path in paths]
+    snapshots = _load_snapshot_series(args.snapshot_dir)
     history = load_underlying_history_fixture(args.underlying_history_fixture)
     config: dict[str, Any] = {}
     if args.min_dte_days is not None:

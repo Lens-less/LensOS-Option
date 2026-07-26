@@ -89,6 +89,25 @@ catch {
     Write-Log "history FAILED $($_.Exception.Message)"
 }
 
+# Rebuilt every run so the console's series view reflects the capture that just
+# landed. It is derived data: cheap to regenerate, and a stale copy would show
+# yesterday's grid beside today's report.
+try {
+    $reportDir = Join-Path $RepoRoot 'artifacts/reports'
+    if (-not (Test-Path $reportDir)) { New-Item -ItemType Directory -Force -Path $reportDir | Out-Null }
+    & python -m crypto_options_report.cli series-history `
+        --snapshot-dir $seriesDir `
+        --output (Join-Path $reportDir 'series-history.json') `
+        --compact | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "series-history exited $LASTEXITCODE" }
+    Write-Log 'series-history ok'
+}
+catch {
+    # Not fatal: the capture itself succeeded, and that is the part that cannot
+    # be redone later.
+    Write-Log "series-history SKIPPED $($_.Exception.Message)"
+}
+
 $captureCount = (Get-ChildItem -Path $seriesDir -Filter '*.json' -ErrorAction SilentlyContinue).Count
 Write-Log "captures in series: $captureCount"
 

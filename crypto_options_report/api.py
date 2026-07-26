@@ -65,6 +65,7 @@ from .storage import read_json_object_from_regular_file
 
 REPORT_PATH = "/research/report"
 SIGNAL_PATH = "/research/signal"
+SERIES_PATH = "/research/series"
 REPORT_ALIASES = {REPORT_PATH, "/report"}
 ANALYSIS_RESULT_PATH = "/analysis/result"
 DASHBOARD_PAGE_PATH = "/dashboard.html"
@@ -229,6 +230,8 @@ class RuntimeConfig:
     # read-only so the accumulating sample can be watched from the console
     # instead of by re-running a command and reading JSON.
     signal_artifact: str | None = None
+    # A series-history artifact produced by the CLI, served the same way.
+    series_artifact: str | None = None
 
     @property
     def production(self) -> bool:
@@ -253,6 +256,8 @@ class RuntimeConfig:
             )
         if self.signal_artifact and not Path(self.signal_artifact).expanduser().is_file():
             raise ValueError("signal_artifact not found")
+        if self.series_artifact and not Path(self.series_artifact).expanduser().is_file():
+            raise ValueError("series_artifact not found")
         if self.replay and not self.snapshot_fixture:
             raise ValueError("replay requires a snapshot fixture to replay")
         if self.replay and self.allow_live_fetch:
@@ -640,6 +645,7 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         if (
             parsed.path not in REPORT_ALIASES
             and parsed.path != SIGNAL_PATH
+            and parsed.path != SERIES_PATH
             and parsed.path not in GET_SURFACE_PATHS
             and not backtest_lookup
         ):
@@ -1555,7 +1561,19 @@ def _payload_for_path(
     if path in LIVENESS_PATHS:
         return {"status": "ok"}
     if path == SIGNAL_PATH:
-        return _signal_artifact_payload(runtime or RuntimeConfig())
+        return _served_artifact(
+            (runtime or RuntimeConfig()).signal_artifact,
+            name="signal",
+            flag="--signal-artifact",
+            produced_by="validate-signal",
+        )
+    if path == SERIES_PATH:
+        return _served_artifact(
+            (runtime or RuntimeConfig()).series_artifact,
+            name="series",
+            flag="--series-artifact",
+            produced_by="series-history",
+        )
     if _is_backtest_report_path(path):
         _report_options_from_query(query, runtime=runtime)
         configured_dir = (runtime or RuntimeConfig()).backtest_artifact_dir
@@ -1605,32 +1623,38 @@ def _payload_for_path(
     raise ValueError(f"unsupported path: {path}")
 
 
-def _signal_artifact_payload(runtime: RuntimeConfig) -> dict[str, Any]:
-    """Serve the operator's signal artifact, or say plainly that none is configured.
+def _served_artifact(
+    path: str | None,
+    *,
+    name: str,
+    flag: str,
+    produced_by: str,
+) -> dict[str, Any]:
+    """Serve an operator artifact, or say plainly that none is configured.
 
-    The sample this artifact describes cannot be backfilled, so it accumulates
-    for weeks before it can be measured. Reading it should not require re-running
-    a command; an unconfigured console should say so rather than 404.
+    These artifacts describe samples that accumulate over days or weeks. Reading
+    where one has got to should not require re-running a command, and an
+    unconfigured console should explain itself rather than return a 404 the
+    reader has to interpret.
     """
-    if not runtime.signal_artifact:
+    if not path:
         return {
-            "schema_version": "signal_artifact_lookup.v1",
+            "schema_version": f"{name}_artifact_lookup.v1",
             "status": "not_configured",
-            "reason_code": "SIGNAL_ARTIFACT_NOT_CONFIGURED",
+            "reason_code": f"{name.upper()}_ARTIFACT_NOT_CONFIGURED",
             "detail": (
-                "Start the API with --signal-artifact pointing at the JSON "
-                "written by `validate-signal` (with or without --preflight)."
+                f"Start the API with {flag} pointing at the JSON written by "
+                f"`{produced_by}`."
             ),
         }
     try:
-        payload = read_json_object_from_regular_file(
-            runtime.signal_artifact,
+        return read_json_object_from_regular_file(
+            path,
             max_bytes=MAX_MARKET_SNAPSHOT_BYTES,
-            description="signal artifact",
+            description=f"{name} artifact",
         )
     except (OSError, ValueError) as exc:
-        raise ValueError(f"signal artifact could not be read: {exc}") from exc
-    return payload
+        raise ValueError(f"{name} artifact could not be read: {exc}") from exc
 
 
 def _report_from_query(
@@ -2006,6 +2030,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--series-artifact",
+        help=(
+            "JSON written by series-history; served read-only at /research/series"
+        ),
+    )
+    parser.add_argument(
         "--replay",
         action="store_true",
         default=_environment_flag("CRYPTO_OPTIONS_API_REPLAY"),
@@ -2072,6 +2102,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_live_fetch=args.allow_live_fetch,
         replay=args.replay,
         signal_artifact=args.signal_artifact,
+        series_artifact=args.series_artifact,
         access_log=args.access_log,
         historical_fixture=args.historical_fixture,
         underlying_history_fixture=args.underlying_history_fixture,

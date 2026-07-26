@@ -9,6 +9,10 @@ import {
 import { AppShell } from "./components/shell/AppShell";
 import type { AppView } from "./components/shell/AppShell";
 import {
+  SeriesHistoryView,
+  useSeriesArtifact,
+} from "./components/series/SeriesHistoryView";
+import {
   SignalValidationView,
   useSignalArtifact,
 } from "./components/signal/SignalValidationView";
@@ -31,7 +35,9 @@ function readViewFromLocation(): AppView {
     return "evidence";
   }
   const view = new URLSearchParams(window.location.search).get("view");
-  return view === "workbench" || view === "signal" ? view : "evidence";
+  return view === "workbench" || view === "signal" || view === "series"
+    ? view
+    : "evidence";
 }
 
 type AppState =
@@ -102,6 +108,7 @@ export function App({
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [view, setView] = useState<AppView>(() => readViewFromLocation());
   const signalArtifact = useSignalArtifact();
+  const seriesArtifact = useSeriesArtifact();
   const requestSequence = useRef(0);
 
   const switchView = useCallback((nextView: AppView) => {
@@ -215,6 +222,8 @@ export function App({
     >
       {view === "signal" ? (
         <SignalValidationView artifact={signalArtifact} />
+      ) : view === "series" ? (
+        <SeriesHistoryView artifact={seriesArtifact} />
       ) : view === "workbench" ? (
         <ResearchWorkbench {...consoleProps} embedded />
       ) : (

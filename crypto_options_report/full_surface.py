@@ -20,6 +20,7 @@ CLI_COMMANDS = [
     "path-risk",
     "validate-signal",
     "ev-robustness",
+    "series-history",
     "calibrate",
     "scan",
     "recommend",
