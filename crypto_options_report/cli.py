@@ -24,13 +24,16 @@ from .backtest import (
     load_backtest_fixture,
 )
 from .contract import SUPPORTED_MODES, utc_timestamp
+from .ev_robustness import DEFAULT_PERIOD_SLICES, build_ev_robustness_report
 from .full_surface import build_recommendation_projection
 from .historical import build_historical_reconciliation_report, load_historical_fixture
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
+    build_market_data_status,
     fetch_deribit_option_chain_snapshot,
     load_snapshot_fixture,
     load_underlying_history_fixture,
+    parse_timestamp_ms,
     validate_ticker_request_limit,
     write_snapshot_fixture,
 )
@@ -38,7 +41,9 @@ from .path_risk import (
     build_path_risk_report_from_fixture,
     build_path_risk_report_from_historical_report,
 )
+from .pnl import build_pnl_evidence_report
 from .signal_validation import build_signal_validation_report
+from .surface import build_vol_surface_and_candidate_research
 
 # Process exit codes for scheduled analysis / alerts.
 EXIT_OK = 0
@@ -46,6 +51,10 @@ EXIT_USAGE = 2
 EXIT_QUALITY_BLOCKED = 10
 EXIT_RISK_ALERT = 11
 EXIT_HARD_ERROR = 1
+
+# Each tested candidate replays the whole path set once per period slice, so the
+# default is a handful rather than the whole eligible table.
+DEFAULT_ROBUSTNESS_CANDIDATES = 5
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -227,6 +236,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="exit 10 when the sample is too small to publish statistics",
     )
 
+    ev_robustness = subcommands.add_parser(
+        "ev-robustness",
+        help="test whether an expected-value sign survives period and execution choices",
+    )
+    ev_robustness.add_argument(
+        "--snapshot-fixture",
+        required=True,
+        help="chain snapshot the candidates are read from",
+    )
+    ev_robustness.add_argument(
+        "--underlying-history-fixture",
+        required=True,
+        help="underlying price history the expected value is measured against",
+    )
+    ev_robustness.add_argument(
+        "--candidates",
+        type=int,
+        default=DEFAULT_ROBUSTNESS_CANDIDATES,
+        help=(
+            "how many eligible candidates to test "
+            f"(default {DEFAULT_ROBUSTNESS_CANDIDATES}); each one replays the "
+            "path set once per period slice"
+        ),
+    )
+    ev_robustness.add_argument(
+        "--period-slices",
+        type=int,
+        default=DEFAULT_PERIOD_SLICES,
+        help=f"contiguous history slices (default {DEFAULT_PERIOD_SLICES})",
+    )
+    ev_robustness.add_argument(
+        "--generated-at",
+        help="optional ISO timestamp used to keep report output deterministic",
+    )
+    ev_robustness.add_argument("--output", help="optional path to write JSON")
+    ev_robustness.add_argument("--compact", action="store_true")
+
     path_risk = subcommands.add_parser(
         "path-risk",
         help="run the ISSUE-009 path-risk distribution tracer",
@@ -336,6 +382,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "validate-signal":
             return _cmd_validate_signal(args)
 
+        if args.command == "ev-robustness":
+            return _cmd_ev_robustness(args)
+
         if args.command == "path-risk":
             if args.fixture:
                 report = build_path_risk_report_from_fixture(
@@ -394,6 +443,64 @@ def _cmd_pull_snapshot(args: argparse.Namespace) -> int:
     _emit_json(payload, compact=args.compact)
     if snapshot.get("fetch_errors") and not snapshot.get("rows"):
         return EXIT_QUALITY_BLOCKED
+    return EXIT_OK
+
+
+def _cmd_ev_robustness(args: argparse.Namespace) -> int:
+    """Test the leading candidates' expected-value sign against its assumptions.
+
+    Kept out of the report's hot path on purpose: each candidate replays the
+    whole path set once per period slice, so folding it into every projection
+    would multiply the cost of a routine run by the slice count for a diagnostic
+    nobody reads on every run.
+    """
+    snapshot = load_snapshot_fixture(args.snapshot_fixture)
+    history = load_underlying_history_fixture(args.underlying_history_fixture)
+    generated_at = args.generated_at or str(snapshot.get("captured_at") or utc_timestamp())
+
+    data_status = build_market_data_status(
+        snapshot, now_ms=parse_timestamp_ms(generated_at)
+    )
+    _, candidate_research = build_vol_surface_and_candidate_research(
+        market_snapshot=snapshot,
+        generated_at=generated_at,
+        data_status=data_status,
+        pnl_evidence=build_pnl_evidence_report(),
+    )
+
+    eligible = [
+        candidate
+        for table in candidate_research.get("structure_types") or []
+        for candidate in (candidate_research.get(table) or {}).get("eligible") or []
+    ]
+    reports = [
+        build_ev_robustness_report(
+            candidate=candidate,
+            structure_type=str(candidate.get("structure_type") or ""),
+            underlying_history=history,
+            generated_at=generated_at,
+            period_slices=args.period_slices,
+        )
+        for candidate in eligible[: max(args.candidates, 0)]
+    ]
+
+    verdicts: dict[str, int] = {}
+    for report in reports:
+        code = (report.get("verdict") or {}).get("code") or report.get("reason_code")
+        verdicts[str(code)] = verdicts.get(str(code), 0) + 1
+
+    payload = {
+        "schema_version": "ev_robustness_batch.v1",
+        "generated_at": generated_at,
+        "research_only": True,
+        "snapshot_captured_at": snapshot.get("captured_at"),
+        "market_data_status": data_status["status"],
+        "eligible_candidate_count": len(eligible),
+        "tested_candidate_count": len(reports),
+        "verdict_counts": dict(sorted(verdicts.items())),
+        "candidates": reports,
+    }
+    _emit_json(payload, compact=args.compact, output=args.output)
     return EXIT_OK
 
 

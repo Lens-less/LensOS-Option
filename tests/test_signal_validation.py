@@ -24,6 +24,8 @@ from itertools import pairwise
 from statistics import NormalDist
 
 from crypto_options_report.signal_validation import (
+    RANK_EQUIVALENCE_THRESHOLD,
+    SIGNAL_DEFINITIONS,
     SIGNAL_VALIDATION_SCHEMA_VERSION,
     T_STAT_THRESHOLD,
     build_signal_validation_report,
@@ -49,7 +51,8 @@ _HISTORY_START = date(2026, 1, 1)
 _FIRST_EXPIRY = date(2026, 3, 12)
 _EXPIRY_COUNT = 12
 _EXPIRY_STRIDE_DAYS = 14
-_SNAPSHOT_OFFSETS_DAYS = (21, 14, 7)
+_SNAPSHOT_OFFSETS_DAYS = (7, 28)
+_CAPTURE_STRIDE_DAYS = 3
 _MONEYNESS = (0.03, 0.05, 0.07, 0.09, 0.12, 0.15, 0.18, 0.21)
 
 
@@ -117,21 +120,26 @@ def _underlying_history(series: dict[date, float]) -> dict[str, object]:
     }
 
 
-def _snapshot(
+def _expiry_rows(
     *,
-    captured_on: date,
+    captured_at_dt: datetime,
     spot: float,
     expiry: date,
     seed: int,
     richness_reaches_quote: bool,
-) -> dict[str, object]:
-    """One chain snapshot with a deliberate per-strike richness perturbation.
+    term_shift: float,
+) -> list[dict]:
+    """One expiry's quotes, with a deliberate per-strike richness perturbation.
 
     When `richness_reaches_quote` is false the perturbation lands on `mark_iv`
     but the bid and ask are priced off the unperturbed smile, reproducing a mark
     that carries no tradable information.
+
+    Open interest, resting size and quote width vary across strikes rather than
+    being constant, because a chain where they do not vary cannot exercise the
+    microstructure signals at all — they would be flat within every date and
+    silently skipped.
     """
-    captured_at_dt = datetime.combine(captured_on, time(0, 0, 30), tzinfo=UTC)
     expiry_dt = datetime.combine(expiry, time(8), tzinfo=UTC)
     dte_days = (expiry_dt - captured_at_dt).total_seconds() / 86400.0
     timestamp_ms = int(captured_at_dt.timestamp() * 1000)
@@ -141,13 +149,17 @@ def _snapshot(
     for moneyness in _MONEYNESS:
         strike = int(round(spot * (1.0 + moneyness) / 1000.0) * 1000)
         log_moneyness = math.log(strike / spot)
-        base_iv = 60.0 - 60.0 * log_moneyness
+        base_iv = 60.0 + term_shift - 60.0 * log_moneyness
         richness = round(source.centred(0.6), 6)
         mark_iv = round(base_iv + richness, 6)
         pricing_iv = mark_iv if richness_reaches_quote else base_iv
         mark = _black_scholes_call(spot, strike, pricing_iv, dte_days)
-        bid = round(mark * 0.98, 6)
-        ask = round(mark * 1.02, 6)
+        half_spread = 0.02 + 0.01 * source.unit()
+        bid = round(mark * (1.0 - half_spread), 6)
+        ask = round(mark * (1.0 + half_spread), 6)
+        open_interest = round(20.0 + 180.0 * source.unit(), 4)
+        bid_amount = round(2.0 + 8.0 * source.unit(), 4)
+        ask_amount = round(2.0 + 8.0 * source.unit(), 4)
         instrument_name = _instrument_name(expiry, strike)
         rows.append(
             {
@@ -162,7 +174,7 @@ def _snapshot(
                     "mid_price": round((bid + ask) / 2.0, 6),
                     "mark_price": round(mark, 6),
                     "underlying_price": spot,
-                    "open_interest": 50.0,
+                    "open_interest": open_interest,
                     "creation_timestamp": timestamp_ms,
                 },
                 "ticker": {
@@ -171,16 +183,48 @@ def _snapshot(
                     "timestamp": timestamp_ms,
                     "best_bid_price": bid,
                     "best_ask_price": ask,
-                    "best_bid_amount": 5.0,
-                    "best_ask_amount": 5.0,
+                    "best_bid_amount": bid_amount,
+                    "best_ask_amount": ask_amount,
                     "mark_price": round(mark, 6),
                     "bid_iv": round(mark_iv - 0.5, 6),
                     "ask_iv": round(mark_iv + 0.5, 6),
                     "mark_iv": mark_iv,
                     "underlying_price": spot,
-                    "open_interest": 50.0,
+                    "open_interest": open_interest,
                 },
             }
+        )
+    return rows
+
+
+def _snapshot(
+    *,
+    captured_on: date,
+    spot: float,
+    expiries: list[date],
+    seed: int,
+    richness_reaches_quote: bool,
+) -> dict[str, object]:
+    """One capture, carrying every expiry currently inside the research window.
+
+    A real snapshot lists several expiries at once, and a fixture carrying one
+    at a time cannot exercise any cross-expiry signal: the term premium would be
+    identically zero on every row.
+    """
+    captured_at_dt = datetime.combine(captured_on, time(0, 0, 30), tzinfo=UTC)
+    rows: list[dict] = []
+    for index, expiry in enumerate(sorted(expiries)):
+        rows.extend(
+            _expiry_rows(
+                captured_at_dt=captured_at_dt,
+                spot=spot,
+                expiry=expiry,
+                seed=seed + 7919 * (index + 1),
+                richness_reaches_quote=richness_reaches_quote,
+                # A rising term structure, so the tenor premium has something to
+                # rank rather than being flat across the chain.
+                term_shift=1.5 * index,
+            )
         )
 
     captured_at = captured_at_dt.isoformat().replace("+00:00", "Z")
@@ -193,7 +237,10 @@ def _snapshot(
                 "index_name": "BTC DVOL",
                 "currency": "BTC",
                 "timestamp": captured_at,
-                "volatility": 0.62,
+                "raw_close": 58.0,
+                "raw_close_unit": "percent_points",
+                "volatility": 0.58,
+                "volatility_unit": "fraction",
             }
         },
         "rows": rows,
@@ -202,21 +249,36 @@ def _snapshot(
 
 def _build_series(*, richness_reaches_quote: bool) -> tuple[list[dict], dict]:
     series = _price_path(days=300)
+    expiries = [
+        _FIRST_EXPIRY + timedelta(days=_EXPIRY_STRIDE_DAYS * index)
+        for index in range(_EXPIRY_COUNT)
+    ]
+    first_capture = _FIRST_EXPIRY - timedelta(days=max(_SNAPSHOT_OFFSETS_DAYS))
+    last_capture = expiries[-1] - timedelta(days=min(_SNAPSHOT_OFFSETS_DAYS))
+
     snapshots = []
-    for index in range(_EXPIRY_COUNT):
-        expiry = _FIRST_EXPIRY + timedelta(days=_EXPIRY_STRIDE_DAYS * index)
-        for offset in _SNAPSHOT_OFFSETS_DAYS:
-            captured_on = expiry - timedelta(days=offset)
-            spot = series[captured_on]
+    captured_on = first_capture
+    step = 0
+    while captured_on <= last_capture:
+        in_window = [
+            expiry
+            for expiry in expiries
+            if min(_SNAPSHOT_OFFSETS_DAYS)
+            <= (expiry - captured_on).days
+            <= max(_SNAPSHOT_OFFSETS_DAYS)
+        ]
+        if in_window and captured_on in series:
             snapshots.append(
                 _snapshot(
                     captured_on=captured_on,
-                    spot=spot,
-                    expiry=expiry,
-                    seed=7919 * (index + 1) + offset,
+                    spot=series[captured_on],
+                    expiries=in_window,
+                    seed=104_729 + 31 * step,
                     richness_reaches_quote=richness_reaches_quote,
                 )
             )
+        captured_on += timedelta(days=_CAPTURE_STRIDE_DAYS)
+        step += 1
     return snapshots, _underlying_history(series)
 
 
@@ -295,7 +357,7 @@ class SignalValidationHarnessTests(unittest.TestCase):
         self.assertEqual(report["sample"]["settlement_basis"], "daily_close_proxy")
         self.assertIn("08:00 UTC", report["sample"]["settlement_note"])
 
-    def test_all_four_signals_are_measured_side_by_side(self) -> None:
+    def test_every_declared_signal_is_measured_in_one_pass(self) -> None:
         snapshots, history = _build_series(richness_reaches_quote=True)
 
         report = build_signal_validation_report(
@@ -304,15 +366,7 @@ class SignalValidationHarnessTests(unittest.TestCase):
             generated_at="2026-12-01T00:00:00Z",
         )
 
-        self.assertEqual(
-            sorted(report["signals"]),
-            [
-                "iv_minus_trailing_realized_vol",
-                "smile_residual_iv_points",
-                "smile_residual_vega_usd",
-                "smile_residual_z",
-            ],
-        )
+        self.assertEqual(sorted(report["signals"]), sorted(SIGNAL_DEFINITIONS))
         for name, item in sorted(report["signals"].items()):
             with self.subTest(signal=name):
                 self.assertEqual(item["status"], "measured", name)
@@ -320,6 +374,29 @@ class SignalValidationHarnessTests(unittest.TestCase):
                 for bucket in item["buckets"]:
                     self.assertGreater(bucket["observation_count"], 0)
                     self.assertGreater(bucket["independent_expiry_cohorts"], 0)
+
+    def test_cross_expiry_signals_need_a_multi_expiry_chain(self) -> None:
+        """The tenor premium is identically zero on a one-expiry capture."""
+        snapshots, history = _build_series(richness_reaches_quote=True)
+        for snapshot in snapshots:
+            first = snapshot["rows"][0]["instrument_name"].split("-")[1]
+            snapshot["rows"] = [
+                row
+                for row in snapshot["rows"]
+                if row["instrument_name"].split("-")[1] == first
+            ]
+
+        report = build_signal_validation_report(
+            snapshots=snapshots,
+            underlying_history=history,
+            generated_at="2026-12-01T00:00:00Z",
+        )
+
+        tenor = report["signals"]["tenor_iv_premium"]
+        self.assertEqual(tenor["status"], "blocked")
+        self.assertEqual(
+            tenor["reason_code"], "SIGNAL_HAS_NO_CROSS_SECTIONAL_VARIATION"
+        )
 
     def test_bucket_table_orders_the_signal_monotonically(self) -> None:
         snapshots, history = _build_series(richness_reaches_quote=True)
@@ -356,8 +433,14 @@ class MoneynessConfounderTests(unittest.TestCase):
         )
 
         benchmark = report["signals"]["iv_minus_trailing_realized_vol"]
-        self.assertGreater(benchmark["raw_information_coefficient"]["mean"], 0.8)
-        self.assertLess(abs(benchmark["information_coefficient"]["mean"]), 0.2)
+        raw = benchmark["raw_information_coefficient"]["mean"]
+        neutral = benchmark["information_coefficient"]["mean"]
+
+        # Raw, it looks like one of the strongest orderings available.
+        self.assertGreater(raw, 0.8)
+        # Neutralized, most of that disappears: the gap is the confounder's
+        # size, and it is far larger than whatever survives it.
+        self.assertGreater(raw - abs(neutral), 0.5)
         self.assertEqual(benchmark["evidence_verdict"], "no_detectable_edge")
         self.assertIn(
             "moneyness-neutral",
@@ -378,6 +461,70 @@ class MoneynessConfounderTests(unittest.TestCase):
             coefficient["neutralization"], "quadratic_in_log_moneyness_within_date"
         )
         self.assertIn("moneyness_neutral", coefficient["method"])
+
+
+class CollinearityTests(unittest.TestCase):
+    """Counting signals is not counting information.
+
+    Any signal of the form `mark_iv - c`, where `c` is constant across a date,
+    produces identical ranks within that date. Measuring implied volatility
+    against the venue's index and against trailing realized volatility is one
+    ordering wearing two names, however different the two references are as
+    economics. Without this block a reader counts ten signals, sees several
+    agree, and reads restatement as corroboration.
+    """
+
+    def _report(self) -> dict:
+        snapshots, history = _build_series(richness_reaches_quote=True)
+        return build_signal_validation_report(
+            snapshots=snapshots,
+            underlying_history=history,
+            generated_at="2026-12-01T00:00:00Z",
+        )
+
+    def test_two_references_subtracted_from_iv_are_one_ordering(self) -> None:
+        pairs = {
+            tuple(pair["signals"]): pair["mean_rank_correlation"]
+            for pair in self._report()["collinearity"]["pairs"]
+        }
+
+        correlation = pairs[
+            ("iv_minus_dvol", "iv_minus_trailing_realized_vol")
+        ]
+        self.assertAlmostEqual(correlation, 1.0, places=6)
+
+    def test_rank_equivalent_pairs_are_called_out(self) -> None:
+        collinearity = self._report()["collinearity"]
+
+        equivalent = {
+            tuple(pair["signals"]) for pair in collinearity["rank_equivalent_pairs"]
+        }
+        self.assertIn(
+            ("iv_minus_dvol", "iv_minus_trailing_realized_vol"), equivalent
+        )
+        for pair in collinearity["rank_equivalent_pairs"]:
+            self.assertGreaterEqual(
+                abs(pair["mean_rank_correlation"]), RANK_EQUIVALENCE_THRESHOLD
+            )
+
+    def test_the_distinct_estimate_is_below_the_declared_count(self) -> None:
+        report = self._report()
+
+        self.assertLess(
+            report["collinearity"]["distinct_signal_estimate"],
+            len(SIGNAL_DEFINITIONS),
+        )
+
+    def test_rank_equivalent_signals_report_the_same_coefficient(self) -> None:
+        """The consequence: their agreement carries no extra evidence."""
+        report = self._report()
+
+        left = report["signals"]["iv_minus_dvol"]["information_coefficient"]
+        right = report["signals"]["iv_minus_trailing_realized_vol"][
+            "information_coefficient"
+        ]
+        self.assertEqual(left["mean"], right["mean"])
+        self.assertEqual(left["t_stat"], right["t_stat"])
 
 
 class SameDayDuplicateTests(unittest.TestCase):

@@ -49,7 +49,7 @@ import math
 from itertools import pairwise
 from typing import Any
 
-from .edge_score import normalize_premium_to_usd
+from .edge_score import find_atm_reference, normalize_premium_to_usd
 from .market_data import build_market_data_status, parse_timestamp_ms
 from .pnl import (
     delivery_fee_inverse,
@@ -78,6 +78,10 @@ DEFAULT_SIGNAL_VALIDATION_CONFIG = {
 # explicitly rather than guess what "significant" meant here.
 T_STAT_THRESHOLD = 2.0
 
+# Above this mean pairwise rank correlation two signals order candidates the
+# same way, whatever their economics claim to measure.
+RANK_EQUIVALENCE_THRESHOLD = 0.95
+
 ANNUALIZATION_DAYS = 365
 
 INSUFFICIENT_OBSERVATIONS = "INSUFFICIENT_SIGNAL_OBSERVATIONS"
@@ -88,10 +92,18 @@ DEGENERATE_SIGNAL = "SIGNAL_HAS_NO_CROSS_SECTIONAL_VARIATION"
 
 SETTLEMENT_BASIS = "daily_close_proxy"
 
-# Every signal is defined so that a *higher* value means "the seller is being
-# paid more than the fit says this option is worth". Keeping one orientation
-# means a negative IC always reads as "the ordering is backwards", never as an
-# artefact of one signal being defined upside down.
+# Value signals are oriented so that a *higher* value means "the seller is being
+# paid more than some reference says this option is worth". Keeping one
+# orientation means a negative coefficient reads as "the ordering is backwards",
+# never as an artefact of a signal defined upside down.
+#
+# The microstructure signals at the end have no such natural direction. Their
+# orientation is fixed and published so that a negative coefficient is still
+# interpretable as "the other direction wins" rather than as a sign error.
+#
+# Measuring them together is the point. Each is cheap once the observation
+# exists, and running them in one pass answers "does the shipped axis earn its
+# complexity" in the same sample rather than across three sequential ones.
 SIGNAL_DEFINITIONS: dict[str, str] = {
     "smile_residual_iv_points": (
         "mark IV minus fitted IV, in IV points. The axis the report currently "
@@ -109,6 +121,37 @@ SIGNAL_DEFINITIONS: dict[str, str] = {
         "mark IV minus trailing realized volatility. The classic variance-risk-"
         "premium signal, included as a benchmark the smile residual has to beat "
         "to justify its own complexity."
+    ),
+    "iv_minus_dvol": (
+        "mark IV minus the venue's own 30-day volatility index. The same "
+        "premium claim as the trailing-volatility signal, but measured against "
+        "what the market charges rather than against what the underlying did, "
+        "so the two disagree exactly when the market is repricing."
+    ),
+    "tenor_iv_premium": (
+        "this expiry's at-the-money fitted IV minus the mean across the chain's "
+        "expiries, in IV points. Constant within an expiry, so it can only be "
+        "measured on a date carrying more than one."
+    ),
+    "atm_relative_skew": (
+        "fitted IV minus the same-expiry at-the-money fitted IV, per unit of "
+        "log-moneyness: the local steepness of the smile at this strike. "
+        "Strongly moneyness-correlated by construction, which is what the "
+        "neutralized coefficient is there to strip out."
+    ),
+    "open_interest_share": (
+        "this strike's open interest as a share of its expiry and option type. "
+        "A crowding proxy; whether crowding helps or hurts a seller is the "
+        "question, not the assumption."
+    ),
+    "depth_imbalance": (
+        "quoted bid size minus ask size over their sum. Higher means more size "
+        "resting on the side a seller lifts."
+    ),
+    "quote_tightness": (
+        "the negated bid/ask spread ratio, so higher is tighter. A liquidity "
+        "control: if it outranks the value signals, the ordering is finding "
+        "execution cost rather than mispricing."
     ),
 }
 
@@ -181,6 +224,7 @@ def build_signal_validation_report(
                 captured_at=captured_at,
                 closes_by_date=closes_by_date,
                 ordered_dates=ordered_dates,
+                dvol_iv_points=_dvol_iv_points(snapshot),
                 config=merged,
             )
         )
@@ -252,6 +296,7 @@ def build_signal_validation_report(
         "reason_codes": [],
         "sample": sample,
         "signals": signals,
+        "collinearity": _collinearity(observations, config=merged),
         "summary": _summary(signals),
         "cannot_tell": [
             "A detectable information coefficient is not a profitable strategy: "
@@ -355,12 +400,60 @@ def _deduplicate_by_date(
     return ordered, duplicates
 
 
+def _dvol_iv_points(snapshot: dict[str, Any]) -> float | None:
+    """The venue's own volatility index, in IV points.
+
+    The feed publishes both a fraction and a percent-point close. The declared
+    unit is honoured rather than guessed, because a factor of 100 here would
+    move the signal by more than any mispricing it is meant to detect.
+    """
+    feed = (snapshot.get("feeds") or {}).get("vol_index")
+    if not isinstance(feed, dict):
+        return None
+    raw_close = feed.get("raw_close")
+    if isinstance(raw_close, (int, float)) and not isinstance(raw_close, bool):
+        if str(feed.get("raw_close_unit") or "") == "percent_points":
+            return float(raw_close)
+    volatility = feed.get("volatility")
+    if isinstance(volatility, (int, float)) and not isinstance(volatility, bool):
+        if str(feed.get("volatility_unit") or "") == "fraction":
+            return round(float(volatility) * 100.0, 6)
+    return None
+
+
+def _expiry_contexts(
+    expiries: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Per-expiry aggregates the cross-expiry signals are measured against."""
+    contexts: dict[str, dict[str, Any]] = {}
+    for expiry in expiries:
+        points = list(expiry.get("surface_points") or [])
+        if not points:
+            continue
+        spot = _number((points[0] or {}).get("underlying_price"))
+        atm = find_atm_reference(points, underlying_price=spot)
+        open_interest_by_type: dict[str, float] = {}
+        for point in points:
+            option_type = str((point or {}).get("option_type") or "call")
+            value = _number((point or {}).get("open_interest"))
+            if value is not None:
+                open_interest_by_type[option_type] = (
+                    open_interest_by_type.get(option_type, 0.0) + value
+                )
+        contexts[str(expiry.get("expiry_date") or "")] = {
+            "atm_fitted_iv": _number((atm or {}).get("surface_fitted_iv")),
+            "open_interest_by_type": open_interest_by_type,
+        }
+    return contexts
+
+
 def _observations_from_surface(
     *,
     vol_surface_status: dict[str, Any],
     captured_at: str,
     closes_by_date: dict[str, float],
     ordered_dates: list[str],
+    dvol_iv_points: float | None,
     config: dict[str, Any],
 ) -> list[dict[str, Any]]:
     snapshot_date = captured_at[:10]
@@ -371,10 +464,24 @@ def _observations_from_surface(
         window_days=int(config["trailing_vol_window_days"]),
     )
 
+    expiries = [
+        expiry
+        for expiry in (vol_surface_status.get("expiries") or [])
+        if isinstance(expiry, dict) and expiry.get("candidate_eligible")
+    ]
+    contexts = _expiry_contexts(expiries)
+    atm_levels = [
+        context["atm_fitted_iv"]
+        for context in contexts.values()
+        if context["atm_fitted_iv"] is not None
+    ]
+    # The tenor premium is measured against the chain's own mean rather than
+    # against its front expiry, so every expiry including the front gets a real
+    # value instead of a degenerate zero.
+    chain_mean_atm_iv = sum(atm_levels) / len(atm_levels) if atm_levels else None
+
     rows: list[dict[str, Any]] = []
-    for expiry in vol_surface_status.get("expiries") or []:
-        if not isinstance(expiry, dict) or not expiry.get("candidate_eligible"):
-            continue
+    for expiry in expiries:
         expiry_date = str(expiry.get("expiry_date") or "")
         dte_days = expiry.get("dte_days")
         settlement = closes_by_date.get(expiry_date)
@@ -384,6 +491,7 @@ def _observations_from_surface(
             continue
         if expiry_date <= snapshot_date:
             continue
+        context = contexts.get(expiry_date) or {}
         for point in expiry.get("surface_points") or []:
             row = _observation(
                 point=point,
@@ -393,6 +501,9 @@ def _observations_from_surface(
                 dte_days=float(dte_days),
                 settlement_price=settlement,
                 trailing_vol=trailing_vol,
+                dvol_iv_points=dvol_iv_points,
+                expiry_context=context,
+                chain_mean_atm_iv=chain_mean_atm_iv,
             )
             if row is not None:
                 rows.append(row)
@@ -408,6 +519,9 @@ def _observation(
     dte_days: float,
     settlement_price: float,
     trailing_vol: float | None,
+    dvol_iv_points: float | None,
+    expiry_context: dict[str, Any],
+    chain_mean_atm_iv: float | None,
 ) -> dict[str, Any] | None:
     """One short-call observation: what was quoted, and what it later paid.
 
@@ -448,6 +562,9 @@ def _observation(
         return None
 
     pnl_usd = credit_usd - payout_usd - fees_usd
+    log_moneyness = math.log(strike / spot)
+    atm_fitted_iv = _number(expiry_context.get("atm_fitted_iv"))
+    fitted_iv = _number(point.get("surface_fitted_iv"))
     signals: dict[str, float | None] = {
         "smile_residual_iv_points": residual,
         "smile_residual_z": _number(point.get("fit_residual_z")),
@@ -455,6 +572,28 @@ def _observation(
         "iv_minus_trailing_realized_vol": (
             round(mark_iv - trailing_vol, 6)
             if mark_iv is not None and trailing_vol is not None
+            else None
+        ),
+        "iv_minus_dvol": (
+            round(mark_iv - dvol_iv_points, 6)
+            if mark_iv is not None and dvol_iv_points is not None
+            else None
+        ),
+        "tenor_iv_premium": (
+            round(atm_fitted_iv - chain_mean_atm_iv, 6)
+            if atm_fitted_iv is not None and chain_mean_atm_iv is not None
+            else None
+        ),
+        "atm_relative_skew": _local_skew(
+            fitted_iv=fitted_iv,
+            atm_fitted_iv=atm_fitted_iv,
+            log_moneyness=log_moneyness,
+        ),
+        "open_interest_share": _open_interest_share(point, expiry_context),
+        "depth_imbalance": _depth_imbalance(point),
+        "quote_tightness": (
+            round(-_number(point.get("spread_ratio")), 6)
+            if _number(point.get("spread_ratio")) is not None
             else None
         ),
     }
@@ -480,6 +619,50 @@ def _observation(
         "expired_itm": payout_usd > 0.0,
         "signals": signals,
     }
+
+
+def _local_skew(
+    *,
+    fitted_iv: float | None,
+    atm_fitted_iv: float | None,
+    log_moneyness: float,
+) -> float | None:
+    """Smile steepness at this strike, in IV points per unit log-moneyness.
+
+    Undefined at the money, where the denominator vanishes and the ratio would
+    explode rather than converge to the local slope.
+    """
+    if fitted_iv is None or atm_fitted_iv is None:
+        return None
+    if abs(log_moneyness) < 0.01:
+        return None
+    return round((fitted_iv - atm_fitted_iv) / log_moneyness, 6)
+
+
+def _open_interest_share(
+    point: dict[str, Any], expiry_context: dict[str, Any]
+) -> float | None:
+    """This strike's share of its expiry and option type's open interest."""
+    value = _number(point.get("open_interest"))
+    totals = expiry_context.get("open_interest_by_type")
+    if value is None or not isinstance(totals, dict):
+        return None
+    total = totals.get(str(point.get("option_type") or "call"))
+    if not isinstance(total, (int, float)) or total <= 0:
+        return None
+    return round(value / float(total), 8)
+
+
+def _depth_imbalance(point: dict[str, Any]) -> float | None:
+    """Resting bid size versus ask size, normalized to [-1, 1]."""
+    bid = _number(point.get("best_bid_amount"))
+    ask = _number(point.get("best_ask_amount"))
+    if bid is None or ask is None:
+        return None
+    total = bid + ask
+    if total <= 0:
+        return None
+    return round((bid - ask) / total, 8)
 
 
 def _realized_fees_usd(
@@ -791,6 +974,82 @@ def _bucket_table(
             }
         )
     return buckets
+
+
+def _collinearity(
+    observations: list[dict[str, Any]], *, config: dict[str, Any]
+) -> dict[str, Any]:
+    """Which of the measured signals are the same ordering wearing two names.
+
+    Counting signals is not the same as counting information. Any signal of the
+    form `mark_iv - c` where `c` is constant across a date produces identical
+    ranks within that date, so measuring implied volatility against the venue's
+    index and against trailing realized volatility yields one ordering, not two,
+    however different the two references are as economics. The same collapse
+    happens to anything constant within an expiry.
+
+    Reporting the pairwise rank correlation makes that visible. Without it a
+    reader counts ten signals, sees several agree, and reads the agreement as
+    corroboration rather than as restatement.
+    """
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    for row in observations:
+        by_date.setdefault(row["snapshot_date"], []).append(row)
+
+    names = sorted(SIGNAL_DEFINITIONS)
+    totals: dict[tuple[str, str], list[float]] = {}
+    for date in sorted(by_date):
+        rows = by_date[date]
+        if len(rows) < config["min_observations_per_date"]:
+            continue
+        for index, left in enumerate(names):
+            for right in names[index + 1 :]:
+                paired = [
+                    (row["signals"][left], row["signals"][right])
+                    for row in rows
+                    if _is_measured(row["signals"].get(left))
+                    and _is_measured(row["signals"].get(right))
+                ]
+                if len(paired) < 3:
+                    continue
+                correlation = _spearman(
+                    [float(value) for value, _ in paired],
+                    [float(value) for _, value in paired],
+                )
+                if correlation is not None:
+                    totals.setdefault((left, right), []).append(correlation)
+
+    pairs = [
+        {
+            "signals": [left, right],
+            "mean_rank_correlation": round(sum(values) / len(values), 6),
+            "measured_date_count": len(values),
+        }
+        for (left, right), values in sorted(totals.items())
+    ]
+    equivalent = [
+        pair
+        for pair in pairs
+        if abs(pair["mean_rank_correlation"]) >= RANK_EQUIVALENCE_THRESHOLD
+    ]
+    return {
+        "method": "mean_pairwise_spearman_within_date",
+        "equivalence_threshold": RANK_EQUIVALENCE_THRESHOLD,
+        "pairs": pairs,
+        "rank_equivalent_pairs": equivalent,
+        "distinct_signal_estimate": max(
+            len(names) - len({pair["signals"][1] for pair in equivalent}), 0
+        ),
+        "note": (
+            "Rank-equivalent signals produce the same ordering and therefore "
+            "the same information coefficient. Their agreement is restatement, "
+            "not corroboration."
+        ),
+    }
+
+
+def _is_measured(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _summary(signals: dict[str, dict[str, Any]]) -> dict[str, Any]:

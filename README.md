@@ -185,6 +185,30 @@ crypto-options-report validate-signal `
 
 样本不足时它会 `blocked` 并写明差多少——**这是正常的，不是故障**。
 
+它一次度量 10 个候选信号（微笑残差的三种量纲、IV 减历史波动率、IV 减 DVOL、期限溢价、
+局部偏斜、持仓量占比、深度失衡、报价宽度），并附一份**共线性报告**：数信号不等于数信息。
+任何形如「IV 减去一个当日常数」的信号在当日内秩完全相同——拿 DVOL 减和拿历史波动率减
+是同一个排序穿了两件衣服。`distinct_signal_estimate` 给出实际有几个不同的排序。
+
+### EV 是负的，到底是哪一种负
+
+一个负的预期价值至少对应三种处境，应对方式相反：样本期恰好包含了卖方被套的那波行情；
+edge 真实存在但夹在买卖价之间；或者卖这个形状本来就不划算、有意思的是另一边。
+
+```powershell
+crypto-options-report ev-robustness `
+  --snapshot-fixture artifacts/snapshots/btc-series/<capture>.json `
+  --underlying-history-fixture artifacts/history/btc-daily.json --compact
+```
+
+它把三者拆开：**执行敏感度**（在买价/中价/卖价上，买卖两个方向各自的 EV）和
+**期间敏感度**（在连续历史切片上重算，看符号是否翻转）。预期赔付与开仓价格无关，所以
+四个执行变体不需要任何额外的路径重放，只有切片需要。
+
+`verdict` 只命名数字显示了什么，不给建议：`sign_flips_across_periods`（水平本身没建立起来）、
+`no_capturable_edge_at_the_touch`（公允价落在买卖价之间——这是正常市场，不是发现）、
+`other_direction_is_positive`（错价在你没筛的那一边）、`negative_across_periods_and_execution`。
+
 它用**生产代码路径本身**逐日产出候选，与到期后的真实盈亏配对，给出分档表与信息系数。
 两个设计决定了它是否值得信：
 

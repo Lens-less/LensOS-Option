@@ -19,6 +19,7 @@ CLI_COMMANDS = [
     "backtest",
     "path-risk",
     "validate-signal",
+    "ev-robustness",
     "calibrate",
     "scan",
     "recommend",
