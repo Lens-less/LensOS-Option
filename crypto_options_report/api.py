@@ -205,6 +205,18 @@ class RuntimeConfig:
     snapshot_fixture: str | None = None
     account_snapshot_fixture: str | None = None
     allow_live_fetch: bool = False
+    # Replay pins the evaluation clock to the configured snapshot's own capture
+    # time, which is the only way a recorded chain can be read in a browser at
+    # all: market data older than `market_data_max_age_sec` is blocked, so a
+    # file saved a minute ago already fails the freshness gate against a live
+    # clock. The CLI has always done this; the HTTP surface had no equivalent,
+    # which left every browser view of a recorded snapshot empty.
+    #
+    # It is an operator flag rather than a query parameter on purpose. A pinned
+    # clock makes stale data look current, so the decision belongs to whoever
+    # starts the process, and the surfaces render an unmissable banner naming
+    # the pinned instant.
+    replay: bool = False
     access_log: bool | None = None
     historical_fixture: str | None = None
     underlying_history_fixture: str | None = None
@@ -233,6 +245,10 @@ class RuntimeConfig:
             raise ValueError(
                 "production HTTP live fetch is unsupported; capture a snapshot with the CLI"
             )
+        if self.replay and not self.snapshot_fixture:
+            raise ValueError("replay requires a snapshot fixture to replay")
+        if self.replay and self.allow_live_fetch:
+            raise ValueError("replay and live fetch cannot both be enabled")
         if check_inputs and self.snapshot_fixture:
             load_snapshot_fixture(self.snapshot_fixture)
         if check_inputs and self.account_snapshot_fixture:
@@ -1552,6 +1568,12 @@ def _payload_for_path(
         return record.to_dict()
     report = record.project_research_report_v1()
     if path in REPORT_ALIASES:
+        # A replayed report is indistinguishable from a live one in its own
+        # fields, because the clock was pinned and every freshness figure then
+        # reads as current. The surfaces cannot infer it, so it is stated.
+        report["runtime_context"] = _runtime_context(
+            (runtime or RuntimeConfig()).validate(check_inputs=False)
+        )
         return report
     if path == "/market/chain":
         return report["data_status"]
@@ -1577,10 +1599,39 @@ def _report_from_query(
     *,
     runtime: RuntimeConfig | None = None,
 ) -> dict[str, Any]:
-    return _analysis_record_from_query(
+    report = _analysis_record_from_query(
         query,
         runtime=runtime,
     ).project_research_report_v1()
+    report["runtime_context"] = _runtime_context(
+        (runtime or RuntimeConfig()).validate(check_inputs=False)
+    )
+    return report
+
+
+def _runtime_context(runtime: RuntimeConfig) -> dict[str, Any]:
+    """How this response was produced, for surfaces to state rather than infer.
+
+    A replayed report is indistinguishable from a live one in its own fields —
+    the clock was pinned, so every freshness figure reads as current. That is
+    exactly why it has to be declared here: a viewer who cannot tell replay from
+    live is being shown stale data that looks fresh.
+    """
+    replay_clock = _replay_clock(runtime)
+    return {
+        "profile": runtime.profile,
+        "mode": "replay" if replay_clock else "live",
+        "replay": bool(replay_clock),
+        "evaluation_clock": replay_clock,
+        "snapshot_fixture": runtime.snapshot_fixture if replay_clock else None,
+        "live_fetch_allowed": runtime.allow_live_fetch,
+        "notice": (
+            "Evaluation clock pinned to the snapshot's capture time. Freshness "
+            "figures describe that instant, not now."
+            if replay_clock
+            else None
+        ),
+    }
 
 
 def _analysis_record_from_query(
@@ -1676,6 +1727,24 @@ def _path_version(path: Path) -> dict[str, Any]:
     }
 
 
+def _replay_clock(runtime: RuntimeConfig) -> str | None:
+    """The pinned evaluation instant for a replayed snapshot, or None when live.
+
+    Reading the capture time out of the file rather than accepting one keeps the
+    pin tied to the data it describes: an operator cannot pin the clock to a
+    moment the snapshot was not taken at, which would revive the staleness the
+    freshness gate exists to catch.
+    """
+    if not runtime.replay or not runtime.snapshot_fixture:
+        return None
+    try:
+        snapshot = load_snapshot_fixture(runtime.snapshot_fixture)
+    except (OSError, ValueError):
+        return None
+    captured_at = snapshot.get("captured_at")
+    return str(captured_at) if captured_at else None
+
+
 def _report_options_from_query(
     query: str,
     *,
@@ -1699,11 +1768,24 @@ def _report_options_from_query(
             "paper_ledger_path": runtime.paper_ledger_path,
             "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
             "underlying_history_fixture": runtime.underlying_history_fixture,
+            "generated_at": _replay_clock(runtime),
         }
 
     # HTTP always stays research_only for display/action consistency.
     mode = "research_only"
-    snapshot_fixture = params.get("snapshot_fixture", [None])[0]
+    # The operator-configured fixture is the default in development too. It used
+    # to be read only by the production branch, so `--snapshot-fixture` was
+    # validated at startup and then silently ignored, and the console rendered
+    # "market source not configured" against a snapshot that works everywhere
+    # else. A query parameter still overrides it.
+    requested_fixture = params.get("snapshot_fixture", [None])[0]
+    snapshot_fixture = requested_fixture or runtime.snapshot_fixture
+    # The fixture sandbox exists to stop a *browser* reading arbitrary files, so
+    # it applies to the query parameter and not to the path the operator chose
+    # on the command line — which `RuntimeConfig.validate` already opened at
+    # startup. Sandboxing the operator's own choice is what rejected every
+    # snapshot outside `tests/fixtures`.
+    sandbox_fixtures = requested_fixture is not None
     live_deribit_value = params.get("live_deribit", [None])[0]
     live_deribit = (
         runtime.allow_live_fetch
@@ -1716,7 +1798,7 @@ def _report_options_from_query(
     if params.get("deribit_base_url"):
         raise ValueError("deribit_base_url query override is not allowed over HTTP")
     account_scenario = params.get("account_scenario", [None])[0]
-    generated_at = params.get("generated_at", [None])[0]
+    generated_at = params.get("generated_at", [_replay_clock(runtime)])[0]
     instrument_limit = _parse_optional_int(
         params.get(
             "instrument_limit",
@@ -1744,7 +1826,7 @@ def _report_options_from_query(
         "account_scenario": account_scenario,
         "account_snapshot_fixture": runtime.account_snapshot_fixture,
         "generated_at": generated_at,
-        "sandbox_fixtures": True,
+        "sandbox_fixtures": sandbox_fixtures,
         "backtest_artifact_dir": runtime.backtest_artifact_dir,
         "paper_ledger_path": runtime.paper_ledger_path,
         "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
@@ -1878,6 +1960,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--replay",
+        action="store_true",
+        default=_environment_flag("CRYPTO_OPTIONS_API_REPLAY"),
+        help=(
+            "pin the evaluation clock to the snapshot's capture time so a "
+            "recorded chain can be read past the freshness gate; every surface "
+            "shows a replay banner naming the pinned instant"
+        ),
+    )
+    parser.add_argument(
         "--underlying-history-fixture",
         help=(
             "recorded underlying price history; enables absolute expected "
@@ -1932,6 +2024,7 @@ def main(argv: list[str] | None = None) -> int:
         snapshot_fixture=args.snapshot_fixture,
         account_snapshot_fixture=args.account_snapshot_fixture,
         allow_live_fetch=args.allow_live_fetch,
+        replay=args.replay,
         access_log=args.access_log,
         historical_fixture=args.historical_fixture,
         underlying_history_fixture=args.underlying_history_fixture,

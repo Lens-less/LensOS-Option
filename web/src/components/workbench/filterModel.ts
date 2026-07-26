@@ -19,6 +19,21 @@ export interface ScreenerFilters {
   actionTiers: CandidateAction[];
 }
 
+/**
+ * Rejected rows are hidden by default.
+ *
+ * A live chain produces a few hundred rejected candidates against a handful of
+ * research-grade ones — 510 against 8 on the first real snapshot. Showing all of
+ * them by default buried the eight rows the page exists for under a page tens of
+ * thousands of pixels tall. They remain one checkbox away, and the count of what
+ * is hidden is always displayed, because a filter that hides silently is the
+ * same failure in the other direction.
+ */
+export const DEFAULT_ACTION_TIERS: readonly CandidateAction[] = [
+  "RESEARCH_ONLY",
+  "REVIEW",
+];
+
 export function defaultFilters(): ScreenerFilters {
   return {
     structureTypes: [],
@@ -27,7 +42,7 @@ export function defaultFilters(): ScreenerFilters {
     absDeltaMin: null,
     absDeltaMax: null,
     minCreditUsdc: null,
-    actionTiers: [...ALL_ACTION_TIERS],
+    actionTiers: [...DEFAULT_ACTION_TIERS],
   };
 }
 
@@ -152,7 +167,7 @@ export function decodeFilters(params: URLSearchParams): ScreenerFilters {
         .filter((tier): tier is CandidateAction =>
           (ALL_ACTION_TIERS as string[]).includes(tier),
         )
-    : [...ALL_ACTION_TIERS];
+    : [...DEFAULT_ACTION_TIERS];
   return {
     structureTypes: structureParam
       ? structureParam.split(",").filter(Boolean)
@@ -162,6 +177,7 @@ export function decodeFilters(params: URLSearchParams): ScreenerFilters {
     absDeltaMin: numberParam(params, PARAM_KEYS.deltaMin),
     absDeltaMax: numberParam(params, PARAM_KEYS.deltaMax),
     minCreditUsdc: numberParam(params, PARAM_KEYS.minCredit),
-    actionTiers: decodedTiers.length > 0 ? decodedTiers : [...ALL_ACTION_TIERS],
+    actionTiers:
+      decodedTiers.length > 0 ? decodedTiers : [...DEFAULT_ACTION_TIERS],
   };
 }

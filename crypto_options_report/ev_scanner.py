@@ -386,6 +386,10 @@ def _candidate_row(
         "candidate_id": score.get("candidate_id"),
         "structure_type": structure_type,
         "expiry_date": candidate.get("expiry_date"),
+        # Carried because consumers filter and sort on tenor. Its absence left
+        # every DTE cell and the tenor filter reading from a field that was
+        # never published.
+        "dte_days": candidate.get("dte_days"),
         # The legs and position greeks travel with the ranked row so a consumer
         # can combine rows without going back to the candidate tables and
         # re-deriving which shape each row referred to.
@@ -449,6 +453,8 @@ def _rejected_row(candidate: dict[str, Any], structure_type: str) -> dict[str, A
     return {
         "candidate_id": candidate.get("candidate_id"),
         "structure_type": structure_type,
+        "expiry_date": candidate.get("expiry_date"),
+        "dte_days": candidate.get("dte_days"),
         "action": REJECT,
         "score_status": "UNCALIBRATED_RESEARCH_ONLY",
         "ranking_score": None,

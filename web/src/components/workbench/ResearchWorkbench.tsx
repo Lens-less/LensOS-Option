@@ -30,6 +30,7 @@ import { ScreenerBlockedState } from "./ScreenerBlockedState";
 import { ScreenerControls } from "./ScreenerControls";
 import { ScreenerEmptyState } from "./ScreenerEmptyState";
 import { ScoreProvenance } from "./ScoreProvenance";
+import { ReasonCodeNotice } from "../shell/ReasonCodeNotice";
 
 const FILTER_PARAM_KEYS = [
   "structure",
@@ -83,6 +84,8 @@ export interface ResearchWorkbenchProps {
   receivedAtMs: number;
   refreshing?: boolean;
   report: ResearchReport;
+  /** Rendered inside `AppShell`, which already carries the chrome. */
+  embedded?: boolean;
 }
 
 export function ResearchWorkbench({
@@ -91,6 +94,7 @@ export function ResearchWorkbench({
   nowMs,
   onRefresh,
   refreshing = false,
+  embedded = false,
 }: ResearchWorkbenchProps): React.JSX.Element {
   const initialUrlState = useMemo(() => readUrlState(), []);
   const [filters, setFilters] = useState<ScreenerFilters>(
@@ -184,6 +188,110 @@ export function ResearchWorkbench({
 
   const isBlockedStatus = status === "unavailable" || status === "blocked";
 
+  const hiddenByTier = allRows.filter(
+    (row) => !filters.actionTiers.includes(row.action),
+  ).length;
+
+  const body = (
+    <main className="workbench-console" id={embedded ? "surface-main" : "workbench-main"}>
+      {/* The table is the product, so everything that is not the table is
+          compressed into one line above it or folded away below it. The page
+          used to spend roughly 700px on headings and status strips before the
+          first candidate, which put every row below the fold on a laptop. */}
+      <div className="workbench-bar">
+        <div>
+          <p className="section-kicker">EV candidate scanner / 候选工作台</p>
+          <h1>候选筛选</h1>
+        </div>
+        <p className="workbench-bar-note">
+          分层由服务端判定；筛选只缩小范围，不改变分层。
+        </p>
+      </div>
+
+      {isBlockedStatus ? (
+        <>
+          <ScreenerControls
+            disabled
+            filters={filters}
+            onChange={setFilters}
+            onReset={resetFilters}
+            structureOptions={structureOptions}
+          />
+          <ScreenerBlockedState
+            reasonCode={scanner?.reason_code ?? null}
+            status={status}
+          />
+          <ReasonCodeNotice
+            codes={[
+              ...(scanner?.reason_code ? [scanner.reason_code] : []),
+              ...(report.reason_codes ?? []),
+            ]}
+            heading="需要补齐什么"
+          />
+        </>
+      ) : (
+        <>
+          <ScreenerControls
+            filters={filters}
+            onChange={setFilters}
+            onReset={resetFilters}
+            structureOptions={structureOptions}
+          />
+          <p aria-live="polite" className="screener-result-count" role="status">
+            <strong>{visibleRows.length.toLocaleString("zh-CN")}</strong> /{" "}
+            {allRows.length.toLocaleString("zh-CN")} 个候选
+            {hiddenByTier > 0 ? (
+              <span className="screener-hidden-note">
+                · 已按分层隐藏 {hiddenByTier.toLocaleString("zh-CN")} 个
+              </span>
+            ) : null}
+            <span className="visually-hidden">{announcedCount}</span>
+          </p>
+          {visibleRows.length === 0 ? (
+            <ScreenerEmptyState
+              onReset={resetFilters}
+              showReset={!isDefaultFilters(filters)}
+              totalCount={allRows.length}
+              visibleCount={visibleRows.length}
+            />
+          ) : (
+            <CandidateScreenerTable
+              onSelect={handleSelect}
+              onSortChange={handleSortChange}
+              rows={visibleRows}
+              selectedId={selectedId}
+              sort={sort}
+            />
+          )}
+          {selectedRow ? (
+            <CandidateDetailPanel
+              headingRef={headingRef}
+              onClose={handleClose}
+              report={report}
+              row={selectedRow}
+              spotUsdc={spotUsdc}
+            />
+          ) : null}
+
+          {/* Provenance belongs with the ranking it qualifies, but it is read
+              once and then trusted, so it sits below the table rather than
+              between the reader and it. */}
+          <details className="workbench-provenance">
+            <summary>
+              排序口径与打分状态
+              <span>{scanner?.score_status ?? "UNAVAILABLE"}</span>
+            </summary>
+            <ScoreProvenance scanner={scanner} />
+          </details>
+        </>
+      )}
+    </main>
+  );
+
+  if (embedded) {
+    return body;
+  }
+
   return (
     <div className="app-shell workbench-shell">
       <a className="skip-link" href="#workbench-main">
@@ -195,95 +303,29 @@ export function ResearchWorkbench({
         refreshing={refreshing}
         source={source}
       />
-      <main className="workbench-console" id="workbench-main">
-        <header className="research-section-heading workbench-heading">
-          <div>
-            <p className="section-kicker">EV candidate scanner / 研究工作台</p>
-            <h1>候选筛选研究工作台</h1>
+      {/* Embedded, `AppShell` states this once for both views. Mounted alone,
+          the workbench must still carry it: this is where ranked candidates
+          and expected values are read, and a boundary that depends on the
+          mounting context is not a boundary. */}
+      <section className="truth-strip" aria-label="三项运行边界">
+        <dl>
+          <div data-tone="danger">
+            <dt>外部发布授权</dt>
+            <dd>
+              {report.full_system_surface?.release_readiness?.status ?? "NO-GO"}
+            </dd>
           </div>
-          <p>
-            所有分层由服务端判定；本页筛选器只能在同一分层内缩小范围，不能把候选提升为更高研究等级。
-          </p>
-        </header>
-
-        {/* This is the surface where ranked candidates and expected values are
-            read, so the release state and execution boundary must be visible
-            here too — not only on the evidence console. */}
-        <section className="truth-strip" aria-label="三项运行边界">
-          <dl>
-            <div data-tone="danger">
-              <dt>外部发布授权</dt>
-              <dd>
-                {report.full_system_surface?.release_readiness?.status ??
-                  "NO-GO"}
-              </dd>
-            </div>
-            <div data-tone="danger">
-              <dt>执行边界</dt>
-              <dd>RESEARCH_ONLY · NO_TRADE</dd>
-            </div>
-            <div data-tone="warning">
-              <dt>打分状态</dt>
-              <dd>{scanner?.score_status ?? "UNAVAILABLE"}</dd>
-            </div>
-          </dl>
-        </section>
-
-        <ScoreProvenance scanner={scanner} />
-
-        {isBlockedStatus ? (
-          <>
-            <ScreenerControls
-              disabled
-              filters={filters}
-              onChange={setFilters}
-              onReset={resetFilters}
-              structureOptions={structureOptions}
-            />
-            <ScreenerBlockedState
-              reasonCode={scanner?.reason_code ?? null}
-              status={status}
-            />
-          </>
-        ) : (
-          <>
-            <ScreenerControls
-              filters={filters}
-              onChange={setFilters}
-              onReset={resetFilters}
-              structureOptions={structureOptions}
-            />
-            <p aria-live="polite" className="screener-result-count" role="status">
-              {announcedCount}
-            </p>
-            {visibleRows.length === 0 ? (
-              <ScreenerEmptyState
-                onReset={resetFilters}
-                showReset={!isDefaultFilters(filters)}
-                totalCount={allRows.length}
-                visibleCount={visibleRows.length}
-              />
-            ) : (
-              <CandidateScreenerTable
-                onSelect={handleSelect}
-                onSortChange={handleSortChange}
-                rows={visibleRows}
-                selectedId={selectedId}
-                sort={sort}
-              />
-            )}
-            {selectedRow ? (
-              <CandidateDetailPanel
-                headingRef={headingRef}
-                onClose={handleClose}
-                report={report}
-                row={selectedRow}
-                spotUsdc={spotUsdc}
-              />
-            ) : null}
-          </>
-        )}
-      </main>
+          <div data-tone="danger">
+            <dt>执行边界</dt>
+            <dd>RESEARCH_ONLY · NO_TRADE</dd>
+          </div>
+          <div data-tone="warning">
+            <dt>打分状态</dt>
+            <dd>{scanner?.score_status ?? "UNAVAILABLE"}</dd>
+          </div>
+        </dl>
+      </section>
+      {body}
       <footer className="page-footer">
         <span>LensOS Option · research only</span>
         <p>真实市场数据用于研究阅读；页面不连接下单与自动执行。</p>

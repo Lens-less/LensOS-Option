@@ -459,8 +459,25 @@ export interface EvCandidateScanner {
   ranked_candidates?: RankedCandidate[];
 }
 
+/**
+ * How the response was produced. A replayed report is indistinguishable from a
+ * live one in its own fields — the evaluation clock was pinned, so every
+ * freshness figure reads as current — which is exactly why the server states it
+ * rather than leaving the surfaces to infer it.
+ */
+export interface RuntimeContext {
+  profile?: string;
+  mode?: "live" | "replay";
+  replay?: boolean;
+  evaluation_clock?: string | null;
+  snapshot_fixture?: string | null;
+  live_fetch_allowed?: boolean;
+  notice?: string | null;
+}
+
 export interface ResearchReport {
   schema_version: "research_report.v1";
+  runtime_context?: RuntimeContext;
   generated_at?: string | null;
   action?: string;
   mode?: string;

@@ -283,11 +283,18 @@ describe("ResearchWorkbench / no trading semantics", () => {
     const minCreditInput = screen.getByLabelText("最低可成交信用（USDC）");
     fireEvent.change(minCreditInput, { target: { value: "0" } });
 
+    // The rejected tier is hidden by default, so this asserts the default
+    // rather than reaching for the checkbox to turn it off.
     const rejectTierToggle = screen.getByRole("checkbox", { name: "已拒绝" });
-    fireEvent.click(rejectTierToggle);
+    expect(rejectTierToggle).not.toBeChecked();
 
     // With the REJECT tier hidden, its credit value must not appear in the
     // table no matter how permissive every other slider is.
     expect(screen.queryByText("$162.65")).not.toBeInTheDocument();
+
+    // And turning it on shows the row without changing its tier.
+    fireEvent.click(rejectTierToggle);
+    expect(screen.getByText("$162.65")).toBeInTheDocument();
+    expect(screen.getAllByText("已拒绝").length).toBeGreaterThan(0);
   });
 });

@@ -2920,7 +2920,12 @@ p {
 }
 
 .candidate-screener-table-scroll {
-  overflow-x: auto;
+  /* Bounded region with its own scrollport. A page-level scroll cannot keep
+     the header visible here: `position: sticky` resolves against the nearest
+     scroll container, and the container already scrolls horizontally, so a
+     viewport-relative offset landed the header mid-table instead of on top. */
+  overflow: auto;
+  max-height: min(68vh, 760px);
   border: 1px solid var(--ink);
   background: var(--panel);
 }
@@ -3316,5 +3321,391 @@ p {
 @media (max-width: 699px) {
   .workbench-console .truth-strip dl {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Single spine: one masthead, one boundary, one place to switch view. */
+/* Each of these used to be re-rendered per view, so release authority */
+/* and freshness appeared two or three times on a single page while    */
+/* the route to the other view appeared only in a URL parameter.       */
+/* ------------------------------------------------------------------ */
+
+.spine-masthead {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: clamp(12px, 2vw, 32px);
+  padding: 0 var(--page-gutter);
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+  min-height: 64px;
+}
+
+.spine-views {
+  display: flex;
+  gap: 4px;
+  align-self: stretch;
+  align-items: stretch;
+}
+
+.spine-views button {
+  appearance: none;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 14px;
+  padding: 0 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.spine-views button:hover {
+  color: var(--ink);
+  background: var(--panel-soft);
+}
+
+.spine-views button[aria-current="page"] {
+  color: var(--ink);
+  border-bottom-color: var(--blue);
+  font-weight: 600;
+}
+
+.spine-actions {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1.4vw, 20px);
+}
+
+/* The replay banner is not dismissible on purpose: a pinned clock makes
+   every freshness figure on the page read as current, and nothing else
+   on screen can contradict that. */
+.replay-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 14px;
+  padding: 10px var(--page-gutter);
+  background: #fff8e1;
+  border-bottom: 1px solid #e0b400;
+  color: #5b4300;
+  font-size: 13px;
+}
+
+.replay-banner-tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: #8e5b00;
+  color: #fff;
+  padding: 2px 8px;
+}
+
+.replay-banner p {
+  margin: 0;
+}
+
+.replay-banner-source {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #6f5500;
+  word-break: break-all;
+}
+
+.spine-boundary {
+  padding: 0 var(--page-gutter);
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+}
+
+.spine-boundary dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0;
+  margin: 0;
+  max-width: var(--content-max);
+}
+
+.spine-boundary dl > div {
+  padding: 10px 16px 10px 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.spine-boundary dt {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.spine-boundary dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.spine-boundary dl > div[data-tone="danger"] dd {
+  color: var(--red);
+}
+
+/* ------------------------------------------------------------------ */
+/* Workbench: the table is the product.                                */
+/* ------------------------------------------------------------------ */
+
+.workbench-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 24px;
+  padding: 16px 0 8px;
+}
+
+.workbench-bar h1 {
+  margin: 2px 0 0;
+  font-size: clamp(20px, 2.2vw, 26px);
+  letter-spacing: -0.01em;
+}
+
+.workbench-bar-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 46ch;
+}
+
+.screener-result-count {
+  margin: 12px 0 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.screener-result-count strong {
+  font-family: var(--mono);
+  font-size: 15px;
+}
+
+.screener-hidden-note {
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.candidate-screener-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--panel-soft);
+  box-shadow: inset 0 -1px 0 var(--rule-strong);
+}
+
+.instrument-cell {
+  line-height: 1.35;
+}
+
+.instrument-cell strong {
+  display: block;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.instrument-cell small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.numeric-cell[data-sign="negative"] {
+  color: var(--red);
+}
+
+.numeric-cell[data-sign="positive"] {
+  color: var(--green);
+}
+
+.table-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--rule);
+  border-top: 0;
+  background: var(--panel-soft);
+  font-size: 13px;
+}
+
+.table-more p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.table-more button {
+  appearance: none;
+  border: 1px solid var(--rule-strong);
+  background: var(--panel);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.workbench-provenance {
+  margin-top: 28px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+}
+
+.workbench-provenance > summary {
+  cursor: pointer;
+  padding: 12px 16px;
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workbench-provenance > summary span {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ */
+/* Reason codes read as instructions, not as machine tokens.           */
+/* Fail-closed makes the blocked state the most-viewed screen here, so  */
+/* it gets the same care as the populated one.                          */
+/* ------------------------------------------------------------------ */
+
+.reason-notice {
+  margin-top: 24px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  padding: 18px clamp(16px, 2vw, 24px);
+}
+
+.reason-notice h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+
+.reason-notice ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 18px;
+}
+
+.reason-notice-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.reason-notice-head strong {
+  font-size: 14px;
+}
+
+.reason-notice-code {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--panel-soft);
+  padding: 2px 6px;
+}
+
+.reason-notice p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ink-soft);
+  max-width: 72ch;
+}
+
+.reason-remedy {
+  margin-top: 10px;
+  border-left: 3px solid var(--blue);
+  padding-left: 12px;
+}
+
+.reason-remedy > span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.reason-remedy-command {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.reason-remedy-command code {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--panel-soft);
+  border: 1px solid var(--rule);
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.reason-remedy-command button {
+  appearance: none;
+  border: 1px solid var(--rule-strong);
+  background: var(--panel);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The Chrome side panel lives permanently at this width, and the masthead
+   used to clip its own source label and break READ-ONLY across two lines. */
+@media (max-width: 860px) {
+  .spine-masthead {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "brand actions" "views views";
+    row-gap: 0;
+    padding-top: 8px;
+  }
+
+  .spine-masthead .brand {
+    grid-area: brand;
+  }
+
+  .spine-actions {
+    grid-area: actions;
+  }
+
+  .spine-views {
+    grid-area: views;
+    overflow-x: auto;
+  }
+
+  .candidate-screener-table-scroll {
+    max-height: none;
   }
 }

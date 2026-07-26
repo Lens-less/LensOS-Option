@@ -185,10 +185,19 @@ class AnalysisProjectionSurfaceTests(unittest.TestCase):
                 second[1]["X-Analysis-Run-ID"],
             )
             self.assertEqual(first[1]["ETag"], second[1]["ETag"])
+            # `runtime_context` describes how the response was produced - live
+            # or replayed - which is a property of the request, not of the
+            # immutable record. It is compared separately so this assertion
+            # keeps testing what it was written to test: that the projection is
+            # the record's own, not a recomputation.
+            served = dict(second[2])
+            runtime_context = served.pop("runtime_context", None)
             self.assertEqual(
                 server.analysis_record(query).project_research_report_v1(),
-                second[2],
+                served,
             )
+            self.assertEqual(runtime_context["mode"], "live")
+            self.assertIs(runtime_context["replay"], False)
         finally:
             server.shutdown()
             server.server_close()

@@ -3,8 +3,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   EvidenceConsole,
   Masthead,
+  friendlySource,
   reportFreshness,
 } from "./components/evidence/EvidenceConsole";
+import { AppShell } from "./components/shell/AppShell";
+import type { AppView } from "./components/shell/AppShell";
 import { ResearchWorkbench } from "./components/workbench/ResearchWorkbench";
 import { validateResearchReport } from "./report";
 import { loadResearchReportHttp } from "./transport";
@@ -18,7 +21,6 @@ export { ResearchWorkbench } from "./components/workbench/ResearchWorkbench";
 export type { ResearchWorkbenchProps } from "./components/workbench/ResearchWorkbench";
 
 export type LoadReport = () => Promise<LoadedReport>;
-type AppView = "evidence" | "workbench";
 
 function readViewFromLocation(): AppView {
   if (typeof window === "undefined") {
@@ -189,37 +191,30 @@ export function App({
     return <ErrorState onRetry={() => void refresh()} />;
   }
 
+  const report = state.loaded.report;
   const consoleProps = {
     nowMs,
     onRefresh: () => void refresh(),
     receivedAtMs: state.loaded.receivedAtMs,
     refreshing: state.refreshing,
-    report: state.loaded.report,
+    report,
   };
 
   return (
-    <>
-      <nav aria-label="视图切换" className="view-switch-bar">
-        <button
-          aria-current={view === "evidence" ? "page" : undefined}
-          onClick={() => switchView("evidence")}
-          type="button"
-        >
-          证据台
-        </button>
-        <button
-          aria-current={view === "workbench" ? "page" : undefined}
-          onClick={() => switchView("workbench")}
-          type="button"
-        >
-          候选筛选工作台
-        </button>
-      </nav>
+    <AppShell
+      freshness={reportFreshness(report, state.loaded.receivedAtMs, nowMs)}
+      onRefresh={() => void refresh()}
+      onViewChange={switchView}
+      refreshing={state.refreshing}
+      report={report}
+      source={friendlySource(report.data_status?.source)}
+      view={view}
+    >
       {view === "workbench" ? (
-        <ResearchWorkbench {...consoleProps} />
+        <ResearchWorkbench {...consoleProps} embedded />
       ) : (
-        <EvidenceConsole {...consoleProps} />
+        <EvidenceConsole {...consoleProps} embedded />
       )}
-    </>
+    </AppShell>
   );
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CandidateViewRow } from "./candidateModel";
 import {
   ALL_ACTION_TIERS,
+  DEFAULT_ACTION_TIERS,
   applyFilters,
   decodeFilters,
   defaultFilters,
@@ -45,10 +46,21 @@ const rows: CandidateViewRow[] = [
 ];
 
 describe("defaultFilters / isDefaultFilters", () => {
-  it("starts with every tier visible and no narrowing applied", () => {
+  it("starts with the rejected tier hidden and nothing else narrowed", () => {
+    // A live chain returns a few hundred rejected candidates against a handful
+    // of research-grade ones. Showing them all by default buried the rows the
+    // page exists for; they stay one checkbox away and the hidden count is
+    // always displayed.
     const filters = defaultFilters();
-    expect(filters.actionTiers).toEqual([...ALL_ACTION_TIERS]);
+    expect(filters.actionTiers).toEqual([...DEFAULT_ACTION_TIERS]);
+    expect(filters.actionTiers).not.toContain("REJECT");
     expect(isDefaultFilters(filters)).toBe(true);
+  });
+
+  it("keeps the rejected tier reachable rather than removing it", () => {
+    expect(ALL_ACTION_TIERS).toContain("REJECT");
+    const widened = { ...defaultFilters(), actionTiers: [...ALL_ACTION_TIERS] };
+    expect(isDefaultFilters(widened)).toBe(false);
   });
 
   it("is no longer the default once any field narrows the set", () => {
@@ -94,8 +106,11 @@ describe("applyFilters purity", () => {
   });
 
   it("narrows by absolute delta range", () => {
+    // Tiers are widened explicitly: this case is about the numeric predicate,
+    // and the default set hides the rejected tier.
     const result = applyFilters(rows, {
       ...defaultFilters(),
+      actionTiers: [...ALL_ACTION_TIERS],
       absDeltaMin: 0.25,
     });
     expect(result.map((item) => item.id).sort()).toEqual([
@@ -107,6 +122,7 @@ describe("applyFilters purity", () => {
   it("narrows by minimum executable credit", () => {
     const result = applyFilters(rows, {
       ...defaultFilters(),
+      actionTiers: [...ALL_ACTION_TIERS],
       minCreditUsdc: 450,
     });
     expect(result.map((item) => item.id).sort()).toEqual([

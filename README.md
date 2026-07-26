@@ -46,17 +46,25 @@ python -m crypto_options_report.cli analysis `
   --generated-at 2026-07-07T00:01:30Z --compact
 ```
 
-启动本地服务并打开证据控制台：
+启动本地服务并打开证据控制台。**要在浏览器里读一份录制快照，必须加 `--replay`**：
 
 ```powershell
-python -m crypto_options_report.api --host 127.0.0.1 --port 8000
+python -m crypto_options_report.api --host 127.0.0.1 --port 8000 --replay `
+  --snapshot-fixture artifacts/snapshots/btc-series/<capture>.json `
+  --underlying-history-fixture artifacts/history/btc-daily.json
 ```
 
 然后访问 <http://127.0.0.1:8000/evidence>。
 
-> **第一次运行会看到大量「不可用 / 缺失」，这是正常的。** 没有配置市场数据源时，
-> 产品按设计拒绝编造任何数值。想看到有数据的页面，请用上面的 `--snapshot-fixture`
-> 参数，或参考[生产部署](#生产部署)接入实时快照。
+`--replay` 把评估时钟固定到快照自己的采集时刻。没有它，任何超过 60 秒的录制文件都会
+被新鲜度门禁挡掉——这是 CLI 一直在做的事（`--generated-at` 默认取 `captured_at`），
+HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标读起来都像"当前"**，所以它是
+启动参数而不是浏览器参数，并且每个界面都会显示一条无法关闭的回放横幅标出被固定的时刻。
+
+不带 `--replay` 时服务按实时模式运行，快照过期就如实阻断。
+
+> **没有配置市场数据源时会看到大量「不可用 / 缺失」，这是正常的。** 产品按设计拒绝
+> 编造任何数值。空状态会列出缺什么、以及补齐它的确切命令。
 >
 > 同理，production 模式下 `/readyz` 会稳定返回 `503`：当前没有可提升的模型，
 > 就绪门禁按设计保持关闭。**这不代表进程异常**，`/livez` 才表示进程存活。

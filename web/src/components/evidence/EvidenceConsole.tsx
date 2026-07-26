@@ -11,7 +11,7 @@ import { marketFacts, researchCandidates } from "./marketModel";
 import { reportBlockers, reportFreshness } from "./reportModel";
 
 export { Masthead } from "./Shell";
-export { reportFreshness } from "./reportModel";
+export { friendlySource, reportFreshness } from "./reportModel";
 
 export interface EvidenceConsoleProps {
   nowMs: number;
@@ -19,6 +19,12 @@ export interface EvidenceConsoleProps {
   receivedAtMs: number;
   refreshing?: boolean;
   report: ResearchReport;
+  /**
+   * Rendered inside `AppShell`, which already carries the masthead, the replay
+   * banner and the run boundary. Standalone mounts (tests, embeds) keep the
+   * self-contained chrome.
+   */
+  embedded?: boolean;
 }
 
 export function EvidenceConsole({
@@ -27,6 +33,7 @@ export function EvidenceConsole({
   nowMs,
   onRefresh,
   refreshing = false,
+  embedded = false,
 }: EvidenceConsoleProps): React.JSX.Element {
   const blockers = reportBlockers(report);
   const operatorBlockers = blockers.filter(
@@ -39,19 +46,13 @@ export function EvidenceConsole({
   const facts = marketFacts(report);
   const candidates = researchCandidates(report);
 
-  return (
-    <div className="app-shell">
-      <a className="skip-link" href="#evidence-main">
-        跳到主要内容
-      </a>
-      <Masthead
-        freshness={freshness}
-        onRefresh={onRefresh}
-        refreshing={refreshing}
-        source={facts.source}
-      />
+  const body = (
+    <>
       <SectionNavigation />
-      <main id="evidence-main" className="console">
+      <main
+        className="console"
+        id={embedded ? "surface-main" : "evidence-main"}
+      >
         <MarketBrief
           candidates={candidates}
           facts={facts}
@@ -69,6 +70,25 @@ export function EvidenceConsole({
         />
         <EvidenceChain report={report} />
       </main>
+    </>
+  );
+
+  if (embedded) {
+    return body;
+  }
+
+  return (
+    <div className="app-shell">
+      <a className="skip-link" href="#evidence-main">
+        跳到主要内容
+      </a>
+      <Masthead
+        freshness={freshness}
+        onRefresh={onRefresh}
+        refreshing={refreshing}
+        source={facts.source}
+      />
+      {body}
       <footer className="page-footer">
         <span>LensOS Option · research only</span>
         <p>真实市场数据用于研究阅读；页面不连接下单与自动执行。</p>

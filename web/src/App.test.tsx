@@ -1048,14 +1048,14 @@ describe("EvidenceConsole", () => {
 
     render(<App loadReport={loadReport} />);
 
-    const refresh = await screen.findByRole("button", { name: "刷新数据" });
+    const refresh = await screen.findByRole("button", { name: "刷新" });
     fireEvent.click(refresh);
 
     await waitFor(() => {
       expect(loadReport).toHaveBeenCalledTimes(2);
     });
     expect(
-      await screen.findByRole("button", { name: "刷新数据" }),
+      await screen.findByRole("button", { name: "刷新" }),
     ).toHaveAttribute("aria-busy", "false");
   });
 
