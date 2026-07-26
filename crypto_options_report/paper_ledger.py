@@ -220,8 +220,12 @@ def manual_approval_runbook_evidence(
             "reason_codes": ["INVALID_MANUAL_APPROVAL_RUNBOOK"],
         }
 
+    # The fullwidth colon in the character class is deliberate: runbooks may be
+    # written in Chinese, where the version label is followed by a fullwidth
+    # colon rather than an ASCII one.
     version_match = re.search(
-        r"(?im)^\s*(?:version|版本)\s*[:：]\s*([^\s]+)", content
+        r"(?im)^\s*(?:version|版本)\s*[:：]\s*([^\s]+)",  # noqa: RUF001
+        content,
     )
     normalized = content.lower()
     required_terms = (

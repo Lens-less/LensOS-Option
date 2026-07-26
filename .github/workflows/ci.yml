@@ -23,7 +23,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[test]"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff check crypto_options_report tools tests
       - run: python -m compileall -q crypto_options_report tools
       - run: node --version
       - run: python -m pytest -q

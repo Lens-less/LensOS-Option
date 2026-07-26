@@ -5,19 +5,50 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "crypto-options-research-console"
 version = "0.1.0"
-description = "Fail-closed crypto options research console"
+description = "Fail-closed, evidence-first crypto options research console"
 readme = "README.md"
 requires-python = ">=3.12"
+# Zero runtime dependencies: the CLI, HTTP API, and sidecars are stdlib-only by design.
 dependencies = []
+keywords = [
+    "options",
+    "crypto",
+    "deribit",
+    "research",
+    "evidence",
+    "fail-closed",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Typing :: Typed",
+]
+
+# TODO(release): choose a license before any public release. Add a LICENSE file,
+# `license = "<SPDX-ID>"`, and the matching OSI classifier. Until then this
+# project is "all rights reserved" by default and is not redistributable.
+
+[project.urls]
+Homepage = "https://github.com/Lens-less/LensOS-Option"
+Repository = "https://github.com/Lens-less/LensOS-Option"
+Issues = "https://github.com/Lens-less/LensOS-Option/issues"
+Changelog = "https://github.com/Lens-less/LensOS-Option/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9"]
+dev = ["pytest>=8,<9", "ruff>=0.9"]
 
 [project.scripts]
 crypto-options-report = "crypto_options_report.cli:main"
 crypto-options-report-api = "crypto_options_report.api:main"
 crypto-options-snapshot-sidecar = "crypto_options_report.snapshot_sidecar:main"
 crypto-options-account-snapshot-sidecar = "crypto_options_report.account_snapshot_sidecar:main"
+crypto-options-underlying-history = "crypto_options_report.underlying_history_tool:main"
 
 [tool.setuptools.packages.find]
 include = ["crypto_options_report*"]
@@ -33,7 +64,50 @@ crypto_options_report = [
     "static/evidence/assets/*.woff",
     "static/evidence/assets/*.woff2",
     "resources/*.md",
+    "py.typed",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+extend-exclude = ["web"]
+
+[tool.ruff.lint]
+select = [
+    "E4",   # import formatting
+    "E7",   # statement-level mistakes
+    "E9",   # syntax/IO errors
+    "F",    # pyflakes: unused/undefined names
+    "B",    # bugbear: likely bugs
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "SIM",  # simplification
+    "C4",   # comprehension clarity
+    "RUF",  # ruff-specific
+]
+ignore = [
+    # Line length is not enforced; several evidence/reason-code tables read
+    # better as wide literals than as wrapped ones.
+    "E501",
+    # `class X(str, Enum)` is deliberate: members must stay JSON-serializable
+    # as plain strings across the report contract and stored evidence.
+    "UP042",
+    # Guard clauses in the gating code are intentionally kept as separate
+    # nested `if`s: each one maps to one named admission/quality condition and
+    # collapsing them obscures which condition actually failed.
+    "SIM102",
+    # `list(row) + [value]` reads more clearly than unpacking in the numeric
+    # fitting code.
+    "RUF005",
+    # Explicit bounded counters are clearer than `enumerate()` where the count
+    # exists to enforce a hard record limit.
+    "SIM113",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally build deeply nested fixtures, close over loop variables
+# in single-iteration stub transports, and zip fixture rows against short
+# expectation lists.
+"tests/*" = ["B023", "B905", "SIM117"]

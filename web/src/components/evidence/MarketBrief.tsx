@@ -26,12 +26,13 @@ function FreshnessStatus({
       className="freshness-status"
       data-state={freshness.phase}
       aria-label="市场证据新鲜度"
-      aria-live="polite"
     >
       <span className="freshness-dot" aria-hidden="true" />
       <div>
         <span>市场证据</span>
-        <strong>{FRESHNESS_LABELS[freshness.phase]}</strong>
+        {/* Only the phase is announced. The age below re-renders every second,
+            so a live region there would read the counter aloud continuously. */}
+        <strong aria-live="polite">{FRESHNESS_LABELS[freshness.phase]}</strong>
       </div>
       <div>
         <span>数据年龄</span>

@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import { safeResearchReport, strategyResearchFixture, buildLoadedReport } from "./testFixtures";
 import {
   projectResearchReportForSidePanel,
+  selectContractComparison,
   selectReportFreshness,
   selectSidePanelViewModel,
   validateResearchReport,
 } from "./index";
+import type { ResearchReport } from "../contracts";
 
 describe("validateResearchReport", () => {
   it("accepts a fail-closed research report", () => {
@@ -97,6 +99,274 @@ describe("projectResearchReportForSidePanel", () => {
       JSON.stringify(fullPayload).length / 4,
     );
     expect(() => validateResearchReport(projected)).not.toThrow();
+  });
+
+  it("widens per-candidate scalars (strikes, expiry, delta, credit, surface quality) and strategy_selection", () => {
+    const payload = {
+      ...safeResearchReport,
+      candidate_research: {
+        call_credit_spreads: {
+          eligible: [
+            {
+              candidate_id: "BTC-7AUG26-71000-C->BTC-7AUG26-77000-C:spread",
+              sell_leg_instrument_name: "BTC-7AUG26-71000-C",
+              buy_leg_instrument_name: "BTC-7AUG26-77000-C",
+              sell_leg_strike_price: 71_000,
+              buy_leg_strike_price: 77_000,
+              expiry_date: "2026-08-07",
+              dte_days: 13.9,
+              model_delta: 0.087,
+              net_credit: 720,
+              spread_width: 6_000,
+              premium_currency: "USDC",
+              surface_quality: {
+                fit_quality_score: 0.9687,
+                no_arb_pass: true,
+                no_arb_error: 0.0001,
+              },
+              // Not requested for the panel; must not leak through.
+              filter_reason_codes: ["SHOULD_NOT_APPEAR"],
+            },
+          ],
+          review: [],
+          rejected: [],
+        },
+      },
+      strategy_research: {
+        ...strategyResearchFixture,
+        strategy_selection: {
+          selection_method: "pareto_frontier_then_lexicographic",
+          eligible_spread_count: 5,
+          ranked_candidate_ids: ["a", "b"],
+          ranking_dimensions: ["relative_value", "path_risk"],
+        },
+      },
+    };
+
+    const projected = projectResearchReportForSidePanel(payload);
+    const spread = projected.candidate_research?.call_credit_spreads?.eligible?.[0];
+
+    expect(spread?.sell_leg_strike_price).toBe(71_000);
+    expect(spread?.buy_leg_strike_price).toBe(77_000);
+    expect(spread?.expiry_date).toBe("2026-08-07");
+    expect(spread?.dte_days).toBe(13.9);
+    expect(spread?.model_delta).toBe(0.087);
+    expect(spread?.net_credit).toBe(720);
+    expect(spread?.spread_width).toBe(6_000);
+    expect(spread?.premium_currency).toBe("USDC");
+    expect(spread?.surface_quality?.fit_quality_score).toBe(0.9687);
+    expect(spread?.surface_quality?.no_arb_pass).toBe(true);
+    expect("filter_reason_codes" in (spread ?? {})).toBe(false);
+
+    expect(projected.strategy_research?.strategy_selection).toEqual({
+      selection_method: "pareto_frontier_then_lexicographic",
+      eligible_spread_count: 5,
+      ranked_candidate_ids: ["a", "b"],
+      ranking_dimensions: ["relative_value", "path_risk"],
+    });
+  });
+
+  it("trims ev_candidate_scanner to scalars, dropping dense evidence blobs and collapsing REJECT rows to a count", () => {
+    const rejectedRows = Array.from({ length: 200 }, (_, index) => ({
+      candidate_id: `rejected-${index}`,
+      structure_type: "call_credit_spread",
+      action: "REJECT",
+      ranking_score: null,
+      ev_after_cost_usdc: null,
+      executable_credit_usdc: null,
+      path_risk: { status: "unavailable" },
+      kill_conditions: [],
+      reason_codes: ["SOME_REASON_CODE_" + "x".repeat(64)],
+      edge_components: { smile_residual_richness: { value: 1, unit: "iv_points" } },
+      dominated_by: null,
+      losing_axes: [],
+    }));
+
+    const payload = {
+      ...safeResearchReport,
+      ev_candidate_scanner: {
+        status: "validated",
+        score_status: "UNCALIBRATED_RESEARCH_ONLY",
+        path_risk_evidence: { dense: "x".repeat(4096) },
+        ranking_basis: {
+          method: "pareto_frontier_then_lexicographic",
+          tie_break_order: ["relative_value", "path_risk"],
+          absolute_ev_available: true,
+        },
+        dominated_explanations: [{ dense: "x".repeat(4096) }],
+        ranked_candidates: [
+          {
+            candidate_id: "BTC-7AUG26-71000-C->BTC-7AUG26-77000-C:spread",
+            structure_type: "call_credit_spread",
+            action: "RESEARCH_ONLY",
+            ranking_score: 3.2,
+            ev_after_cost_usdc: 12.5,
+            executable_credit_usdc: 720,
+            fair_value_usdc: 700,
+            path_risk: {
+              status: "validated_historical",
+              p_touch: 0.2,
+              p_itm: 0.1,
+              cvar_95_usdc: -400,
+              authoritative_sample_size: 37,
+              sample_size_basis: "independent_windows",
+            },
+            kill_conditions: [],
+            edge_components: { dense: "x".repeat(4096) },
+            margin_snapshot: { dense: "x".repeat(4096) },
+            fair_iv_diagnostics: { dense: "x".repeat(4096) },
+            dominated_by: null,
+            losing_axes: [],
+          },
+          ...rejectedRows,
+        ],
+      },
+    };
+
+    const projected = projectResearchReportForSidePanel(payload) as ResearchReport & {
+      ev_candidate_scanner?: {
+        status?: string;
+        ranked_candidates: Array<Record<string, unknown>>;
+        rejected_count: number;
+      };
+    };
+
+    const scanner = projected.ev_candidate_scanner;
+    expect(scanner?.status).toBe("validated");
+    expect(scanner?.ranked_candidates).toHaveLength(1);
+    expect(scanner?.rejected_count).toBe(200);
+    const row = scanner?.ranked_candidates[0];
+    expect(row?.candidate_id).toBe(
+      "BTC-7AUG26-71000-C->BTC-7AUG26-77000-C:spread",
+    );
+    expect(row?.ev_after_cost_usdc).toBe(12.5);
+    expect(
+      (row?.path_risk as Record<string, unknown>)?.authoritative_sample_size,
+    ).toBe(37);
+    expect("edge_components" in (row ?? {})).toBe(false);
+    expect("fair_iv_diagnostics" in (row ?? {})).toBe(false);
+    expect("margin_snapshot" in (row ?? {})).toBe(false);
+    expect("path_risk_evidence" in (scanner ?? {})).toBe(false);
+    expect("dominated_explanations" in (scanner ?? {})).toBe(false);
+
+    expect(JSON.stringify(projected).length).toBeLessThan(
+      JSON.stringify(payload).length / 4,
+    );
+    expect(() => validateResearchReport(projected)).not.toThrow();
+  });
+});
+
+describe("selectContractComparison", () => {
+  const comparisonReport: ResearchReport = {
+    ...safeResearchReport,
+    strategy_research: {
+      ...strategyResearchFixture,
+      strategy_selection: {
+        selection_method: "pareto_frontier_then_lexicographic",
+        eligible_spread_count: 2,
+        ranked_candidate_ids: ["spread-a", "spread-b"],
+        ranking_dimensions: ["relative_value", "path_risk"],
+      },
+    },
+    candidate_research: {
+      call_credit_spreads: {
+        eligible: [
+          {
+            candidate_id: "spread-a",
+            sell_leg_instrument_name: "BTC-7AUG26-71000-C",
+            buy_leg_instrument_name: "BTC-7AUG26-77000-C",
+          },
+          {
+            candidate_id: "spread-b",
+            sell_leg_instrument_name: "BTC-7AUG26-73000-C",
+            buy_leg_instrument_name: "BTC-7AUG26-79000-C",
+          },
+        ],
+        review: [],
+        rejected: [],
+      },
+    },
+    ev_candidate_scanner: {
+      status: "validated",
+      score_status: "UNCALIBRATED_RESEARCH_ONLY",
+      ranking_basis: {
+        method: "pareto_frontier_then_lexicographic",
+        tie_break_order: ["relative_value", "path_risk"],
+        absolute_ev_available: true,
+      },
+      ranked_candidates: [
+        {
+          candidate_id: "spread-b",
+          structure_type: "call_credit_spread",
+          action: "RESEARCH_ONLY",
+          ranking_score: 5.1,
+          ev_after_cost_usdc: 40,
+          executable_credit_usdc: 900,
+          path_risk: { status: "validated_historical" },
+          kill_conditions: [],
+          dominated_by: null,
+          losing_axes: [],
+        },
+        {
+          candidate_id: "spread-a",
+          structure_type: "call_credit_spread",
+          action: "REVIEW",
+          ranking_score: 3.2,
+          ev_after_cost_usdc: 12.5,
+          executable_credit_usdc: 720,
+          path_risk: { status: "validated_historical" },
+          kill_conditions: [],
+          dominated_by: null,
+          losing_axes: [],
+        },
+      ],
+      rejected_count: 0,
+    },
+  } as unknown as ResearchReport;
+
+  it("locates the current contract's rank and computes signed deltas against it", () => {
+    const comparison = selectContractComparison(
+      comparisonReport,
+      "BTC-7AUG26-71000-C",
+    );
+
+    expect(comparison.totalRanked).toBe(2);
+    expect(comparison.currentRank).toBe(2);
+    expect(comparison.absoluteEvAvailable).toBe(true);
+    expect(comparison.rankingDimensions).toEqual([
+      "relative_value",
+      "path_risk",
+    ]);
+
+    const current = comparison.rows.find((row) => row.isCurrent);
+    expect(current?.candidateId).toBe("spread-a");
+    expect(current?.deltaVsCurrent).toBe(0);
+
+    const alternative = comparison.rows.find((row) => row.rank === 1);
+    expect(alternative?.candidateId).toBe("spread-b");
+    expect(alternative?.deltaVsCurrent).toBe(27.5);
+    expect(alternative?.isCurrent).toBe(false);
+  });
+
+  it("reports no current rank when the instrument in view is not on the ranked chain", () => {
+    const comparison = selectContractComparison(
+      comparisonReport,
+      "BTC-7AUG26-99000-C",
+    );
+
+    expect(comparison.currentRank).toBeNull();
+    expect(comparison.rows.every((row) => !row.isCurrent)).toBe(true);
+    expect(comparison.rows.every((row) => row.deltaVsCurrent === null)).toBe(
+      true,
+    );
+  });
+
+  it("returns an empty comparison when the scanner has not produced ranked candidates", () => {
+    const comparison = selectContractComparison(safeResearchReport, null);
+
+    expect(comparison.totalRanked).toBe(0);
+    expect(comparison.currentRank).toBeNull();
+    expect(comparison.rows).toEqual([]);
   });
 });
 

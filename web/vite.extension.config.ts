@@ -4,6 +4,10 @@ import react from "@vitejs/plugin-react";
 import { type Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
+// Toolbar and extensions-page icons referenced by manifest.json. Without these
+// in the bundle Chrome falls back to the generic puzzle piece.
+const EXTENSION_ICONS = [16, 32, 48, 128];
+
 function emitManifest(): Plugin {
   return {
     name: "emit-extension-manifest",
@@ -17,6 +21,14 @@ function emitManifest(): Plugin {
         fileName: "manifest.json",
         source: manifest,
       });
+      for (const size of EXTENSION_ICONS) {
+        const name = `icon-${size}.png`;
+        this.emitFile({
+          type: "asset",
+          fileName: `icons/${name}`,
+          source: readFileSync(resolve(__dirname, "extension/icons", name)),
+        });
+      }
     },
     writeBundle() {
       const distDir = resolve(__dirname, "dist/chrome-extension");

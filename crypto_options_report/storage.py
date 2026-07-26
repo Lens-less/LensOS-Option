@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 from typing import Any, BinaryIO
 
-
 _REPLACE_RETRY_DELAYS_SECONDS = (0.01, 0.02, 0.04)
 
 

@@ -16,8 +16,17 @@ Report vulnerabilities privately through the repository's GitHub Security Adviso
 
 The service intentionally emits `research_only=true`, keeps every trading mode gate closed, and contains no live-order adapter.
 
-## Immutable audit provenance
+## Repository hygiene
 
-`docs/automation/archive/options-platform-v1/` and `docs/automation/evidence-store/` preserve exact cutover evidence whose SHA-256 identities are part of the V2 migration fence. They may contain retired internal coordination identifiers and historical machine paths. Those values are not external credentials, are not read by the production service, and must never be reused as authorization.
+Internal build-process coordination artifacts (agent handoffs, a content-addressed
+evidence store, and controller state) were removed from the working tree on
+2026-07-26 and are excluded by `.gitignore`. They contained retired internal
+identifiers and historical machine paths — not external credentials — and were
+never read by the production service.
 
-Keep this repository private while those byte-for-byte audit artifacts are retained. New runtime state, active tokens, credentials, logs, or machine configuration must never be added to either directory. Do not redact an existing content-addressed artifact in place; create a new version and update its digest references through the migration tooling.
+Those artifacts remain reachable in git history prior to that cleanup. Before
+making this repository public, rewrite history to purge them, or accept that the
+retired internal identifiers stay visible in old commits.
+
+Never commit runtime state, active tokens, credentials, logs, or machine
+configuration.

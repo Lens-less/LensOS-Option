@@ -1,7 +1,6 @@
-import json
 import http.client
 import io
-import re
+import json
 import socket
 import subprocess
 import sys
@@ -19,13 +18,16 @@ from crypto_options_report.api import (
     ResearchReportHandler,
     RuntimeConfig,
     _payload_for_path,
-    build_parser as build_api_parser,
     dashboard_page_html,
     evidence_page_html,
     readiness_payload,
     serve,
 )
-from crypto_options_report.cli import build_parser, main as cli_main
+from crypto_options_report.api import (
+    build_parser as build_api_parser,
+)
+from crypto_options_report.cli import build_parser
+from crypto_options_report.cli import main as cli_main
 from crypto_options_report.contract import generate_research_report, report_shape
 from crypto_options_report.full_surface import (
     API_ROUTES,

@@ -1,11 +1,11 @@
 import http.client
 import json
-from datetime import datetime, timedelta
-from pathlib import Path
 import subprocess
 import sys
 import threading
 import unittest
+from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 from crypto_options_report.alerts import (
@@ -23,7 +23,6 @@ from crypto_options_report.api import (
     build_api_report,
 )
 from crypto_options_report.market_data import load_snapshot_fixture
-
 
 FIXED_CLOCK = "2026-07-07T00:01:30Z"
 FIXTURE_PATH = (

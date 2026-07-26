@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞报告
+    url: https://github.com/Lens-less/LensOS-Option/security/advisories/new
+    about: 请通过 GitHub Security Advisory 私下报告，不要提交公开 issue。

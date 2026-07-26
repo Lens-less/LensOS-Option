@@ -13,11 +13,11 @@ import json
 import math
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from .pnl import inverse_long_call_settlement_coin
 
@@ -181,7 +181,7 @@ class CanonicalHistoricalQuote:
 
 def utc_timestamp() -> str:
     return (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
@@ -562,7 +562,7 @@ def _map_instrument_metadata(
         month=month,
         day=int(match.group("day")),
         hour=8,
-        tzinfo=timezone.utc,
+        tzinfo=UTC,
     )
     option_type = "CALL" if match.group("option") == "C" else "PUT"
     strike = float(match.group("strike"))
@@ -961,7 +961,7 @@ def _parse_timestamp_object(value: str) -> datetime:
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
         raise ValueError("timestamp must include an explicit timezone")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def _isoformat(value: datetime) -> str:

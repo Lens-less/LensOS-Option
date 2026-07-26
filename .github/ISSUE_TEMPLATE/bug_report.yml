@@ -1,0 +1,69 @@
+name: Bug report / 缺陷报告
+description: 报告一个可复现的缺陷
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请不要在 issue 中粘贴任何凭证、账户数据或私有行情快照。
+        安全漏洞请通过 GitHub Security Advisory 私下报告，参见 [SECURITY.md](../../SECURITY.md)。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述
+      description: 实际发生了什么，你期望发生什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: |
+        请给出完整命令。本项目是 replay-first 的：如果能附上可复现的
+        fixture 路径和固定的 `--generated-at`，定位会快很多。
+      placeholder: |
+        1. python -m crypto_options_report.cli analysis --snapshot-fixture ... --generated-at 2026-07-07T00:01:30Z
+        2. ...
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关输出
+      description: 报错信息、退出码或 API 响应（请先脱敏）。
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 包版本或 commit SHA
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 受影响的界面
+      multiple: true
+      options:
+        - CLI
+        - HTTP API
+        - Evidence Console (Web)
+        - Chrome Side Panel
+        - Sidecar (market / account)
+        - 容器 / 部署
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      placeholder: "例：Windows 11 / Python 3.13.1 / Node 22.11"
+    validations:
+      required: true

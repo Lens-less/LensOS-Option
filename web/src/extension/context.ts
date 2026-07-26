@@ -37,11 +37,16 @@ function scanInstrument(...candidates: Array<string | null | undefined>): string
 export function detectDeribitContext({
   href,
   documentTitle,
+  structuralText,
   bodyText,
   nowMs = Date.now(),
 }: {
   href: string;
   documentTitle?: string;
+  /** Text scraped from selectors Deribit marks as instrument-identifying
+   * (e.g. `[data-instrument-name]`). Treated as higher confidence than a
+   * generic heading/body-text scan. */
+  structuralText?: string;
   bodyText?: string;
   nowMs?: number;
 }): DeribitContext {
@@ -57,19 +62,50 @@ export function detectDeribitContext({
       href: url.href,
       route: url.pathname,
       source: "url",
+      confidence: "url",
       instrument: queryInstrument,
       underlying: underlyingFromInstrument(queryInstrument),
       detectedAt: nowMs,
     };
   }
 
-  const domInstrument = scanInstrument(documentTitle, bodyText);
+  const urlUnderlying = underlyingFromUrl(url);
+  const structuralInstrument = scanInstrument(structuralText);
+  const heuristicInstrument = structuralInstrument
+    ? null
+    : scanInstrument(documentTitle, bodyText);
+
+  let instrument = structuralInstrument ?? heuristicInstrument;
+  let confidence: DeribitContext["confidence"] = structuralInstrument
+    ? "dom_structural"
+    : heuristicInstrument
+      ? "dom_heuristic"
+      : "none";
+  let underlying =
+    (instrument && underlyingFromInstrument(instrument)) ?? urlUnderlying;
+
+  if (instrument && urlUnderlying && underlying !== urlUnderlying) {
+    // The scraped DOM text disagrees with the underlying the URL itself
+    // names. The URL is the more reliable signal for the underlying, so it
+    // wins outright; the instrument's own confidence is demoted one tier
+    // rather than published at full trust, and a heuristic-tier disagreement
+    // is untrustworthy enough to drop the instrument outright.
+    underlying = urlUnderlying;
+    if (confidence === "dom_structural") {
+      confidence = "dom_heuristic";
+    } else {
+      confidence = "none";
+      instrument = null;
+    }
+  }
+
   return {
     href: url.href,
     route: url.pathname,
-    source: domInstrument ? "dom" : "unknown",
-    instrument: domInstrument,
-    underlying: underlyingFromInstrument(domInstrument) ?? underlyingFromUrl(url),
+    source: instrument ? "dom" : "unknown",
+    confidence,
+    instrument,
+    underlying,
     detectedAt: nowMs,
   };
 }

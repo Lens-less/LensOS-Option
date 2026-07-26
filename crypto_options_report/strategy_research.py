@@ -618,7 +618,6 @@ def _build_spread_playbook(
     )
     sell_strike = _finite(candidate.get("sell_leg_strike_price"))
     buy_strike = _finite(candidate.get("buy_leg_strike_price"))
-    credit_coin = _finite(candidate.get("net_credit"))
     expected_move = _finite(volatility.get("expected_move_usd"))
     economics = _spread_economics(
         candidate=candidate,
@@ -1188,7 +1187,10 @@ def _why_not(
         reasons.append("Regime evidence has not been promoted.")
     if account_status.get("status") != "available":
         reasons.append("A fresh read-only account snapshot is unavailable.")
-    if ev_candidate_scanner.get("status") != "available":
+    # The scanner's vocabulary is blocked/validated/unavailable. Comparing
+    # against "available" (the account_status vocabulary above) never matched,
+    # so this reason was reported unconditionally.
+    if ev_candidate_scanner.get("status") != "validated":
         reasons.append("Validated path-risk and EV ranking are unavailable.")
     if calibration_status.get("status") != "calibrated":
         reasons.append("Walk-forward calibration is not promoted.")

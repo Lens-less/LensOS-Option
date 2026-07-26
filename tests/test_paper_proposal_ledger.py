@@ -1,8 +1,8 @@
-from copy import deepcopy
 import re
 import tempfile
-from pathlib import Path
 import unittest
+from copy import deepcopy
+from pathlib import Path
 
 from crypto_options_report.contract import (
     generate_research_report,

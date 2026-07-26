@@ -1,0 +1,159 @@
+"""Capture has to cover both sides of the chain, and has to be repeatable.
+
+Two collector defects blocked the expanded universe from ever seeing real data.
+The selection policy filtered to calls, which was coherent while the analysis
+was call-only but silently starved the put tables afterwards — a live two-sided
+chain would have produced a one-sided report with nothing in the artifact saying
+why. And the ticker budget was smaller than one expiry's two-sided quota, so
+even an unfiltered policy could not have filled both sides of a single expiry.
+
+The second half of the file covers the series capture, which exists because the
+signal validation needs many captures over time and a fixed `--output` path
+would have each run overwrite the last.
+"""
+
+from __future__ import annotations
+
+import argparse
+import tempfile
+import unittest
+from pathlib import Path
+
+from crypto_options_report.cli import _snapshot_output_path
+from crypto_options_report.market_data import (
+    DEFAULT_QUALITY_LIMITS,
+    DEFAULT_TICKER_REQUEST_BUDGET,
+    _select_research_summaries,
+)
+
+CAPTURED_AT = "2026-07-26T00:00:00Z"
+SPOT = 100_000.0
+
+
+def _summary(strike: float, option_type: str, expiry_token: str) -> dict:
+    suffix = "C" if option_type == "call" else "P"
+    price = 0.01 if option_type == "call" else 0.012
+    return {
+        "instrument_name": f"BTC-{expiry_token}-{int(strike)}-{suffix}",
+        "bid_price": price,
+        "ask_price": price * 1.05,
+        "mark_price": price,
+        "underlying_price": SPOT,
+        "open_interest": 100.0,
+    }
+
+
+def _chain(expiry_tokens: tuple[str, ...] = ("14AUG26", "28AUG26")) -> list[dict]:
+    rows = []
+    for token in expiry_tokens:
+        for offset in range(12):
+            rows.append(_summary(105_000 + offset * 2_000, "call", token))
+            rows.append(_summary(95_000 - offset * 2_000, "put", token))
+    return rows
+
+
+class TwoSidedSelectionTests(unittest.TestCase):
+    def test_both_option_types_are_selected(self) -> None:
+        selected, policy = _select_research_summaries(
+            _chain(),
+            captured_at=CAPTURED_AT,
+            instrument_limit=DEFAULT_TICKER_REQUEST_BUDGET,
+        )
+
+        types = {row["instrument_name"].rsplit("-", 1)[1] for row in selected}
+        self.assertEqual(types, {"C", "P"})
+        self.assertEqual(policy["preferred_option_types"], ["call", "put"])
+        self.assertEqual(policy["stratification"], "expiry_and_option_type")
+        self.assertIs(policy["fallback_used"], False)
+
+    def test_each_side_reaches_the_per_expiry_quota(self) -> None:
+        minimum = int(DEFAULT_QUALITY_LIMITS["min_valid_quotes_per_expiry"])
+
+        selected, _ = _select_research_summaries(
+            _chain(("14AUG26",)),
+            captured_at=CAPTURED_AT,
+            instrument_limit=DEFAULT_TICKER_REQUEST_BUDGET,
+        )
+
+        calls = [row for row in selected if row["instrument_name"].endswith("-C")]
+        puts = [row for row in selected if row["instrument_name"].endswith("-P")]
+        self.assertGreaterEqual(len(calls), minimum)
+        self.assertGreaterEqual(len(puts), minimum)
+
+    def test_the_budget_covers_a_two_sided_expiry(self) -> None:
+        """At the old budget of 20 this quota could not be met at all."""
+        minimum = int(DEFAULT_QUALITY_LIMITS["min_valid_quotes_per_expiry"])
+
+        self.assertGreaterEqual(DEFAULT_TICKER_REQUEST_BUDGET, 2 * minimum)
+
+    def test_put_strikes_are_chosen_out_of_the_money(self) -> None:
+        """The call band applied to puts would select deep in-the-money strikes."""
+        selected, policy = _select_research_summaries(
+            _chain(("14AUG26",)),
+            captured_at=CAPTURED_AT,
+            instrument_limit=DEFAULT_TICKER_REQUEST_BUDGET,
+        )
+
+        puts = [row for row in selected if row["instrument_name"].endswith("-P")]
+        self.assertTrue(puts)
+        for row in puts:
+            strike = float(row["instrument_name"].split("-")[2])
+            with self.subTest(instrument=row["instrument_name"]):
+                self.assertLess(strike, SPOT)
+        self.assertEqual(policy["preferred_put_moneyness"], [0.7, 1.0])
+
+
+class SeriesCaptureNamingTests(unittest.TestCase):
+    def _args(self, **kwargs) -> argparse.Namespace:
+        base = {"output": None, "output_dir": None}
+        base.update(kwargs)
+        return argparse.Namespace(**base)
+
+    def test_explicit_output_is_used_verbatim(self) -> None:
+        path = _snapshot_output_path(
+            self._args(output="artifacts/one.json"),
+            {"captured_at": CAPTURED_AT, "currency": "BTC"},
+        )
+
+        self.assertEqual(path, "artifacts/one.json")
+
+    def test_series_capture_is_named_by_capture_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = _snapshot_output_path(
+                self._args(output_dir=directory),
+                {"captured_at": CAPTURED_AT, "currency": "BTC"},
+            )
+
+            self.assertEqual(
+                Path(path).name, "btc-chain-20260726T000000.json"
+            )
+            self.assertTrue(Path(path).parent.is_dir())
+
+    def test_two_captures_at_different_times_do_not_collide(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            first = _snapshot_output_path(
+                self._args(output_dir=directory),
+                {"captured_at": "2026-07-26T00:00:00Z", "currency": "BTC"},
+            )
+            second = _snapshot_output_path(
+                self._args(output_dir=directory),
+                {"captured_at": "2026-07-27T00:00:00Z", "currency": "BTC"},
+            )
+
+            self.assertNotEqual(first, second)
+
+    def test_the_directory_is_created_when_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "nested" / "series"
+
+            path = _snapshot_output_path(
+                self._args(output_dir=str(target)),
+                {"captured_at": CAPTURED_AT, "currency": "ETH"},
+            )
+
+            self.assertTrue(target.is_dir())
+            self.assertEqual(Path(path).name, "eth-chain-20260726T000000.json")
+
+
+if __name__ == "__main__":
+    unittest.main()

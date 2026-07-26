@@ -9,14 +9,14 @@ import statistics
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .historical import (
     build_historical_reconciliation_report,
-    load_historical_fixture,
     query_eligible_canonical_quotes,
 )
 from .pnl import delivery_fee_linear, option_fee_linear
@@ -42,7 +42,7 @@ class CandidateQuote:
 
 def utc_timestamp() -> str:
     return (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
@@ -721,7 +721,7 @@ def _dte_days(timestamp: str, expiry: str) -> float:
 
 
 def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
 def _max_drawdown(equity_curve: list[dict[str, Any]]) -> float:

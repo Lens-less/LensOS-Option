@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ._canonical import canonical_json_bytes
 from .storage import (
     atomic_write_json,
     read_json_object_from_regular_file,
@@ -314,13 +315,7 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
 
 
 def _canonical_json(payload: dict[str, Any]) -> bytes:
-    return json.dumps(
-        payload,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    return canonical_json_bytes(payload)
 
 
 def _domain_separated_message(payload: dict[str, Any], *, domain: str) -> bytes:

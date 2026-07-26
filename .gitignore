@@ -11,12 +11,18 @@ codex_review_output.txt
 .workflow/*.png
 .workflow/cdp-*.json
 .workflow/tmp/
-docs/automation/options-platform-project-state.json.lock
-docs/automation/.options-platform-project-state.json.*.tmp
 .codex/
 .omx/
 .coordination-evidence/
 .workflow/ultracode/
+
+# Internal agent-coordination scaffolding. Kept out of the product repo; the
+# history before the 2026-07-26 cleanup still contains it.
+.agents/
+docs/automation/
+issues/
+tools/options_coordination.py
+tools/options_coordination_v2/
 artifacts/
 build/
 dist/
@@ -24,9 +30,8 @@ dist/
 web/node_modules/
 web/.vite/
 web/coverage/
-# Superseded local design experiments. The selected 2026-07-24 evidence is tracked.
-design-previews/2026-07-15-homepage-refactor/
-design-previews/2026-07-15-homepage-refactor-v2/
+# Local design exploration output, not product source.
+design-previews/
 *.log
 *.db
 *.sqlite

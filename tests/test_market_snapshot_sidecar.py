@@ -1,15 +1,16 @@
-from contextlib import redirect_stderr
 import io
 import json
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from pathlib import Path
 from unittest import mock
 
-from crypto_options_report import snapshot_sidecar as refresh_market_snapshot
 from crypto_options_report import market_data
+from crypto_options_report import snapshot_sidecar as refresh_market_snapshot
 from crypto_options_report.market_data import (
+    DEFAULT_TICKER_REQUEST_BUDGET,
     MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
     MAX_MARKET_HTTP_RESPONSE_BYTES,
     MAX_MARKET_SNAPSHOT_BYTES,
@@ -102,16 +103,15 @@ class MarketSnapshotSidecarTests(unittest.TestCase):
                     "CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_HMAC_KEY_FILE": relative_alias,
                 },
                 clear=True,
+            ), self.assertRaisesRegex(
+                SidecarAuthUnavailable,
+                "distinct key files",
             ):
-                with self.assertRaisesRegex(
-                    SidecarAuthUnavailable,
-                    "distinct key files",
-                ):
-                    write_snapshot_trust_state(
-                        output,
-                        evidence,
-                        expected_snapshot=snapshot,
-                    )
+                write_snapshot_trust_state(
+                    output,
+                    evidence,
+                    expected_snapshot=snapshot,
+                )
 
     def test_market_runtime_uses_only_its_domain_specific_hmac_key(self):
         snapshot = {
@@ -140,16 +140,15 @@ class MarketSnapshotSidecarTests(unittest.TestCase):
                 os.environ,
                 {"CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_HMAC_KEY_FILE": str(key_file)},
                 clear=True,
+            ), self.assertRaisesRegex(
+                SidecarAuthUnavailable,
+                MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
             ):
-                with self.assertRaisesRegex(
-                    SidecarAuthUnavailable,
-                    MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
-                ):
-                    write_snapshot_trust_state(
-                        output,
-                        evidence,
-                        expected_snapshot=snapshot,
-                    )
+                write_snapshot_trust_state(
+                    output,
+                    evidence,
+                    expected_snapshot=snapshot,
+                )
 
             with mock.patch.dict(
                 os.environ,
@@ -306,7 +305,7 @@ class MarketSnapshotSidecarTests(unittest.TestCase):
                     {
                         "currency": "BTC",
                         "base_url": "https://www.deribit.com",
-                        "instrument_limit": 20,
+                        "instrument_limit": DEFAULT_TICKER_REQUEST_BUDGET,
                     }
                 ],
                 collector_calls,
@@ -444,8 +443,14 @@ class MarketSnapshotSidecarTests(unittest.TestCase):
             (["--interval", "0"], "interval must be finite and greater than zero"),
             (["--interval", "nan"], "interval must be finite and greater than zero"),
             (["--interval", "inf"], "interval must be finite and greater than zero"),
-            (["--instrument-limit", "0"], "instrument_limit must be between 1 and 20"),
-            (["--instrument-limit", "21"], "instrument_limit must be between 1 and 20"),
+            (
+                ["--instrument-limit", "0"],
+                f"instrument_limit must be between 1 and {DEFAULT_TICKER_REQUEST_BUDGET}",
+            ),
+            (
+                ["--instrument-limit", str(DEFAULT_TICKER_REQUEST_BUDGET + 1)],
+                f"instrument_limit must be between 1 and {DEFAULT_TICKER_REQUEST_BUDGET}",
+            ),
             (["--currency", "BTC/USD"], "currency must contain only letters and digits"),
             (["--currency", "比特币"], "currency must contain only letters and digits"),
             (

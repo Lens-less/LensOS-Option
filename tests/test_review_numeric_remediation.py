@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import json
 import math
-from pathlib import Path
 import unittest
+from copy import deepcopy
+from pathlib import Path
 
 from crypto_options_report.historical import build_historical_reconciliation_report
 from crypto_options_report.path_risk import build_path_risk_distribution_report
 from crypto_options_report.regime import build_regime_permission_state
 from crypto_options_report.surface import build_vol_surface_and_candidate_research
-
 
 GENERATED_AT = "2026-07-07T00:01:30Z"
 

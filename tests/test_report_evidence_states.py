@@ -1,8 +1,11 @@
-from copy import deepcopy
 import unittest
+from copy import deepcopy
 
 from crypto_options_report.calibration import build_walk_forward_calibration_report
-from crypto_options_report.contract import generate_research_report, validate_report_contract
+from crypto_options_report.contract import (
+    generate_research_report,
+    validate_report_contract,
+)
 from crypto_options_report.full_surface import validate_full_system_surface_report
 from crypto_options_report.market_data import load_snapshot_fixture
 

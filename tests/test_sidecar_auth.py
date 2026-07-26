@@ -1,8 +1,8 @@
 import json
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from crypto_options_report.sidecar_auth import (
@@ -14,8 +14,8 @@ from crypto_options_report.sidecar_auth import (
     authenticate_sidecar_payload,
     canonical_payload_sha256,
     is_authenticated_sidecar_payload,
-    sign_mapping,
     sidecar_auth_state_path,
+    sign_mapping,
     verify_mapping,
     write_sidecar_auth_state,
 )
@@ -130,15 +130,14 @@ class SidecarAuthenticationTests(unittest.TestCase):
                     "CRYPTO_OPTIONS_MARKET_SNAPSHOT_HMAC_KEY_FILE": relative_alias,
                 },
                 clear=True,
+            ), self.assertRaisesRegex(
+                SidecarAuthUnavailable,
+                "distinct key files",
             ):
-                with self.assertRaisesRegex(
-                    SidecarAuthUnavailable,
-                    "distinct key files",
-                ):
-                    write_sidecar_auth_state(
-                        payload_path,
-                        expected_payload=payload,
-                    )
+                write_sidecar_auth_state(
+                    payload_path,
+                    expected_payload=payload,
+                )
 
     def test_account_runtime_uses_only_its_domain_specific_key_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -157,15 +156,14 @@ class SidecarAuthenticationTests(unittest.TestCase):
                 os.environ,
                 {"CRYPTO_OPTIONS_MARKET_SNAPSHOT_HMAC_KEY_FILE": str(key_file)},
                 clear=True,
+            ), self.assertRaisesRegex(
+                SidecarAuthUnavailable,
+                ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV,
             ):
-                with self.assertRaisesRegex(
-                    SidecarAuthUnavailable,
-                    ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV,
-                ):
-                    write_sidecar_auth_state(
-                        payload_path,
-                        expected_payload=payload,
-                    )
+                write_sidecar_auth_state(
+                    payload_path,
+                    expected_payload=payload,
+                )
 
             with mock.patch.dict(
                 os.environ,

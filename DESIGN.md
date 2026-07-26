@@ -370,3 +370,70 @@ place and are not extended.
 - P2 owns real historical/OOS evidence, model promotion and rollback, read-only
   account evidence, venue margin simulation, and incremental portfolio veto.
 - P3 execution remains expressly unauthorized.
+
+## 14. Research Workbench Surface
+
+The workbench is the mining-and-understanding surface. The Evidence Console
+answers "is today's evidence trustworthy"; the workbench answers "which strike
+on this chain is best priced, and why does it rank there".
+
+### 14.1 Two claims, never merged
+
+Every screen must keep these visually and verbally distinct:
+
+- **Relative value** — how this strike is priced against its own smile.
+  Available from the current chain alone.
+- **Absolute expected value** — credit minus expected payout minus fees.
+  Requires a realized-return distribution.
+
+A candidate may carry the first and not the second. When
+`ev_after_cost_usdc` is null the cell shows an explicit "no validated path
+evidence" state. Never `0`, never blank, never an em dash that could read as
+zero.
+
+`expected_payout_usdc` is the seller's expected **cost**. Any label implying it
+is profit is a defect.
+
+### 14.2 Ranking is Pareto, not a score
+
+The frontier is candidates no same-structure rival dominates. Within it, order
+comes from the published `tie_break_order`. The UI must not present a single
+blended number as "the score" — the product deliberately refuses to weight
+incommensurable components.
+
+Because of this, "why is it here" has two distinct answers, and the detail view
+must show whichever applies:
+
+- Dominated: names the rival and the axes it lost on.
+- On the frontier: names the tie-break position.
+
+### 14.3 Sample size
+
+Confidence is read off `authoritative_sample_size` — independent,
+non-overlapping windows. The similarity effective sample size that appears
+inside path sampling is overlap-blind and typically an order of magnitude
+larger; it must never be surfaced as confidence.
+
+### 14.4 Filters narrow, they never promote
+
+Screener controls may hide rows within a server-assigned `action`. No control
+may move a candidate between `RESEARCH_ONLY` / `REVIEW` / `REJECT`. A rejected
+candidate stays visibly rejected however the dials move, so "how close was it"
+stays answerable without becoming "make it eligible".
+
+### 14.5 Empty is not blocked
+
+- **Blocked** — evidence itself is unavailable. Controls disabled, danger tone,
+  no reset affordance, because there is nothing to reset your way out of.
+- **Empty** — filters excluded everything. Muted tone, honest counts, and a
+  reset control.
+
+These must never be confusable at a glance.
+
+### 14.6 Payoff curve
+
+Hand-drawn SVG, per contract, no charting library. A short call renders its loss
+side as an explicitly unbounded tail — never a finite floor, which would imply a
+maximum loss that does not exist. A credit spread caps at width minus credit.
+Mark spot and breakeven; label the vertical axis as per-contract P&L so it can
+never be read as a position result.

@@ -40,13 +40,12 @@ class ReadRegularFileBytesTests(unittest.TestCase):
             with patch(
                 "crypto_options_report.storage.os.fstat",
                 return_value=types.SimpleNamespace(st_mode=stat.S_IFIFO),
-            ):
-                with self.assertRaisesRegex(ValueError, "must be a regular file"):
-                    read_regular_file_bytes(
-                        candidate,
-                        max_bytes=8,
-                        description="state file",
-                    )
+            ), self.assertRaisesRegex(ValueError, "must be a regular file"):
+                read_regular_file_bytes(
+                    candidate,
+                    max_bytes=8,
+                    description="state file",
+                )
 
 
 class ReadStreamBytesBoundedTests(unittest.TestCase):

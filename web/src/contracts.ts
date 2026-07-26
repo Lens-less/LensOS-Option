@@ -344,6 +344,121 @@ export interface ReleasePrerequisite {
   reason_codes?: string[];
 }
 
+export type EdgeComponentStatus = "OK" | "CAUTION" | "UNKNOWN" | "BLOCKED";
+
+export interface EdgeComponent {
+  value?: number | null;
+  unit?: string | null;
+  status: EdgeComponentStatus;
+  reason_code?: string | null;
+  direction?: string | null;
+}
+
+export interface FairIvDiagnostics {
+  market_mark_iv?: number | null;
+  surface_fitted_iv?: number | null;
+  residual_iv_points?: number | null;
+  residual_status?: string | null;
+  measure?: string | null;
+}
+
+export interface CandidatePathRisk {
+  status?: string;
+  p_touch?: number | null;
+  p_itm?: number | null;
+  cvar_95_usdc?: number | null;
+  cvar_99_usdc?: number | null;
+  authoritative_sample_size?: number | null;
+  sample_size_basis?: string | null;
+}
+
+export interface MarginSnapshot {
+  status?: string;
+  basis?: string | null;
+  reference_margin_usdc?: number | null;
+  account_specific?: boolean;
+}
+
+export interface HazardZone {
+  breakeven_cushion_expected_moves?: number | null;
+  risk_neutral_p_itm?: number | null;
+  physical_probability_available?: boolean;
+}
+
+export interface ModelledFees {
+  basis?: string | null;
+  entry_fee_usdc?: number | null;
+  expected_delivery_fee_usdc?: number | null;
+  total_usdc?: number | null;
+}
+
+export interface AbsoluteEv {
+  status?: string;
+  ev_after_cost_usdc?: number | null;
+  entry_credit_usdc?: number | null;
+  expected_payout_usdc?: number | null;
+  modelled_fees_usdc?: ModelledFees;
+  p_touch?: number | null;
+  p_itm?: number | null;
+  cvar_95_usdc?: number | null;
+  cvar_99_usdc?: number | null;
+  authoritative_sample_size?: number | null;
+  sample_size_basis?: string | null;
+  evidence_class?: string | null;
+  nav_relative_metrics_available?: boolean;
+  regime_similarity_applied?: boolean;
+}
+
+export type CandidateAction = "RESEARCH_ONLY" | "REVIEW" | "REJECT";
+
+export interface DominatedExplanation {
+  candidate_id: string;
+  structure_type?: string | null;
+  dominated_by?: string | null;
+  losing_axes?: string[];
+}
+
+export interface RankedCandidate {
+  candidate_id: string;
+  structure_type?: string | null;
+  action: CandidateAction;
+  score_status?: string | null;
+  ranking_score?: number | null;
+  premium_usdc?: number | null;
+  executable_credit_usdc?: number | null;
+  fair_value_usdc?: number | null;
+  ev_after_cost_usdc?: number | null;
+  dte_days?: number | null;
+  model_delta?: number | null;
+  expiry_date?: string | null;
+  fair_iv_diagnostics?: FairIvDiagnostics;
+  path_risk?: CandidatePathRisk;
+  margin_snapshot?: MarginSnapshot;
+  hazard_zone?: HazardZone;
+  kill_conditions?: string[];
+  reason_codes?: string[];
+  edge_components?: Record<string, EdgeComponent> | null;
+  dominated_by?: string | null;
+  losing_axes?: string[];
+  absolute_ev?: AbsoluteEv;
+}
+
+export interface RankingBasis {
+  method?: string;
+  tie_break_order?: string[];
+  dominance_scope?: string;
+  absolute_ev_available?: boolean;
+}
+
+export interface EvCandidateScanner {
+  status: "unavailable" | "blocked" | "validated";
+  score_status?: string;
+  reason_code?: string | null;
+  ranking_basis?: RankingBasis;
+  dominated_explanations?: DominatedExplanation[];
+  ranked_candidates?: RankedCandidate[];
+}
+
 export interface ResearchReport {
   schema_version: "research_report.v1";
   generated_at?: string | null;
@@ -398,6 +513,16 @@ export interface ResearchReport {
   };
   candidate_research?: CandidateResearch;
   strategy_research?: StrategyResearch;
+  /**
+   * Raw, not-yet-formally-contracted scanner payload. A separate module
+   * (`report/projection.ts`) already narrows this defensively for the side
+   * panel with its own local types; keep the canonical `ResearchReport`
+   * shape loose here so neither consumer's narrowing conflicts with the
+   * other's. The Research Workbench narrows this itself in
+   * `components/workbench/candidateModel.ts` using the `EvCandidateScanner`
+   * family of types exported below.
+   */
+  ev_candidate_scanner?: unknown;
   portfolio_risk?: {
     final_action?: string;
     final_signal?: {

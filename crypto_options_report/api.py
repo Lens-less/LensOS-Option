@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from contextvars import ContextVar
 import hmac
 import http.client
 import ipaddress
@@ -17,8 +16,9 @@ import sys
 import threading
 import time
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -33,8 +33,8 @@ from .account_risk import (
 from .analysis_run import AnalysisRecord, build_analysis_record
 from .evidence_store import (
     BacktestIdempotencyConflict,
-    BacktestJobSubmissionFailed,
     BacktestJobService,
+    BacktestJobSubmissionFailed,
     BacktestQueueFull,
     empty_backtest_lookup,
     load_backtest_evidence,
@@ -43,12 +43,15 @@ from .full_surface import build_recommendation_projection
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     HTTP_MAX_INSTRUMENT_LIMIT,
-    default_http_fixture_roots,
     build_market_data_status,
+    default_http_fixture_roots,
     fetch_deribit_option_chain_snapshot,
     load_snapshot_fixture,
+    load_underlying_history_fixture,
     snapshot_trust_state_path,
     validate_deribit_base_url,
+)
+from .market_data import (
     utc_timestamp as market_utc_timestamp,
 )
 from .sidecar_auth import (
@@ -204,6 +207,7 @@ class RuntimeConfig:
     allow_live_fetch: bool = False
     access_log: bool | None = None
     historical_fixture: str | None = None
+    underlying_history_fixture: str | None = None
     backtest_artifact_dir: str | None = None
     paper_ledger_path: str | None = None
     manual_approval_runbook_path: str | None = None
@@ -216,7 +220,7 @@ class RuntimeConfig:
     def access_logging(self) -> bool:
         return self.production if self.access_log is None else self.access_log
 
-    def validate(self, *, check_inputs: bool = True) -> "RuntimeConfig":
+    def validate(self, *, check_inputs: bool = True) -> RuntimeConfig:
         if self.profile not in {"development", "production"}:
             raise ValueError("runtime profile must be development or production")
         if isinstance(self.max_workers, bool) or not 1 <= self.max_workers <= 64:
@@ -235,6 +239,8 @@ class RuntimeConfig:
             _load_account_snapshot(self.account_snapshot_fixture)
         if self.historical_fixture and not Path(self.historical_fixture).expanduser().is_file():
             raise ValueError("historical_fixture not found")
+        if check_inputs and self.underlying_history_fixture:
+            load_underlying_history_fixture(self.underlying_history_fixture)
         if self.backtest_artifact_dir:
             artifact_path = Path(self.backtest_artifact_dir).expanduser()
             if artifact_path.exists() and not artifact_path.is_dir():
@@ -420,6 +426,7 @@ def build_api_analysis_record(
     backtest_artifact_dir: str | None = None,
     paper_ledger_path: str | None = None,
     manual_approval_runbook_path: str | None = None,
+    underlying_history_fixture: str | None = None,
 ) -> AnalysisRecord:
     if snapshot_fixture and live_deribit:
         raise ValueError("choose snapshot_fixture or live_deribit, not both")
@@ -457,6 +464,11 @@ def build_api_analysis_record(
     )
     if account_payload is not None and account_scenario is not None:
         raise ValueError("operator account snapshot cannot be combined with account_scenario")
+    underlying_history = (
+        load_underlying_history_fixture(underlying_history_fixture)
+        if underlying_history_fixture
+        else None
+    )
     return build_analysis_record(
         mode=mode,
         market_snapshot=market_snapshot,
@@ -467,6 +479,7 @@ def build_api_analysis_record(
         paper_ledger_path=paper_ledger_path,
         manual_approval_runbook_path=manual_approval_runbook_path,
         persist_paper_ledger=False,
+        underlying_history=underlying_history,
     )
 
 
@@ -636,7 +649,7 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         except OSError as exc:
             self._write_job_store_unavailable(exc)
             return
-        except Exception as exc:  # noqa: BLE001 - map unexpected failures to JSON 500
+        except Exception as exc:
             _log_json(
                 "request_error",
                 request_id=self._request_id,
@@ -917,7 +930,7 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         try:
             if write_body:
                 self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+        except (TimeoutError, BrokenPipeError, ConnectionResetError):
             _log_json(
                 "client_disconnected",
                 request_id=self._request_id,
@@ -1595,6 +1608,9 @@ def _analysis_cache_identity(options: dict[str, Any]) -> dict[str, Any]:
         "backtest_artifact_dir",
         "paper_ledger_path",
         "manual_approval_runbook_path",
+        # Expected value is derived from this file, so a refreshed capture must
+        # invalidate the cached record rather than serve a stale conclusion.
+        "underlying_history_fixture",
     ):
         value = options.get(key)
         if value:
@@ -1640,11 +1656,11 @@ def _analysis_cache_entry_current(
         )
         if expiry > evaluated_at:
             deadlines.append(expiry)
-    return current.astimezone(timezone.utc) < min(deadlines)
+    return current.astimezone(UTC) < min(deadlines)
 
 
 def _analysis_cache_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _path_version(path: Path) -> dict[str, Any]:
@@ -1682,6 +1698,7 @@ def _report_options_from_query(
             "backtest_artifact_dir": runtime.backtest_artifact_dir,
             "paper_ledger_path": runtime.paper_ledger_path,
             "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
+            "underlying_history_fixture": runtime.underlying_history_fixture,
         }
 
     # HTTP always stays research_only for display/action consistency.
@@ -1731,6 +1748,7 @@ def _report_options_from_query(
         "backtest_artifact_dir": runtime.backtest_artifact_dir,
         "paper_ledger_path": runtime.paper_ledger_path,
         "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
+        "underlying_history_fixture": runtime.underlying_history_fixture,
     }
 
 
@@ -1860,6 +1878,13 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--underlying-history-fixture",
+        help=(
+            "recorded underlying price history; enables absolute expected "
+            "value, which stays unavailable without it"
+        ),
+    )
+    parser.add_argument(
         "--historical-fixture",
         default=os.environ.get("CRYPTO_OPTIONS_HISTORICAL_FIXTURE"),
         help="operator-controlled local historical fixture used by POST /backtest/run",
@@ -1909,6 +1934,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_live_fetch=args.allow_live_fetch,
         access_log=args.access_log,
         historical_fixture=args.historical_fixture,
+        underlying_history_fixture=args.underlying_history_fixture,
         backtest_artifact_dir=args.backtest_artifact_dir,
         paper_ledger_path=args.paper_ledger_path,
         manual_approval_runbook_path=args.manual_approval_runbook,

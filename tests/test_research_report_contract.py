@@ -1,9 +1,9 @@
 import copy
 import json
-from pathlib import Path
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from crypto_options_report.api import build_api_report, smoke_once
@@ -434,12 +434,15 @@ class ResearchReportContractTests(unittest.TestCase):
             len(report["candidate_research"]["call_credit_spreads"]["eligible"]),
             0,
         )
-        self.assertEqual("unavailable", report["ev_candidate_scanner"]["status"])
+        self.assertEqual("blocked", report["ev_candidate_scanner"]["status"])
         self.assertEqual(
-            "MISSING_VALIDATED_PATH_RISK",
+            "NO_VALIDATED_PATH_RISK",
             report["ev_candidate_scanner"]["reason_code"],
         )
-        self.assertEqual([], report["ev_candidate_scanner"]["ranked_candidates"])
+        self.assertGreater(
+            len(report["ev_candidate_scanner"]["ranked_candidates"]),
+            0,
+        )
         self.assertEqual("blocked", report["permission_state"]["status"])
         self.assertEqual("collecting", report["permission_state"]["collection_status"])
         self.assertEqual(0.0, report["permission_state"]["sell_permission"])
@@ -451,7 +454,13 @@ class ResearchReportContractTests(unittest.TestCase):
         self.assertIn("primary_regime_label", report["permission_state"])
         self.assertIn("regime_scores", report["permission_state"])
 
-    def test_ev_candidate_scanner_is_unavailable_without_validated_path_artifact(self):
+    def test_ev_scanner_ranks_relative_value_but_withholds_absolute_ev(self):
+        """Relative value is reportable from the chain alone; EV is not.
+
+        An earlier implementation emitted precise-looking EV and CVaR with no
+        validated history behind it. Ranking may return, but every absolute
+        expected-value field must stay null until path evidence exists.
+        """
         report = generate_research_report(
             generated_at="2026-07-07T00:01:30Z",
             market_snapshot=self._load_fixture(),
@@ -460,14 +469,81 @@ class ResearchReportContractTests(unittest.TestCase):
 
         scanner = report["ev_candidate_scanner"]
         self.assertEqual([], validate_report_contract(report))
-        self.assertEqual("unavailable", scanner["status"])
-        self.assertEqual("MISSING_VALIDATED_PATH_RISK", scanner["reason_code"])
-        self.assertEqual("UNAVAILABLE", scanner["score_status"])
+
+        self.assertEqual("blocked", scanner["status"])
+        self.assertEqual("NO_VALIDATED_PATH_RISK", scanner["reason_code"])
+        self.assertEqual("UNCALIBRATED_RESEARCH_ONLY", scanner["score_status"])
         self.assertFalse(scanner["path_risk_evidence"]["validated"])
         self.assertIsNone(scanner["path_risk_evidence"]["artifact_id"])
+        self.assertFalse(scanner["ranking_basis"]["absolute_ev_available"])
+
+        # The safety boundary is unchanged by the presence of scores.
         self.assertFalse(scanner["recommended_size_allowed"])
         self.assertFalse(scanner["trade_instruction_allowed"])
         self.assertFalse(scanner["paper_manual_candidates_allowed"])
+        self.assertEqual([], report["portfolio_risk"]["size_caps"])
+
+        self.assertGreater(len(scanner["ranked_candidates"]), 0)
+        for candidate in scanner["ranked_candidates"]:
+            self.assertIsNone(candidate["ev_after_cost_usdc"])
+            self.assertEqual(
+                "UNCALIBRATED_RESEARCH_ONLY", candidate["score_status"]
+            )
+            self.assertIn(
+                candidate["action"], {"RESEARCH_ONLY", "REVIEW", "REJECT"}
+            )
+            self.assertEqual("unavailable", candidate["path_risk"]["status"])
+
+        scored = [
+            candidate
+            for candidate in scanner["ranked_candidates"]
+            if candidate["action"] != "REJECT"
+        ]
+        self.assertTrue(
+            all(
+                "UNCALIBRATED_SCORE_MODEL" in candidate["kill_conditions"]
+                and "NO_VALIDATED_PATH_RISK" in candidate["kill_conditions"]
+                for candidate in scored
+            )
+        )
+
+    def test_ev_scanner_flags_quotes_far_from_the_models_own_valuation(self):
+        """A credit wildly off fair value is a data problem, not an opportunity."""
+        report = generate_research_report(
+            generated_at="2026-07-07T00:01:30Z",
+            market_snapshot=self._load_fixture(),
+            account_scenario="green",
+        )
+
+        suspect = [
+            candidate
+            for candidate in report["ev_candidate_scanner"]["ranked_candidates"]
+            if "SUSPECT_PRICE_DIVERGENCE" in candidate["kill_conditions"]
+        ]
+
+        # This fixture's quoted premiums are inconsistent with its own fitted
+        # IVs, so the guard must fire rather than report a large false edge.
+        self.assertTrue(suspect)
+        for candidate in suspect:
+            self.assertNotEqual("RESEARCH_ONLY", candidate["action"])
+
+    def test_ev_scanner_is_unavailable_without_a_fitted_surface(self):
+        """No smile to price against means no relative-value claim at all."""
+        from crypto_options_report.ev_scanner import build_ev_candidate_scanner
+
+        scanner = build_ev_candidate_scanner(
+            generated_at="2026-07-07T00:01:30Z",
+            data_status={},
+            account_status={},
+            calibration_status={},
+            permission_state={},
+            candidate_research={"status": "validated"},
+            vol_surface_status=None,
+        )
+
+        self.assertEqual("unavailable", scanner["status"])
+        self.assertEqual("MISSING_VALIDATED_PATH_RISK", scanner["reason_code"])
+        self.assertEqual("UNAVAILABLE", scanner["score_status"])
         self.assertEqual([], scanner["ranked_candidates"])
         self.assertEqual(0, scanner["summary"]["candidates_scanned"])
 

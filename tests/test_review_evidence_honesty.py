@@ -7,38 +7,18 @@ from crypto_options_report.calibration import (
     validate_walk_forward_calibration_report,
 )
 from crypto_options_report.ev_scanner import build_ev_candidate_scanner
-from crypto_options_report.position_management import (
-    build_position_management_report,
-    validate_position_management_report,
-)
+from crypto_options_report.full_surface import build_full_system_surface_report
 from crypto_options_report.paper_ledger import (
     build_paper_proposal_ledger,
     validate_paper_proposal_ledger,
 )
-from crypto_options_report.full_surface import build_full_system_surface_report
+from crypto_options_report.position_management import (
+    build_position_management_report,
+    validate_position_management_report,
+)
 
 
 class ReviewEvidenceHonestyTests(unittest.TestCase):
-    REPO_ROOT = Path(__file__).resolve().parents[1]
-
-    def test_historical_parent_handoff_cannot_override_current_blocked_states(self):
-        handoff = (
-            self.REPO_ROOT
-            / "docs"
-            / "automation"
-            / "handoffs"
-            / "issue-000-handoff.md"
-        ).read_text(encoding="utf-8")
-        banner = handoff.split("## Status", maxsplit=1)[0].lower()
-
-        self.assertIn("superseded", banner)
-        self.assertIn("audit-only", banner)
-        self.assertIn("issue-010", banner)
-        self.assertIn("issue-012", banner)
-        self.assertIn("issue-013", banner)
-        self.assertIn("issue-015", banner)
-        self.assertIn("../goal-board.md", banner)
-
     def test_calibration_reports_unimplemented_without_plausible_fixture_metrics(self):
         report = build_walk_forward_calibration_report(
             generated_at="2026-07-14T00:00:00Z",

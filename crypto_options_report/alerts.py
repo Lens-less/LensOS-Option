@@ -7,12 +7,12 @@ placeholder and score models remain unpromoted.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
 import math
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -299,7 +299,7 @@ def deliver_webhook(
         "User-Agent": "crypto-options-report-alerts/0.1",
         "X-Research-Only": "1",
     }
-    delivery_timestamp = str(int(datetime.now(timezone.utc).timestamp()))
+    delivery_timestamp = str(int(datetime.now(UTC).timestamp()))
     delivery_id = str(uuid4())
     headers["X-Webhook-Timestamp"] = delivery_timestamp
     headers["X-Webhook-Delivery-Id"] = delivery_id
@@ -533,9 +533,7 @@ def _opportunity_evidence_ok(report: dict[str, Any]) -> bool:
         return False
     if registry.get("promoted_for_sizing") is not True:
         return False
-    if calibration.get("status") == "research_fixture":
-        return False
-    return True
+    return calibration.get("status") != "research_fixture"
 
 
 def _event(
@@ -605,7 +603,7 @@ def _coerce_epoch_ms(value: Any, *, now_ms: int) -> int | None:
 
 def _utc_now() -> str:
     return (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
@@ -614,5 +612,5 @@ def _utc_now() -> str:
 
 def _parse_ms(value: str | None) -> int:
     if not value:
-        return int(datetime.now(timezone.utc).timestamp() * 1000)
+        return int(datetime.now(UTC).timestamp() * 1000)
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)

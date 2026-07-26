@@ -11,8 +11,8 @@ no-trade safeguards.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import math
+from datetime import UTC, datetime
 from typing import Any
 
 from .account_risk import (
@@ -23,23 +23,23 @@ from .account_risk import (
     load_account_scenario,
     risk_state_from_account_status,
 )
-from .market_data import build_market_data_status, parse_timestamp_ms
-from .pnl import build_pnl_evidence_report
-from .ev_scanner import build_ev_candidate_scanner
 from .calibration import (
     CALIBRATION_NOT_IMPLEMENTED,
     build_walk_forward_calibration_report,
     validate_walk_forward_calibration_report,
 )
+from .combination_risk import build_combination_risk_report
+from .ev_scanner import build_ev_candidate_scanner
 from .full_surface import (
     build_full_system_surface_report,
     validate_full_system_surface_report,
 )
-from .regime import build_regime_permission_state
+from .market_data import build_market_data_status, parse_timestamp_ms
 from .paper_ledger import (
     build_paper_proposal_ledger,
     validate_paper_proposal_ledger,
 )
+from .pnl import build_pnl_evidence_report
 from .portfolio_risk import (
     build_portfolio_risk_report,
     validate_portfolio_risk_report,
@@ -48,11 +48,12 @@ from .position_management import (
     build_position_management_report,
     validate_position_management_report,
 )
-from .surface import build_vol_surface_and_candidate_research
+from .regime import build_regime_permission_state
 from .strategy_research import (
     build_strategy_research,
     validate_strategy_research,
 )
+from .surface import build_vol_surface_and_candidate_research
 
 SCHEMA_VERSION = "research_report.v1"
 SUPPORTED_MODES = {"research_only", "paper", "manual_execution"}
@@ -80,6 +81,7 @@ REQUIRED_REPORT_KEYS = {
     "candidate_research",
     "strategy_research",
     "ev_candidate_scanner",
+    "combination_risk",
     "portfolio_risk",
     "position_management",
     "walk_forward_calibration",
@@ -106,6 +108,11 @@ FORBIDDEN_RESEARCH_ONLY_KEYS = {
     "post_only_price",
 }
 
+# The combination view is a description of one hypothetical book, not a search
+# over books. Past a handful of members the marginal analysis costs more than it
+# tells anyone.
+MAX_COMBINATION_MEMBERS = 6
+
 DEFAULT_REASON_CODES = [
     "MISSING_VALIDATED_MARKET_DATA",
     "MISSING_ACCOUNT_API_SNAPSHOT",
@@ -116,7 +123,7 @@ DEFAULT_REASON_CODES = [
 
 def utc_timestamp() -> str:
     return (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
@@ -134,6 +141,7 @@ def _build_research_report_v1_projection(
     paper_ledger_path: str | None = None,
     manual_approval_runbook_path: str | None = None,
     persist_paper_ledger: bool = True,
+    underlying_history: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the legacy projection before the AnalysisRun migration layer."""
 
@@ -226,9 +234,22 @@ def _build_research_report_v1_projection(
         calibration_status=calibration_status,
         permission_state=permission_state,
         candidate_research=candidate_research,
+        vol_surface_status=vol_surface_status,
+        underlying_history=underlying_history,
     )
     if ev_candidate_scanner.get("reason_code"):
         reason_codes.append(str(ev_candidate_scanner["reason_code"]))
+    # The combination view covers the rows a reader would actually consider
+    # together: the frontier candidates the scanner surfaced, not every row in
+    # the table. Combining rejected rows would describe a book nobody would hold.
+    combination_risk = build_combination_risk_report(
+        candidates=[
+            row
+            for row in (ev_candidate_scanner.get("ranked_candidates") or [])
+            if row.get("action") == "RESEARCH_ONLY"
+        ][:MAX_COMBINATION_MEMBERS],
+        generated_at=generated,
+    )
     portfolio_risk = build_portfolio_risk_report(
         generated_at=generated,
         data_status=data_status,
@@ -293,6 +314,7 @@ def _build_research_report_v1_projection(
         "candidate_research": candidate_research,
         "strategy_research": strategy_research,
         "ev_candidate_scanner": ev_candidate_scanner,
+        "combination_risk": combination_risk,
         "portfolio_risk": portfolio_risk,
         "position_management": position_management,
         "walk_forward_calibration": walk_forward_calibration,
@@ -330,6 +352,7 @@ def generate_research_report(
     paper_ledger_path: str | None = None,
     manual_approval_runbook_path: str | None = None,
     persist_paper_ledger: bool = True,
+    underlying_history: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project one immutable AnalysisRecord as ``research_report.v1``.
 
@@ -349,6 +372,7 @@ def generate_research_report(
         paper_ledger_path=paper_ledger_path,
         manual_approval_runbook_path=manual_approval_runbook_path,
         persist_paper_ledger=persist_paper_ledger,
+        underlying_history=underlying_history,
     ).project_research_report_v1()
 
 

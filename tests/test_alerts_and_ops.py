@@ -16,13 +16,13 @@ from crypto_options_report.alerts import (
 from crypto_options_report.cli import main
 from crypto_options_report.contract import generate_research_report
 from crypto_options_report.market_data import (
-    _fetch_vol_index_feed,
+    DEFAULT_TICKER_REQUEST_BUDGET,
     _fetch_option_instrument_metadata,
+    _fetch_vol_index_feed,
     build_market_data_status,
     fetch_deribit_option_chain_snapshot,
     write_snapshot_fixture,
 )
-
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -813,9 +813,11 @@ class AlertsAndOpsTests(unittest.TestCase):
     def test_live_collector_rejects_limits_above_the_public_request_budget(self):
         with self.assertRaisesRegex(
             ValueError,
-            "instrument_limit must be between 1 and 20",
+            f"instrument_limit must be between 1 and {DEFAULT_TICKER_REQUEST_BUDGET}",
         ):
-            fetch_deribit_option_chain_snapshot(instrument_limit=21)
+            fetch_deribit_option_chain_snapshot(
+                instrument_limit=DEFAULT_TICKER_REQUEST_BUDGET + 1
+            )
 
     def test_live_collector_classifies_ticker_rate_limits_fail_closed(self):
         instrument_name = "BTC-24JUL26-100000-C"
@@ -940,7 +942,9 @@ class AlertsAndOpsTests(unittest.TestCase):
         self.assertIn("rpc error 10028: too_many_requests", event["message"])
 
     def test_malformed_dvol_row_fails_closed_without_crash(self):
-        from crypto_options_report.market_data import fetch_deribit_option_chain_snapshot
+        from crypto_options_report.market_data import (
+            fetch_deribit_option_chain_snapshot,
+        )
 
         def fake_get_json(url, params, timeout):
             if "get_book_summary_by_currency" in url:
@@ -975,7 +979,9 @@ class AlertsAndOpsTests(unittest.TestCase):
         )
 
     def test_live_adapter_malformed_timestamp_and_empty_dvol_return_structured_evidence(self):
-        from crypto_options_report.market_data import fetch_deribit_option_chain_snapshot
+        from crypto_options_report.market_data import (
+            fetch_deribit_option_chain_snapshot,
+        )
 
         cases = {
             "non_integer_timestamp": (
@@ -1101,23 +1107,22 @@ class AlertsAndOpsTests(unittest.TestCase):
                     "error": "boom",
                     "event_count": 1,
                 },
-            ) as deliver:
-                with mock.patch.dict(
-                    "os.environ",
-                    {"ALERT_WEBHOOK_SECRET": "test-secret"},
-                ):
-                    code = main(
-                        [
-                            "alert-eval",
-                            "--report-json",
-                            str(report_path),
-                            "--state-file",
-                            str(state_path),
-                            "--webhook-url",
-                            "https://example.invalid/hooks",
-                            "--compact",
-                        ]
-                    )
+            ) as deliver, mock.patch.dict(
+                "os.environ",
+                {"ALERT_WEBHOOK_SECRET": "test-secret"},
+            ):
+                code = main(
+                    [
+                        "alert-eval",
+                        "--report-json",
+                        str(report_path),
+                        "--state-file",
+                        str(state_path),
+                        "--webhook-url",
+                        "https://example.invalid/hooks",
+                        "--compact",
+                    ]
+                )
             self.assertEqual(1, code)
             self.assertFalse(state_path.exists())
             self.assertEqual("test-secret", deliver.call_args.kwargs["secret"])

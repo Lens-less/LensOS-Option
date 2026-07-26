@@ -1,7 +1,10 @@
 import unittest
 from pathlib import Path
 
-from crypto_options_report.contract import generate_research_report, validate_report_contract
+from crypto_options_report.contract import (
+    generate_research_report,
+    validate_report_contract,
+)
 from crypto_options_report.market_data import load_snapshot_fixture
 from crypto_options_report.portfolio_risk import (
     SEVERITY_ORDER,
@@ -110,6 +113,10 @@ class PortfolioRiskReportTests(unittest.TestCase):
                 "spread_permission": False,
             },
             ev_candidate_scanner={
+                # This helper exercises the sizing calculation itself, so it
+                # opts in explicitly. Production keeps this flag false until a
+                # score model is promoted.
+                "recommended_size_allowed": True,
                 "ranked_candidates": [
                     {"candidate_id": "must-not-be-sized", "model_delta": "bad"}
                 ]
@@ -274,12 +281,28 @@ class PortfolioRiskReportTests(unittest.TestCase):
             report["portfolio_risk"]["summary"]["reason_codes"],
         )
 
-    def test_unavailable_ev_evidence_produces_no_size_caps(self):
+    def test_relative_value_ranking_alone_produces_no_size_caps(self):
+        """Ranking says which strike is better priced, not how much to carry."""
         report = self._report()
         portfolio = report["portfolio_risk"]
+        scanner = report["ev_candidate_scanner"]
 
-        self.assertEqual("unavailable", report["ev_candidate_scanner"]["status"])
-        self.assertEqual([], report["ev_candidate_scanner"]["ranked_candidates"])
+        # Candidates are ranked, but none carries validated path risk.
+        self.assertEqual("blocked", scanner["status"])
+        self.assertGreater(len(scanner["ranked_candidates"]), 0)
+        self.assertTrue(
+            all(
+                candidate["path_risk"]["status"] == "unavailable"
+                for candidate in scanner["ranked_candidates"]
+            )
+        )
+        self.assertTrue(
+            all(
+                candidate["ev_after_cost_usdc"] is None
+                for candidate in scanner["ranked_candidates"]
+            )
+        )
+
         self.assertEqual([], portfolio["size_caps"])
         self.assertEqual(0, portfolio["summary"]["candidate_caps_evaluated"])
         self.assertFalse(portfolio["summary"]["trade_sizing_allowed"])
@@ -290,8 +313,7 @@ class PortfolioRiskReportTests(unittest.TestCase):
         stressed = self._report_with_regime(dvol_percentile=0.97, atm_iv_percentile=0.91)
 
         for report in (normal, stressed):
-            self.assertEqual("unavailable", report["ev_candidate_scanner"]["status"])
-            self.assertEqual([], report["ev_candidate_scanner"]["ranked_candidates"])
+            self.assertEqual("blocked", report["ev_candidate_scanner"]["status"])
             self.assertEqual([], report["portfolio_risk"]["size_caps"])
             self.assertFalse(
                 report["portfolio_risk"]["summary"]["trade_sizing_allowed"]
@@ -327,6 +349,10 @@ class PortfolioRiskReportTests(unittest.TestCase):
             account_status=base["account_status"],
             permission_state=permission_state,
             ev_candidate_scanner={
+                # This helper exercises the sizing calculation itself, so it
+                # opts in explicitly. Production keeps this flag false until a
+                # score model is promoted.
+                "recommended_size_allowed": True,
                 "ranked_candidates": [
                     {
                         "candidate_id": "candidate-1",

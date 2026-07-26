@@ -401,9 +401,7 @@ def _position_evidence_gaps(position: Any) -> list[str]:
         if "delta" in position
         else None
     )
-    if delta_key is None or not _is_finite_number(position.get(delta_key)):
-        gaps.append("current_delta")
-    elif abs(float(position[delta_key])) > 1.0:
+    if delta_key is None or not _is_finite_number(position.get(delta_key)) or abs(float(position[delta_key])) > 1.0:
         gaps.append("current_delta")
     if not _is_finite_number(position.get("loss_multiple")) or (
         _is_finite_number(position.get("loss_multiple"))
@@ -423,16 +421,14 @@ def _position_evidence_gaps(position: Any) -> list[str]:
             if not _is_finite_number(value):
                 gaps.append(f"{section}.{key}")
                 continue
-            if key in {"p_touch_before", "p_touch_after"} and not (
+            if (key in {"p_touch_before", "p_touch_after"} and not (
                 0.0 <= float(value) <= 1.0
-            ):
-                gaps.append(f"{section}.{key}")
-            elif key in {
+            )) or (key in {
                 "stress_loss_before",
                 "stress_loss_after",
                 "trading_fee_usdc",
                 "slippage_usdc",
-            } and float(value) < 0.0:
+            } and float(value) < 0.0):
                 gaps.append(f"{section}.{key}")
     return gaps
 

@@ -64,8 +64,10 @@ class PathRiskDistributionReportTests(unittest.TestCase):
     def test_candidate_structure_enforces_credit_spread_economic_invariants(self):
         cases = (
             (
+                # A structure name the module does not know cannot be given a
+                # payoff by guessing; it needs its legs spelled out.
                 {"structure": "unsupported_structure"},
-                "structure must be naked_short_call or call_credit_spread",
+                "requires an explicit legs list",
             ),
             (
                 {"structure": "call_credit_spread", "long_strike": None},
@@ -486,16 +488,7 @@ class PathRiskDistributionReportTests(unittest.TestCase):
         invalid_by_field = {
             **positive_fields,
             "min_effective_sample_size": minimum_ess_values,
-            **{
-                field_name: unit_interval_values
-                for field_name in (
-                    "historical_group_weight",
-                    "bootstrap_group_weight",
-                    "stress_group_weight",
-                    "stress_mixture_min_weight",
-                    "confidence_penalty_multiplier",
-                )
-            },
+            **dict.fromkeys(("historical_group_weight", "bootstrap_group_weight", "stress_group_weight", "stress_mixture_min_weight", "confidence_penalty_multiplier"), unit_interval_values),
         }
         for field_name, invalid_values in invalid_by_field.items():
             for invalid_value in invalid_values:

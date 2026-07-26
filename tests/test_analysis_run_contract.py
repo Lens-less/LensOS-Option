@@ -1,9 +1,9 @@
 import copy
-from datetime import datetime, timedelta, timezone
 import json
 import math
-from pathlib import Path
 import unittest
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from crypto_options_report.analysis_run import (
     AnalysisMandate,
@@ -31,7 +31,6 @@ from crypto_options_report.market_data import (
     load_snapshot_fixture,
     snapshot_payload_sha256,
 )
-
 
 FIXED_CLOCK = "2026-07-07T00:01:30Z"
 FIXTURE_PATH = (
@@ -1150,7 +1149,7 @@ class AnalysisRunContractTests(unittest.TestCase):
             datetime.fromisoformat(
                 str(snapshot["captured_at"]).replace("Z", "+00:00")
             )
-            .astimezone(timezone.utc)
+            .astimezone(UTC)
             + timedelta(seconds=120)
         ).isoformat().replace("+00:00", "Z")
         return EvidenceRecord(

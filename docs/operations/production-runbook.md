@@ -225,6 +225,95 @@ Expected readiness fields:
 - Report, dashboard, and readiness GET requests are read-only. The current paper/manual status is unsupported and performs no ledger write.
 - Backtest submission requires strict JSON and `Idempotency-Key`, returns `202`, and executes in a bounded worker queue plus a hard-timeout subprocess. Poll `/backtest/jobs/{job_id}`; failed or timed-out work cannot promote the default result, and result reads never recompute the replay.
 
+## Key rotation
+
+Three independent secrets exist. They rotate separately and must never share a
+key file: the API bearer token, the market snapshot HMAC key, and the account
+snapshot HMAC key.
+
+Rotation is fail-closed by design. Evidence signed with a retired key stops
+authenticating immediately — it is not silently accepted. Expect readiness to
+drop to `503` between the key swap and the next signed snapshot, and schedule
+rotation accordingly.
+
+### API bearer token
+
+Only relevant when the API is bound to a non-loopback interface.
+
+1. Write the new token to a **new** file (32–256 printable ASCII characters, no
+   whitespace, not a symlink). On POSIX restrict it to `0400`/`0440`/`0600`/`0640`.
+2. Update the reverse proxy to send the new token.
+3. Point `CRYPTO_OPTIONS_API_BEARER_TOKEN_FILE` at the new file and restart the
+   API process. The token is read at startup; editing the file in place does not
+   take effect until restart.
+4. Verify: a request with the old token returns `401`, and one with the new token
+   returns `200`.
+5. Delete the old token file.
+
+> On Windows the owner/permission check is skipped (it is POSIX-only). Restrict
+> the token file's ACL manually, e.g.
+> `icacls <file> /inheritance:r /grant:r "<service-account>:(R)"`.
+
+### Market and account HMAC keys
+
+Each key must be exactly 32 bytes and must live outside the sidecar output
+directories. The two domains use different environment variables and are not
+interchangeable — reusing one key for both is rejected.
+
+1. Generate a new 32-byte key to a new path (see the key-generation snippet in
+   "Native startup").
+2. Point the relevant variable at it —
+   `CRYPTO_OPTIONS_MARKET_SNAPSHOT_HMAC_KEY_FILE` or
+   `CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_HMAC_KEY_FILE` — and restart **the sidecar
+   that writes those artifacts and the API process that verifies them**. Both
+   sides must use the same key or nothing authenticates.
+3. Wait for the sidecar to write one full snapshot plus its sidecar file
+   (`.trust.json` / `.auth.json`) under the new key.
+4. Verify `/readyz` returns to its expected state and that market/account
+   provenance is authenticated again.
+5. Delete the old key file.
+
+Rotating only one side, or restarting only one process, leaves reports readable
+for research while production readiness stays `false`. That is the intended
+failure mode, not an outage to work around by disabling verification.
+
+### Deribit API credentials
+
+Rotate in the Deribit console, then update `DERIBIT_CLIENT_ID` /
+`DERIBIT_CLIENT_SECRET` for the **account sidecar process only** and restart it.
+The API process never reads these. The new key must be scoped exactly
+`account:read` + `trade:read`; any `*_read_write` scope is rejected.
+
+## Incident triage
+
+Start here when something looks wrong.
+
+**`/readyz` has returned `503` for a long time.** First read `reason_codes` in the
+response body — it names the unmet dependency. Note that `MODEL_NOT_READY` is the
+expected steady state today: no model has been promoted, so production readiness
+stays closed by design. That alone is not an incident.
+
+**`/livez` fails.** The process itself is down. Check the service manager and the
+structured JSON logs on stderr; restart, then confirm `/livez` before looking at
+anything else.
+
+**Reports render but market data shows `missing`/`untrusted`.** The API is
+healthy and correctly refusing to trust the data. Check, in order: the sidecar
+process is running and writing; the snapshot's sidecar file exists next to it;
+the HMAC key path matches on both the writing and verifying side; the snapshot is
+not stale past its freshness bound.
+
+**Every request returns `401`.** Token mismatch between the proxy and the API.
+Confirm both point at the same token file content and that the API was restarted
+after the last change.
+
+**Requests return `503` with `Retry-After: 1`.** Capacity, not failure. Clients
+should back off; raise `--max-workers` only if the host has headroom.
+
+Do not respond to any of the above by disabling signature verification, widening
+CORS, or exposing the port directly. Those turn a visible fail-closed state into
+a silent, untrustworthy one.
+
 ## Verification
 
 ```powershell

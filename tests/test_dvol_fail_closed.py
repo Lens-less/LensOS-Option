@@ -9,7 +9,6 @@ from crypto_options_report.market_data import (
     load_public_replay_fixture,
 )
 
-
 FIXTURES = Path(__file__).parent / "fixtures"
 
 

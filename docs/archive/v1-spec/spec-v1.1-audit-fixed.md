@@ -1,3 +1,10 @@
+> **已归档 / 已被取代。** 本文档记录 2026-07-07 的 v1.1 开发 Spec，其中包含
+> paper trading、walk-forward 校准与半自动执行等**当前产品刻意不具备**的能力。
+> 它不描述现在的产品行为，也不构成需求。
+>
+> 当前 PRD：[`docs/research/deribit-options-intelligence-platform-prd.md`](../../research/deribit-options-intelligence-platform-prd.md)
+> 当前安全边界：[`SECURITY.md`](../../../SECURITY.md)
+
 # 加密货币期权卖 Call 收租系统 — 审计修复版完整开发 Spec
 
 版本：v1.1 Audit-Fixed

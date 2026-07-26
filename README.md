@@ -1,226 +1,304 @@
 # Crypto Options Research Console
 
-本仓库是一个 evidence-first、可回放的期权入场前研究决策工具链。当前状态是：
+[English](README.en.md) · 中文
 
-- **GO**：本地 deterministic/replay research toolchain。
-- **NO-GO**：paper/manual trading、自动下单、真实账户执行。
-- 默认输出保持 `research_only`，所有 trade recommendation、recommended size、order instruction、paper/manual candidate 都必须被 mode gate 阻断，直到外部数据、账户、校准和纸面交易对账证据满足 Definition of Done。
+一个**期权入场前的研究工具**：它读取 Deribit 的公开行情，判断「现在有没有一个
+值得考虑的卖方机会」，并把结论所依赖的每一份证据都摊开给你看。
 
-## Quickstart
+它面向的是**自己做决策的期权卖方**——你想要一份可复核、可回放的入场前分析，而
+不是一个替你下单的黑盒。
+
+**它不做什么：** 不连接下单接口，不给推荐手数，不做自动或半自动执行。可信输出的
+上限是一份 `execution_allowed=false` 的准入结论。这是刻意的设计边界，不是待办事项。
+
+它的两个核心特性：
+
+- **evidence-first**：每个结论都能追溯到具体证据。没有证据支撑的数字不会被编造出来，
+  而是显式标记为「缺失」。
+- **fail-closed**：证据缺失、过期或校验失败时，一律降级为「阻断」。**没有信号 ≠ 放行。**
+
+## 两种使用形态
+
+| 形态 | 用途 |
+| --- | --- |
+| **Web 研究工作台** | 筛选、排序、并排对比候选，逐个查看打分依据与收益曲线。挖掘与理解的主场。 |
+| **Chrome 研究伴侣** | 在 Deribit 页面上就地回答"我正在看的这张合约有没有 edge、同链有没有更好的"。 |
+
+CLI 与 HTTP API 是驱动这两个界面的**本地引擎接口**，供集成、调度与自动化使用，
+不作为独立产品维护。
+
+---
+
+## 快速开始
+
+需要 Python ≥ 3.12。运行时零第三方依赖。
 
 ```powershell
+python -m pip install -e ".[test]"
 python -m pytest -q
-python -m crypto_options_report.api --smoke
+```
+
+用仓库自带的固定快照跑一次完整分析（确定性回放，不联网）：
+
+```powershell
+python -m crypto_options_report.cli analysis `
+  --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json `
+  --generated-at 2026-07-07T00:01:30Z --compact
+```
+
+启动本地服务并打开证据控制台：
+
+```powershell
 python -m crypto_options_report.api --host 127.0.0.1 --port 8000
 ```
 
-启动 API 后可访问：
+然后访问 <http://127.0.0.1:8000/evidence>。
 
-- `http://127.0.0.1:8000/evidence`（组件化证据控制台，推荐入口）
-- `http://127.0.0.1:8000/dashboard.html`（旧书签兼容入口，返回同一 Evidence Console）
-- `http://127.0.0.1:8000/dashboard`（兼容 JSON 投影，不是第二套页面）
-- `http://127.0.0.1:8000/research/report`
-- `http://127.0.0.1:8000/analysis/result`（不可变 `AnalysisRecord`）
-- `http://127.0.0.1:8000/health`
-- `http://127.0.0.1:8000/livez`
-- `http://127.0.0.1:8000/readyz`
+> **第一次运行会看到大量「不可用 / 缺失」，这是正常的。** 没有配置市场数据源时，
+> 产品按设计拒绝编造任何数值。想看到有数据的页面，请用上面的 `--snapshot-fixture`
+> 参数，或参考[生产部署](#生产部署)接入实时快照。
+>
+> 同理，production 模式下 `/readyz` 会稳定返回 `503`：当前没有可提升的模型，
+> 就绪门禁按设计保持关闭。**这不代表进程异常**，`/livez` 才表示进程存活。
 
-Evidence Console 与 API 固定同源，避免跨源配置和浏览器参数改变生产报告语义。服务端对同一组输入只生成一次 `AnalysisRecord`；各 GET 投影复用同一 `X-Analysis-Run-ID` 与 ETag，不会重新拉取 live 数据或重算准入结论。
-`AnalysisRun.evaluate(AnalysisRequest)` 是最高层业务 seam，可信链路严格止于不可变的 `EntryAdmissionDecision`。`research_report.v1` 和其中的 `strategy_research.v1` 继续作为兼容投影供 `/evidence`、本地 Chrome 研究伴侣与旧客户端读取；其中既有退出状态机、持仓或 sizing shadow 叙述不属于可信 `AnalysisRecord`，也不能影响新的入场准入。`/dashboard.html` 只保留为指向同一 Evidence Console 的 URL 兼容层。
-`/livez` 只表示进程存活；production 的 `/readyz` 只有在服务契约、已绑定的市场信任证据、账户快照、历史/工件存储、作业队列和已提升模型全部可用时才返回 200，否则返回带原因码的 503。当前没有可提升模型，所以 production readiness 按设计保持 503；这不等于进程不健康。
+## 核心概念
 
-For implicit-clock HTTP runs, projection deduplication lasts only until the
-shortest policy trust, evidence-expiry, or decision-TTL deadline. Explicit
-`generated_at` runs remain immutable replays. P0 never promotes a model from a
-legacy report flag: a hypothetical promoted E3 contract must bind a trusted
-historical/OOS artifact, while real promotion, account acquisition, margin
-simulation, and incremental portfolio risk remain deferred to P2. Naked short
-calls appear only as rejected, unbounded-loss comparisons in the trusted
-record. A hypothetical promoted artifact must also be current at the run's
-fixed evaluation clock. Trusted portfolio/exchange vetoes accept only a
-hash-bound typed `PreEntryRiskClaim`; compatibility `final_action` strings are
-not decision inputs.
+读其他文档前，建议先了解这几个词（完整定义见 [术语表](docs/glossary.md)）：
 
-`crypto-options-report analysis --output <path>` is the export projection of
-the same `AnalysisRecord`; it does not run a separate decision path.
+| 术语 | 含义 |
+| --- | --- |
+| `research_only` | 输出的固定模式：仅供研究，不构成下单指令。不会被任何配置改变。 |
+| mode gate（模式门禁） | 拦截一切越界输出的检查点。交易建议、推荐手数、下单指令都被它挡住。 |
+| `AnalysisRecord` | 一次分析的**不可变**完整记录，可信输出的载体。 |
+| `EntryAdmissionDecision` | 可信输出的**上限**：「能不能进场考虑」，恒有 `execution_allowed=false`。 |
+| evidence class | 证据可信度：`trusted` / `degraded` / `untrusted` / `missing`。 |
+| replay（可回放） | 同一份快照 + 同一个显式时钟 ⇒ 输出逐字节一致，结论可被独立复核。 |
 
-## Production Runtime
+## 当前状态
 
-生产运行配置与业务 `mode` 分离；即使 HTTP runtime 使用 production profile，报告仍严格保持 `research_only`：
+| 能力 | 状态 |
+| --- | --- |
+| 本地确定性 / 回放研究工具链 | **GO** |
+| paper / manual 交易、自动下单、真实账户执行 | **NO-GO** |
+| 校准与模型提升（model promotion） | 未实现 |
+| 对外发布授权 | **NO-GO** |
 
-```powershell
-$env:CRYPTO_OPTIONS_RUNTIME_PROFILE = "production"
-python -m crypto_options_report.api --runtime-profile production --host 127.0.0.1 --port 8000 --max-workers 8 --request-timeout 15
-```
+对外发布门禁要求 WebSocket gap/resync、24 小时 soak 与连续 7 天证据。这些系统观察
+条件未满足前，Evidence Console 与 Chrome 侧边栏会持续显示 `NO-GO`。
 
-生产 HTTP 禁止浏览器指定 fixture、账户场景、评估时间或 live Deribit 抓取。服务应放在认证/TLS 反向代理之后，不能直接暴露到公网。API 默认只接受 loopback `Host`；反向代理保留外部主机名时，必须用 `CRYPTO_OPTIONS_API_ALLOWED_HOSTS` 显式列出允许的精确主机名。状态变更请求如携带 `Origin`，其主机也必须与 `Host` 一致。完整容器、健康检查、日志、回滚与验证说明见 [Production Runbook](docs/operations/production-runbook.md)。
+## 使用方式
 
-容器镜像自身默认只监听 loopback，也不会内置 `CRYPTO_OPTIONS_API_ALLOW_REMOTE`。如需通过容器 bridge 发布，必须按 Runbook 同时显式设置 remote opt-in、覆盖监听地址，并继续把宿主端口限制在 `127.0.0.1`。
+### 找出有 edge 的候选
 
-推荐把公共市场、私有只读账户和 Web API 分成三个进程。公共 sidecar 必须显式收集完整 feed 图；账户 sidecar 未配置凭证时会写出安全的 `missing/not_configured` 快照，不会伪造账户状态：
+产品的核心问题是"现在这条链上，哪个卖点最划算"。它分两层回答，**不要混淆**：
 
-```powershell
-$runtime = "artifacts/runtime"
-$runtimeConfig = "artifacts/config"
-New-Item -ItemType Directory -Force $runtime | Out-Null
-New-Item -ItemType Directory -Force $runtimeConfig | Out-Null
-$marketKeyPath = "$runtimeConfig/market-snapshot-hmac.key"
-if (-not (Test-Path -LiteralPath $marketKeyPath)) {
-  $marketKey = New-Object byte[] 32
-  [Security.Cryptography.RandomNumberGenerator]::Fill($marketKey)
-  [IO.File]::WriteAllBytes($marketKeyPath, $marketKey)
-}
-$accountKeyPath = "$runtimeConfig/account-snapshot-hmac.key"
-if (-not (Test-Path -LiteralPath $accountKeyPath)) {
-  $accountKey = New-Object byte[] 32
-  [Security.Cryptography.RandomNumberGenerator]::Fill($accountKey)
-  [IO.File]::WriteAllBytes($accountKeyPath, $accountKey)
-}
-$env:CRYPTO_OPTIONS_MARKET_SNAPSHOT_HMAC_KEY_FILE = $marketKeyPath
-$env:CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_HMAC_KEY_FILE = $accountKeyPath
-python -m tools.refresh_market_snapshot --output "$runtime/deribit-btc-current.json" --interval 10 --instrument-limit 20 --currency BTC --complete-feed-graph
+- **相对价值** — 该行权价相对自身微笑曲线是贵还是便宜。只需当前链条，随时可得。
+- **绝对预期价值** — 收信用 − 预期赔付 − 手续费。需要标的的历史收益分布。
 
-# 完整 feed graph 模式另写 <snapshot>.trust.json，并以 SHA-256 绑定快照；
-# snapshot JSON 内自带的 trust_evidence 不会被接受。
-
-# 仅这个 sidecar 进程读取 DERIBIT_CLIENT_ID / DERIBIT_CLIENT_SECRET；
-# API 进程只读取脱敏后的 JSON。API key 必须严格为 account:read + trade:read。
-python -m tools.refresh_account_snapshot --output "$runtime/deribit-account-current.json" --interval 15 --currency BTC
-
-python -m crypto_options_report.api --runtime-profile production --host 127.0.0.1 --port 8000 `
-  --snapshot-fixture "$runtime/deribit-btc-current.json" `
-  --account-snapshot-fixture "$runtime/deribit-account-current.json" `
-  --historical-fixture "$runtime/history.json" `
-  --backtest-artifact-dir "$runtime/backtests"
-```
-
-Remote bind contract: loopback remains the default. If you intentionally bind the API to a non-loopback interface, set both `CRYPTO_OPTIONS_API_ALLOW_REMOTE=1` and `CRYPTO_OPTIONS_API_BEARER_TOKEN_FILE=<regular file>`. The file must not be a symlink; it must contain exactly one printable ASCII token with no whitespace and length `32..256`. On POSIX, restrict it to the owner and an optional read-only service group (`0400`, `0440`, `0600`, or `0640`). Only `GET /health`, `GET /livez`, and `GET /readyz` stay unauthenticated; every other route and method, including `404`, `HEAD`, `GET`, `POST`, `DELETE`, and unsupported verbs, requires one exact `Authorization: Bearer <token>` header. Put an authenticated TLS reverse proxy in front of the API and forward or inject `Authorization` from a mounted secret file instead of hardcoding the token in source control or shell history.
-
-Market trust and account provenance contribute to readiness only when their exact sidecar payloads are authenticated with separate operator-owned, exactly 32-byte HMAC keys. The market and account domains deliberately use different environment variables and different key files. Without the applicable key, reports remain safely readable for research but production readiness remains false. Calibration/model promotion and paper/manual workflow are currently unavailable/unsupported; no ledger persistence or external authorization is inferred from local flags.
-
-账户 sidecar 的 `public/auth` 使用 JSON-RPC POST，凭证只在请求 body 中；私有接口的 access token 只通过 `Authorization: Bearer <token>` 发送。两类请求都拒绝重定向，secret/token 不会进入 URL。
-
-`POST /backtest/run` 已实现为有界、异步、可幂等的本地作业。它只接受严格 JSON 与 `Idempotency-Key`，成功入队返回 HTTP `202` 和 `/backtest/jobs/{job_id}`；相同 key + body 复用同一作业，不同 body 返回 `409`。实际回测在受限子进程中执行，默认 60 秒硬超时；超时或失败不会提升默认结果指针。没有 operator-owned 历史 fixture 时返回可操作的 HTTP `409`；配置 `--historical-fixture` 后才执行。`GET /backtest/jobs/{job_id}`、`GET /backtest/jobs/{job_id}/result`、`GET /backtest/report/default` 和 `GET /backtest/report/{id}` 都只读取已持久化状态或不可变工件。
+先抓一份标的历史（公开数据，无需凭证）：
 
 ```powershell
-$body = '{"schema_version":"backtest_run_request.v1"}'
-curl.exe -sS -X POST http://127.0.0.1:8000/backtest/run `
-  -H "Content-Type: application/json" `
-  -H "Idempotency-Key: baseline-20260713" `
-  --data-binary $body
+crypto-options-underlying-history --currency BTC --days 1200 `
+  --output artifacts/history/btc-daily.json --horizon-days 7 --horizon-days 18
 ```
 
-当前 REST 连续快照达到短观察阈值后，只能标记为“研究证据可信”。生产发布门禁另外要求 WebSocket gap/resync、24 小时 soak 和连续 7 天证据；这些系统观察条件未满足前，Evidence Console 与 Chrome Side Panel 必须继续显示外部发布授权 `NO-GO`。
-
-## Common Checks
+它会直接告诉你每个持有期有多少**独立**窗口。窗口不足时对应期限会被阻断，而不是
+给出一个样本量不够却看起来很精确的数字。
 
 ```powershell
-python -m unittest tests.test_full_system_surfaces
-python -m pytest -q
-python -m crypto_options_report.cli analysis --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json --generated-at 2026-07-07T00:01:30Z --compact
-python -m crypto_options_report.cli ingestion-status --live-deribit --instrument-limit 5 --compact
-python -m crypto_options_report.cli ingestion-status --live-deribit --instrument-limit 20 --compact
+crypto-options-report scan `
+  --snapshot-fixture artifacts/snapshots/btc-chain.json `
+  --underlying-history-fixture artifacts/history/btc-daily.json --compact
 ```
 
-组件化 Web 控制台：
+排名用 **Pareto 前沿 + 已发布的字典序**，不做加权求和——给不同量纲的分量配权重，
+等于声明一个未经证实的相对重要性。被支配的候选会附带"输给了谁、输在哪几个维度"。
+当前沿吞掉几乎全部候选（6 个维度下很常见），`frontier_occupancy` 会如实报告排序实际上
+已经退化成第一个维度的字典序。
+
+> **样本量只认独立非重叠窗口。** 从 1200 天日线算 18 天持有期，会得到 1183 个重叠
+> 窗口但只有 66 个独立窗口。用前者当样本量会把置信度虚报约 18 倍。
+
+### 候选宇宙
+
+发掘覆盖 call 与 put 两侧，结构由**带符号的腿集合**表达而不是结构名，因此终值盈亏、
+最大亏损与仓位希腊值对任意组合都是同一段代码算出来的：
+
+| 结构 | 风险 |
+| --- | --- |
+| `naked_short_calls` | 无界（`max_loss` 为 `None`，下游比率因此无法成立） |
+| `call_credit_spreads` | 有限 |
+| `put_credit_spreads` | 有限 |
+| `iron_condors` | 有限，双边 |
+
+表名由报告里的 `structure_types` 发布，不需要在消费端硬编码。
+
+### 这几个一起做会怎样
+
+`combination_risk` 把前沿候选当作一个假想组合来看（每个结构一张，**不含任何手数**）：
+
+- **跨到期日不给联合最大亏损**，只给明确标注的上界（各成员最坏情况之和）；只有全部腿
+  同一到期日时才算真正的联合 payoff。两个方向相反的价差合起来的最坏情况远小于两者之和。
+- 净 vega 与**按到期日拆分的 vega** 并列——净值隐含"波动率平行移动"这个假设。
+- 边际贡献按"把它移出组合"来算，而不是它自己的最坏情况。
+
+### 这个排序到底能不能预测什么
+
+**先说数据来源的硬约束：** Deribit 公开 API **不发布历史期权链**。
+`get_instruments(expired=true)` 只返回最近一批已到期合约（实测仅当天一个到期日），
+逐合约的 TradingView K 线也只对成交过的合约有数据、且不含 IV 与买卖盘。
+所以这个验证**无法回溯补数**，只能从今天开始按天采集，等合约自然到期。
+
+每天抓一次，文件按采集时间命名，不会互相覆盖：
+
+```powershell
+crypto-options-report pull-snapshot --currency BTC --instrument-limit 64 `
+  --output-dir artifacts/snapshots/btc-series --compact
+```
+
+`tools/capture-daily.ps1` 把这一步和标的历史刷新打包成一次采集，**历史必须一起刷新**：
+它提供每个已结算到期日的结算价，历史过期会让最近结算的 cohort 悄悄掉出样本。注册为
+每日计划任务（本地 17:00，即 Deribit 08:00 UTC 结算之后）：
+
+```powershell
+$repo = "C:\path\to\Option"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$repo\tools\capture-daily.ps1`"" `
+  -WorkingDirectory $repo
+$trigger = New-ScheduledTaskTrigger -Daily -At 17:00
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+Register-ScheduledTask -TaskName "LensOS-Option-DailyCapture" `
+  -Action $action -Trigger $trigger -Settings $settings -Force
+```
+
+采集日志在 `artifacts/logs/capture-daily.log`。同一天跑多次是安全的：验证器按
+「日期 × 合约」去重并报告丢弃了多少条，不会让重复行把当日横截面的相关性拉紧。
+
+攒够 8 个已结算的到期日 cohort（BTC 有日到期，按天采集约 2–3 周）后：
+
+```powershell
+crypto-options-report validate-signal `
+  --snapshot-dir artifacts/snapshots/btc-series `
+  --underlying-history-fixture artifacts/history/btc-daily.json --compact
+```
+
+样本不足时它会 `blocked` 并写明差多少——**这是正常的，不是故障**。
+
+它用**生产代码路径本身**逐日产出候选，与到期后的真实盈亏配对，给出分档表与信息系数。
+两个设计决定了它是否值得信：
+
+- **样本量按到期日 cohort 计**，不按观测数。相邻两天的快照是同一批合约、同一个结算价。
+- **相关性先做 moneyness 中性化**。原始相关系数被虚值程度主导——一个等价于"按行权价
+  排序"的信号在毫无错价信息的对照组里也能拿到 0.95 的 IC。原始值仍并列展示，好让你
+  看见这个混淆有多大。
+
+排序主轴自身也在被度量之列，结果可能是 `no_detectable_edge`。**这正是它存在的意义。**
+
+### CLI（内部管道）
+
+```powershell
+# 抓取一份实时公开快照，供离线分析
+python -m crypto_options_report.cli pull-snapshot --instrument-limit 20 `
+  --output artifacts/snapshots/btc-chain.json --compact
+
+# 基于快照产出报告；市场数据被阻断时退出码为 10
+python -m crypto_options_report.cli report `
+  --snapshot-fixture artifacts/snapshots/btc-chain.json `
+  --output artifacts/reports/latest.json --fail-on-blocked --compact
+
+# 研究性风险告警（不含任何下单路径）
+python -m crypto_options_report.cli alert-eval `
+  --snapshot-fixture artifacts/snapshots/btc-chain.json --dry-run --compact
+```
+
+调度器可用的退出码：`0` 成功 · `10` 市场数据阻断/缺失 · `11` 触发告警 · `1` 硬错误。
+完整示例见 `crypto-options-report --help`。
+
+### HTTP API 与 Evidence Console
+
+Evidence Console 与 API **固定同源**，避免跨源配置和浏览器参数改变生产报告语义。
+服务端对同一组输入只生成一次 `AnalysisRecord`，各 GET 投影复用同一份记录，不会重新
+拉取数据或重算结论。
+
+主要端点：`/evidence`（控制台）· `/research/report` · `/analysis/result` ·
+`/health` · `/livez` · `/readyz`。完整列表、鉴权要求与响应契约见
+[API 参考](docs/api-reference.md)。
+
+### Chrome 研究伴侣（个人本地）
+
+面向个人本地使用的 Manifest V3 侧边栏（Chrome 114+）：
 
 ```powershell
 cd web
 npm ci
-npm test
-npm run lint
-npm run build
 npm run build:extension
 ```
 
-`npm run build` 会更新 `crypto_options_report/static/evidence/`；该产物随 wheel 和容器一起发布。`npm run build:extension` 会生成本地解压加载目录
-`web/dist/chrome-extension/`，不会进入 Python wheel。开发时可分别启动 Python API 与 `npm run dev`，Vite 会把 `/research` 请求代理到 `127.0.0.1:8000`。
+在 `chrome://extensions` 打开「开发者模式」→「加载已解压的扩展程序」→ 选择
+`web/dist/chrome-extension/`，然后在 Deribit 页面点击工具栏图标。
 
-### Chrome 研究伴侣（个人本地）
+侧边栏只读取 `http://127.0.0.1:<port>/research/report`，只识别当前 Deribit 合约并
+展示研究上下文；**不包含订单、交易、张数或 sizing 控件**。合约上下文按标签页隔离。
 
-当前交付是 Chrome 114+ 的 Manifest V3 Side Panel，只面向个人本地使用：
+## 生产部署
 
-1. 运行 `python -m crypto_options_report.api --host 127.0.0.1 --port 8000`；
-2. 在 `web/` 中运行 `npm ci` 和 `npm run build:extension`；
-3. 打开 `chrome://extensions`，启用“开发者模式”；
-4. 选择“加载已解压的扩展程序”，指向本仓库的
-   `web/dist/chrome-extension/`；
-5. 打开 `https://www.deribit.com/`，点击工具栏中的 LensOS Option 图标。
+推荐把公共行情、私有只读账户和 Web API 拆成三个进程：凭证只存在于 sidecar 进程，
+API 进程只读取脱敏后的 JSON。生产 HTTP 禁止浏览器指定 fixture、账户场景、评估时间
+或实时抓取。
 
-Side Panel 默认只读 `http://127.0.0.1:8000/research/report`。设置中可以修改端口，
-但只接受 `http://127.0.0.1:<port>` 或 `http://localhost:<port>`。扩展只识别当前
-Deribit 合约并展示研究上下文；它不包含订单、交易、张数或 sizing 控件。Chrome
-Web Store、托管引擎、用户认证和非个人数据分发不属于当前 A 形态。完整报告只在
-service worker 的 HTTP 边界内校验；发送给 Side Panel 的消息会剔除证据谱系和
-曲面等桌面专属数据。合约上下文按 Deribit 标签页隔离，切换标签页不会沿用另一
-合约的识别结果。
+服务默认只监听 loopback，必须部署在认证 / TLS 反向代理之后，不能直接暴露到公网。
 
-## Analysis Ops And Alerts
+完整的容器、健康检查、HMAC 密钥管理、密钥轮换、回滚与验证步骤见
+**[生产运行手册](docs/operations/production-runbook.md)**；环境变量清单见
+[`.env.example`](.env.example)。
 
-Capture a live snapshot for offline analysis:
+## 开发
 
 ```powershell
-python -m crypto_options_report.cli pull-snapshot --instrument-limit 20 --output artifacts/snapshots/btc-chain.json --compact
-python -m crypto_options_report.cli report --snapshot-fixture artifacts/snapshots/btc-chain.json --output artifacts/reports/latest.json --fail-on-blocked --compact
+python -m pytest -q
+python -m ruff check crypto_options_report tools tests
+
+cd web
+npm ci && npm test && npm run lint && npm run build
 ```
 
-Evaluate research-only risk alerts (no order paths; opportunity alerts default off):
+`npm run build` 会更新 `crypto_options_report/static/evidence/`，该产物随 wheel 和
+容器一起发布，**必须与源码一起提交**（CI 会校验一致性）。
 
-```powershell
-# Preview only (no state write, no webhook delivery):
-python -m crypto_options_report.cli alert-eval --snapshot-fixture artifacts/snapshots/btc-chain.json --dry-run --compact
+贡献流程与设计红线见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-# Scheduler / ops path: persist cooldown state (do not combine with --dry-run):
-python -m crypto_options_report.cli alert-eval --snapshot-fixture artifacts/snapshots/btc-chain.json --state-file artifacts/alerts/state.json --fail-on-alert --compact
-# optional webhook (HMAC). Failed delivery does NOT advance cooldown state:
-#   --webhook-url https://example/hooks/alerts --webhook-secret-env ALERT_WEBHOOK_SECRET
-```
+## 项目地图
 
-Webhook 拒绝所有重定向。启用 secret 后，请求携带 `X-Webhook-Timestamp`、`X-Webhook-Delivery-Id` 和 `X-Signature-SHA256`；签名输入为精确的 `timestamp.delivery_id.body` 字节。接收端必须校验时间窗口，并在窗口内拒绝重复 delivery id。
+| 路径 | 职责 |
+| --- | --- |
+| `crypto_options_report/analysis_run.py` | 不可变的 mandate、证据、策略与准入契约 |
+| `crypto_options_report/contract.py` | `research_report.v1` 兼容投影 |
+| `crypto_options_report/api.py` | stdlib HTTP API、`/evidence` 与旧 URL 兼容层 |
+| `crypto_options_report/market_data.py` | Deribit 接入、快照规范化与质量门禁 |
+| `crypto_options_report/structures.py` | 多腿结构：终值 payoff、风险边界、仓位希腊值 |
+| `crypto_options_report/signal_validation.py` | 排序信号的预测力度量（分档表与信息系数） |
+| `crypto_options_report/combination_risk.py` | 组合聚合与边际风险 |
+| `crypto_options_report/_canonical.py` | 全局唯一的规范化 JSON 编码（所有摘要的基础） |
+| `web/` | 共享报告边界、Evidence Console、Chrome 侧边栏源码 |
+| `tests/` | 契约、API、数据质量、风险与 fail-closed 证据测试 |
+| `docs/` | 术语表、API 参考、架构说明、运行手册（见 [文档地图](docs/README.md)） |
 
-Exit codes for schedulers:
+## 安全边界
 
-- `0` success
-- `10` market data blocked/missing (`--fail-on-blocked`)
-- `11` one or more alerts fired (`--fail-on-alert`)
-- `1` hard error (including webhook delivery failure)
+本项目**刻意不包含实盘下单适配器**。可信输出上限是 `execution_allowed=false` 的
+`EntryAdmissionDecision`，其中不含可执行张数或下单指令。裸卖 call 只作为「已拒绝的
+无界损失对照」出现在可信记录中。
 
-Trading spine (paper/manual/live orders) remains **NO-GO** until external Definition of Done evidence exists. Alerts are risk-degradation first; candidate opportunity alerts stay gated by path-risk and calibration evidence.
+不要以「清理研究控制台」的名义加入订单模板、下单路径、paper/manual 候选控件或
+sizing 输出。
 
-Evidence Console visual smoke:
+漏洞请通过 GitHub Security Advisory 私下报告，详见 [SECURITY.md](SECURITY.md)。
 
-```powershell
-$env:EVIDENCE_URL = "http://127.0.0.1:8000/evidence"
-node .workflow/verify-dashboard-cdp.mjs
-```
+Deribit 接入以官方 [public market-data API](https://docs.deribit.com/api-reference/market-data/public-get_order_book)
+和 [OAuth / API key scopes](https://docs.deribit.com/api-reference/authentication/public-auth) 为准。
+任何 `account:read_write` 或 `trade:read_write` key 都会被账户 sidecar 拒绝。
 
-Optional environment overrides:
+## 许可
 
-- `EVIDENCE_URL`
-- `DASHBOARD_URL`
-- `EVIDENCE_MAX_OVERFLOW_PX`
-- `CHROME_PATH`
-- `CDP_PORT`
-
-## Project Map
-
-- `crypto_options_report/analysis_run.py` owns the immutable mandate, evidence, policy, opportunity, strategy, manifest, domain-event, and entry-admission contracts.
-- `crypto_options_report/contract.py` builds the compatibility `research_report.v1` projection.
-- `crypto_options_report/api.py` serves the stdlib HTTP API, `/evidence` bundle, and legacy URL aliases.
-- `crypto_options_report/full_surface.py` declares CLI/API/dashboard surface descriptors.
-- `web/` contains the shared report boundary, typed Evidence Console, and local Chrome Side Panel source.
-- `crypto_options_report/static/evidence/` is the packaged Evidence Console build output; `web/dist/chrome-extension/` is the untracked unpacked-extension output.
-- `tests/` contains contract, API, data-quality, risk, fail-closed evidence, and unsupported-feature checks.
-- `issues/README.md` indexes core `ISSUE-001..015` and DQR remediation issues.
-- `docs/automation/goal-board.md` is the canonical acceptance board.
-- `docs/automation/project-acceptance-report.md` records current project acceptance.
-- `docs/research/` contains data-quality audits, remediation backlog, and integration research.
-- `DESIGN.md` anchors the Evidence Console and Chrome companion visual/product contract.
-
-## Safety Boundary
-
-This project intentionally has no live-order adapter. The trusted output ceiling is `EntryAdmissionDecision` with `execution_allowed=false`; it contains no actionable contract count or order instruction. Calibration/model promotion is not implemented and paper/manual workflow is unsupported; the single external release-authorization gate therefore remains `NO-GO`.
-
-Do not add order templates, live submission paths, paper/manual candidate controls, or sizing outputs as part of research-console cleanup.
-
-Deribit 接入以官方 [public market-data API](https://docs.deribit.com/api-reference/market-data/public-get_order_book) 和 [OAuth / API key scopes](https://docs.deribit.com/api-reference/authentication/public-auth) 为准。任何 `account:read_write` 或 `trade:read_write` key 都会被账户 sidecar 拒绝。
+尚未选定许可证。在选定并加入 `LICENSE` 之前，本仓库默认保留所有权利，不可再分发。

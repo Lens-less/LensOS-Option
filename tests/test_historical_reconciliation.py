@@ -13,7 +13,6 @@ from crypto_options_report.historical import (
     query_eligible_canonical_quotes,
 )
 
-
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "historical_vendor"
 
 
@@ -291,23 +290,21 @@ class HistoricalReconciliationTests(unittest.TestCase):
                 with self.subTest(
                     field_name=field_name,
                     invalid_value=invalid_value,
-                ):
-                    with self.assertRaises(ValueError):
-                        build_historical_reconciliation_report(
-                            rows,
-                            config={field_name: invalid_value},
-                        )
+                ), self.assertRaises(ValueError):
+                    build_historical_reconciliation_report(
+                        rows,
+                        config={field_name: invalid_value},
+                    )
         for field_name in positive_fields:
             for invalid_value in positive_invalid_values:
                 with self.subTest(
                     field_name=field_name,
                     invalid_value=invalid_value,
-                ):
-                    with self.assertRaises(ValueError):
-                        build_historical_reconciliation_report(
-                            rows,
-                            config={field_name: invalid_value},
-                        )
+                ), self.assertRaises(ValueError):
+                    build_historical_reconciliation_report(
+                        rows,
+                        config={field_name: invalid_value},
+                    )
 
         report = build_historical_reconciliation_report(
             rows,

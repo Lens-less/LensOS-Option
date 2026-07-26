@@ -1,10 +1,10 @@
 import unittest
 
 from crypto_options_report.position_management import (
+    build_position_management_report,
     classify_position_state,
     evaluate_position_replay,
     validate_position_management_report,
-    build_position_management_report,
 )
 
 

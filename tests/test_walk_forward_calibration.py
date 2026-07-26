@@ -1,5 +1,5 @@
-from copy import deepcopy
 import unittest
+from copy import deepcopy
 
 from crypto_options_report.calibration import (
     build_walk_forward_calibration_report,

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from math import isfinite
-from pathlib import Path
 import sys
 import time
-from typing import Any, Sequence
+from collections.abc import Sequence
+from math import isfinite
+from pathlib import Path
+from typing import Any
 
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
@@ -95,7 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     instrument_limit=instrument_limit,
                     complete_feed_graph=bool(args.complete_feed_graph),
                 )
-            except Exception as exc:  # noqa: BLE001 - fail closed and retry
+            except Exception as exc:
                 _log_json(
                     "market_snapshot_refresh_failed",
                     output=str(output),

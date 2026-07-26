@@ -13,6 +13,7 @@ function buildRuntime(): SidePanelRuntime {
       href: "https://www.deribit.com/options/BTC?instrument=BTC-7AUG26-71000-C",
       route: "/options/BTC",
       source: "url",
+      confidence: "url",
       instrument: "BTC-7AUG26-71000-C",
       underlying: "BTC",
       detectedAt: Date.parse("2026-07-25T08:00:00Z"),
@@ -26,6 +27,7 @@ function buildRuntime(): SidePanelRuntime {
         cached: true,
       }),
     ),
+    getCachedReport: vi.fn().mockResolvedValue(null),
     getEvidenceUrl: vi
       .fn()
       .mockImplementation((origin: string) => `${origin}/evidence/`),
@@ -96,17 +98,48 @@ describe("SidePanelApp", () => {
     );
   });
 
-  it("shows a recoverable offline state when the local engine cannot be reached", async () => {
+  it("shows a first-run setup checklist when the engine has never been reached", async () => {
     const runtime = buildRuntime();
     vi.mocked(runtime.getReport).mockRejectedValue(new Error("Failed to fetch"));
+    vi.mocked(runtime.getCachedReport).mockResolvedValue(null);
 
     render(<SidePanelApp runtime={runtime} />);
 
-    expect(await screen.findByText("本地引擎离线")).toBeInTheDocument();
+    expect(
+      await screen.findByText("本地引擎离线 · 首次设置"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "python -m crypto_options_report.api --host 127.0.0.1 --port 8000",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "打开完整证据" }),
     ).toHaveAttribute("href", "http://127.0.0.1:8000/evidence/");
+  });
+
+  it("shows a persistent stale banner with the last cached report when the engine drops after connecting", async () => {
+    const runtime = buildRuntime();
+    vi.mocked(runtime.getReport).mockRejectedValue(new Error("Failed to fetch"));
+    vi.mocked(runtime.getCachedReport).mockResolvedValue(
+      buildLoadedReport({
+        report: safeResearchReport,
+        receivedAtMs: Date.parse("2026-07-25T08:00:10Z"),
+        cached: true,
+      }),
+    );
+
+    render(<SidePanelApp runtime={runtime} />);
+
+    expect(
+      await screen.findByText("本地引擎离线 · 显示上次结果"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    // The stale report is still fully shown underneath the banner.
+    expect(screen.getByText("完整两腿")).toBeInTheDocument();
+    expect(screen.getAllByText("BTC-7AUG26-71000-C").length).toBeGreaterThan(0);
   });
 
   it("labels unsafe reports as validation failures rather than network outages", async () => {

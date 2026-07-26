@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from copy import deepcopy
-from datetime import datetime, timezone
 import json
 import math
+from collections.abc import Mapping
+from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -970,7 +970,7 @@ def parse_timestamp(value: Any) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def normalize_direction(position: dict[str, Any]) -> str:

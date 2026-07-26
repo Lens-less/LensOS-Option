@@ -113,6 +113,7 @@ describe("createExtensionWorkerController", () => {
       href: "https://www.deribit.com/options/BTC?instrument=BTC-7AUG26-71000-C",
       route: "/options/BTC",
       source: "url" as const,
+      confidence: "url" as const,
       instrument: "BTC-7AUG26-71000-C",
       underlying: "BTC",
       detectedAt: 1,
@@ -277,6 +278,47 @@ describe("createExtensionWorkerController", () => {
       throw new Error("expected cached report validation failure");
     }
     expect(response.error).toMatch(/safety boundary/i);
+  });
+
+  it("serves the cached report without touching the network for REPORT_GET_CACHED_ONLY", async () => {
+    const fetchCalls: string[] = [];
+    const session = new Map<string, unknown>();
+    const local = new Map<string, unknown>();
+    const controller = createExtensionWorkerController({
+      loadReport: async (origin) => {
+        fetchCalls.push(origin);
+        return { report: safeReport, receivedAtMs: 1721865600000 };
+      },
+      readSession: async <T>(key: string) => session.get(key) as T | undefined,
+      writeSession: async (key, value) => {
+        session.set(key, value);
+      },
+      readLocal: async <T>(key: string) => local.get(key) as T | undefined,
+      writeLocal: async (key, value) => {
+        local.set(key, value);
+      },
+      setSidePanelOptions: async () => undefined,
+    });
+
+    const miss = await controller.handleMessage({
+      type: "REPORT_GET_CACHED_ONLY",
+    });
+    expect(miss).toEqual({ ok: true, origin: "http://127.0.0.1:8000" });
+    expect(fetchCalls).toEqual([]);
+
+    await controller.handleMessage({ type: "REPORT_GET" });
+    expect(fetchCalls).toEqual(["http://127.0.0.1:8000"]);
+
+    const hit = await controller.handleMessage({
+      type: "REPORT_GET_CACHED_ONLY",
+    });
+    if (!hit.ok || !("loaded" in hit) || !hit.loaded) {
+      throw new Error("expected a cached report hit");
+    }
+    expect(hit.loaded.report.schema_version).toBe("research_report.v1");
+    expect(hit.fromCache).toBe(true);
+    // Still no additional network access from the cached-only read path.
+    expect(fetchCalls).toEqual(["http://127.0.0.1:8000"]);
   });
 
   it("never reuses a cached report after the engine origin changes", async () => {

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from math import exp, log, sqrt
+from datetime import UTC, datetime, timedelta
+from itertools import pairwise
+from math import log, sqrt
 from statistics import NormalDist
 from typing import Any
 
 from .market_data import normalize_market_snapshot, parse_timestamp_ms
+from .structures import build_structure
 
 DEFAULT_SURFACE_LIMITS = {
     "min_quotes_per_expiry": 4,
@@ -121,26 +123,52 @@ def build_vol_surface_and_candidate_research(
             reason_code="PNL_EVIDENCE_FAIL",
         )
 
-    naked_tables = {"eligible": [], "review": [], "rejected": []}
-    spread_tables = {"eligible": [], "review": [], "rejected": []}
+    tables = {name: _empty_tables() for name in CANDIDATE_TABLE_NAMES}
     rejected_expiries = []
+    condors_truncated = 0
 
-    for expiry_report in eligible_expiries:
-        if not expiry_report["candidate_eligible"]:
+    for expiry_report in expiries:
+        call_eligible = expiry_report["candidate_eligible"]
+        put_eligible = expiry_report["put_candidate_eligible"]
+        if not call_eligible and not put_eligible:
             rejected_expiries.append(expiry_report["expiry_date"])
             continue
-        points = expiry_report["surface_points"]
-        for point in points:
-            candidate = _build_naked_candidate(point, expiry_report)
-            naked_tables[_decision_bucket(candidate["decision"])].append(candidate)
-        for spread in _build_spread_candidates(points, expiry_report):
-            spread_tables[_decision_bucket(spread["decision"])].append(spread)
+
+        call_points = expiry_report["surface_points"]
+        put_points = expiry_report["put_surface_points"]
+        call_spreads: list[dict[str, Any]] = []
+        put_spreads: list[dict[str, Any]] = []
+
+        if call_eligible:
+            for point in call_points:
+                candidate = _build_naked_candidate(point, expiry_report)
+                _file(tables["naked_short_calls"], candidate)
+            call_spreads = _build_spread_candidates(
+                call_points, expiry_report, option_type="call"
+            )
+        if put_eligible:
+            put_spreads = _build_spread_candidates(
+                put_points, expiry_report, option_type="put"
+            )
+        if call_eligible and put_eligible:
+            condors, truncated = _build_iron_condor_candidates(
+                put_spreads=put_spreads,
+                call_spreads=call_spreads,
+                expiry_report=expiry_report,
+            )
+            condors_truncated += truncated
+            for condor in condors:
+                _file(tables["iron_condors"], condor)
+
+        for spread in call_spreads:
+            _file(tables["call_credit_spreads"], spread)
+        for spread in put_spreads:
+            _file(tables["put_credit_spreads"], spread)
 
     candidate_status = "validated"
     reason_code = None
-    total_candidates = (
-        sum(len(rows) for rows in naked_tables.values())
-        + sum(len(rows) for rows in spread_tables.values())
+    total_candidates = sum(
+        len(rows) for table in tables.values() for rows in table.values()
     )
     if total_candidates == 0:
         candidate_status = "blocked"
@@ -150,25 +178,46 @@ def build_vol_surface_and_candidate_research(
             else "NO_ELIGIBLE_CANDIDATES"
         )
 
+    summary: dict[str, Any] = {
+        "expiries_considered": len(expiries),
+        "eligible_expiries": len(eligible_expiries),
+        "rejected_expiries": rejected_expiries,
+        "iron_condors_truncated": condors_truncated,
+        "iron_condor_limit": MAX_IRON_CONDOR_CANDIDATES,
+    }
+    for name, table in tables.items():
+        for tier, key in (("eligible", "eligible"), ("review", "review"), ("rejected", "rejected")):
+            summary[f"{key}_{name}"] = len(table[tier])
+
     candidate_research = {
         "status": candidate_status,
         "reason_code": reason_code,
         "filter_thresholds": dict(DEFAULT_SURFACE_LIMITS),
-        "naked_short_calls": naked_tables,
-        "call_credit_spreads": spread_tables,
-        "summary": {
-            "expiries_considered": len(expiries),
-            "eligible_expiries": len(eligible_expiries),
-            "rejected_expiries": rejected_expiries,
-            "eligible_naked_short_calls": len(naked_tables["eligible"]),
-            "review_naked_short_calls": len(naked_tables["review"]),
-            "rejected_naked_short_calls": len(naked_tables["rejected"]),
-            "eligible_call_credit_spreads": len(spread_tables["eligible"]),
-            "review_call_credit_spreads": len(spread_tables["review"]),
-            "rejected_call_credit_spreads": len(spread_tables["rejected"]),
-        },
+        "structure_types": list(CANDIDATE_TABLE_NAMES),
+        **tables,
+        "summary": summary,
     }
     return vol_surface_status, candidate_research
+
+
+# Published in the artifact so a consumer can enumerate the candidate universe
+# instead of hard-coding the table names it happens to know about.
+CANDIDATE_TABLE_NAMES = (
+    "naked_short_calls",
+    "call_credit_spreads",
+    "put_credit_spreads",
+    "iron_condors",
+)
+
+
+def _empty_tables() -> dict[str, list[dict[str, Any]]]:
+    return {"eligible": [], "review": [], "rejected": []}
+
+
+def _file(table: dict[str, list[dict[str, Any]]], candidate: dict[str, Any]) -> None:
+    """Place a candidate in its decision bucket, minus the private leg cache."""
+    published = {key: value for key, value in candidate.items() if not key.startswith("_")}
+    table[_decision_bucket(candidate["decision"])].append(published)
 
 
 def _missing_surface_status() -> dict[str, Any]:
@@ -282,24 +331,23 @@ def _missing_candidate_research() -> dict[str, Any]:
 
 
 def _blocked_candidate_research(*, reason_code: str) -> dict[str, Any]:
-    empty_tables = {"eligible": [], "review": [], "rejected": []}
+    summary: dict[str, Any] = {
+        "expiries_considered": 0,
+        "eligible_expiries": 0,
+        "rejected_expiries": [],
+        "iron_condors_truncated": 0,
+        "iron_condor_limit": MAX_IRON_CONDOR_CANDIDATES,
+    }
+    for name in CANDIDATE_TABLE_NAMES:
+        for tier in ("eligible", "review", "rejected"):
+            summary[f"{tier}_{name}"] = 0
     return {
         "status": "blocked",
         "reason_code": reason_code,
         "filter_thresholds": dict(DEFAULT_SURFACE_LIMITS),
-        "naked_short_calls": empty_tables.copy(),
-        "call_credit_spreads": empty_tables.copy(),
-        "summary": {
-            "expiries_considered": 0,
-            "eligible_expiries": 0,
-            "rejected_expiries": [],
-            "eligible_naked_short_calls": 0,
-            "review_naked_short_calls": 0,
-            "rejected_naked_short_calls": 0,
-            "eligible_call_credit_spreads": 0,
-            "review_call_credit_spreads": 0,
-            "rejected_call_credit_spreads": 0,
-        },
+        "structure_types": list(CANDIDATE_TABLE_NAMES),
+        **{name: _empty_tables() for name in CANDIDATE_TABLE_NAMES},
+        "summary": summary,
     }
 
 
@@ -309,19 +357,81 @@ def _build_expiry_surface(
     quotes: list[dict[str, Any]],
     evaluation_now_ms: int,
 ) -> dict[str, Any]:
-    valid_quotes = [
-        quote
-        for quote in sorted(quotes, key=lambda item: item["strike"])
-        if quote["quality_status"] == "valid" and quote.get("option_type") == "call"
-    ]
+    """Fit one smile per option type within the expiry.
+
+    Calls and puts are fitted separately rather than merged. Put-call parity
+    says their implied volatilities should agree, but that is a property to
+    observe, not one to assume: pooling them would hide a parity violation
+    inside the residuals of a single fit, and a parity violation is exactly the
+    kind of thing a research console should surface rather than smooth away.
+
+    The call side keeps the top-level field names it always had, so every
+    existing consumer reads the same surface it read before.
+    """
     dte_days = _dte_days(expiry_date, evaluation_now_ms)
+    ordered = sorted(quotes, key=lambda item: item["strike"])
+    sides = {
+        option_type: _build_side_surface(
+            expiry_date=expiry_date,
+            dte_days=dte_days,
+            valid_quotes=[
+                quote
+                for quote in ordered
+                if quote["quality_status"] == "valid"
+                and quote.get("option_type") == option_type
+            ],
+            option_type=option_type,
+        )
+        for option_type in ("call", "put")
+    }
+    call_side = sides["call"]
+    put_side = sides["put"]
+
+    return {
+        "expiry_date": expiry_date,
+        "dte_days": dte_days,
+        # Legacy top-level fields mirror the call side.
+        "quality_passing_quotes": call_side["quality_passing_quotes"],
+        "fit_quality_score": call_side["fit_quality_score"],
+        "fit_quality_pass": call_side["fit_quality_pass"],
+        "fit_residual_rmse": call_side["fit_residual_rmse"],
+        "fit_residual_scale": call_side["fit_residual_scale"],
+        "fit_degrees_of_freedom": call_side["fit_degrees_of_freedom"],
+        "no_arb_pass": call_side["no_arb_pass"],
+        "no_arb_error": call_side["no_arb_error"],
+        "candidate_eligible": call_side["candidate_eligible"],
+        "reason_codes": call_side["reason_codes"],
+        "surface_points": call_side["surface_points"],
+        # Put side, reported alongside rather than folded in.
+        "put_candidate_eligible": put_side["candidate_eligible"],
+        "put_surface_points": put_side["surface_points"],
+        "sides": {
+            option_type: {
+                key: value
+                for key, value in side.items()
+                if key != "surface_points"
+            }
+            for option_type, side in sorted(sides.items())
+        },
+    }
+
+
+def _build_side_surface(
+    *,
+    expiry_date: str,
+    dte_days: float,
+    valid_quotes: list[dict[str, Any]],
+    option_type: str,
+) -> dict[str, Any]:
     if len(valid_quotes) < DEFAULT_SURFACE_LIMITS["min_quotes_per_expiry"]:
         return {
-            "expiry_date": expiry_date,
-            "dte_days": dte_days,
+            "option_type": option_type,
             "quality_passing_quotes": len(valid_quotes),
             "fit_quality_score": 0.0,
             "fit_quality_pass": False,
+            "fit_residual_rmse": None,
+            "fit_residual_scale": None,
+            "fit_degrees_of_freedom": len(valid_quotes) - 3,
             "no_arb_pass": False,
             "no_arb_error": 1.0,
             "candidate_eligible": False,
@@ -333,6 +443,7 @@ def _build_expiry_surface(
     no_arb = _evaluate_no_arb(
         valid_quotes,
         max_error=DEFAULT_SURFACE_LIMITS["max_no_arb_error"],
+        option_type=option_type,
     )
     fit_pass = fit["fit_quality_score"] >= DEFAULT_SURFACE_LIMITS["fit_quality_threshold"]
     no_arb_pass = no_arb["passed"]
@@ -353,11 +464,13 @@ def _build_expiry_surface(
     ]
 
     return {
-        "expiry_date": expiry_date,
-        "dte_days": dte_days,
+        "option_type": option_type,
         "quality_passing_quotes": len(valid_quotes),
         "fit_quality_score": fit["fit_quality_score"],
         "fit_quality_pass": fit_pass,
+        "fit_residual_rmse": fit["fit_residual_rmse"],
+        "fit_residual_scale": fit["fit_residual_scale"],
+        "fit_degrees_of_freedom": fit["fit_degrees_of_freedom"],
         "no_arb_pass": no_arb_pass,
         "no_arb_error": no_arb["error"],
         "candidate_eligible": fit_pass and no_arb_pass,
@@ -386,7 +499,7 @@ def _fit_quadratic_iv_surface(valid_quotes: list[dict[str, Any]]) -> dict[str, A
 
     for _iteration in range(2):
         fitted = [_evaluate_quadratic(coefficients, value) for value in zs]
-        residuals = [actual - estimate for actual, estimate in zip(ys, fitted)]
+        residuals = [actual - estimate for actual, estimate in zip(ys, fitted, strict=True)]
         absolute = sorted(abs(value) for value in residuals)
         median_abs = absolute[len(absolute) // 2]
         robust_scale = max(median_abs / 0.6745, 1e-6)
@@ -398,10 +511,18 @@ def _fit_quadratic_iv_surface(valid_quotes: list[dict[str, Any]]) -> dict[str, A
         coefficients = _weighted_quadratic_coefficients(zs, ys, weights)
 
     fitted = [_evaluate_quadratic(coefficients, value) for value in zs]
-    residuals = [actual - estimate for actual, estimate in zip(ys, fitted)]
+    residuals = [actual - estimate for actual, estimate in zip(ys, fitted, strict=True)]
     rmse = sqrt(sum(value * value for value in residuals) / len(residuals))
     iv_range = max(max(ys) - min(ys), 1.0)
     fit_quality_score = max(0.0, round(1.0 - (rmse / iv_range), 6))
+    # A quadratic has 3 free parameters, so the raw RMSE understates the true
+    # residual scale on a thin chain. The degrees-of-freedom correction is what
+    # makes a residual z-score comparable between a 4-quote and a 40-quote
+    # expiry; without it a thin chain always looks like it has huge edge.
+    dof = len(residuals) - 3
+    residual_scale = (
+        sqrt(sum(value * value for value in residuals) / dof) if dof > 0 else None
+    )
     return {
         "basis": "centred_scaled_log_moneyness",
         "x_center": x_center,
@@ -409,6 +530,11 @@ def _fit_quadratic_iv_surface(valid_quotes: list[dict[str, Any]]) -> dict[str, A
         "coefficients": coefficients,
         "fitted": fitted,
         "residuals": residuals,
+        "fit_residual_rmse": round(rmse, 6),
+        "fit_residual_scale": (
+            round(residual_scale, 6) if residual_scale is not None else None
+        ),
+        "fit_degrees_of_freedom": dof,
         "fit_quality_score": fit_quality_score,
     }
 
@@ -418,9 +544,9 @@ def _weighted_quadratic_coefficients(
     ys: list[float],
     weights: list[float],
 ) -> list[float]:
-    moments = [sum(weight * (x ** power) for x, weight in zip(xs, weights)) for power in range(5)]
+    moments = [sum(weight * (x ** power) for x, weight in zip(xs, weights, strict=True)) for power in range(5)]
     targets = [
-        sum(weight * (x ** power) * y for x, y, weight in zip(xs, ys, weights))
+        sum(weight * (x ** power) * y for x, y, weight in zip(xs, ys, weights, strict=True))
         for power in range(3)
     ]
     matrix = [
@@ -434,7 +560,7 @@ def _weighted_quadratic_coefficients(
         # Duplicate/degenerate strikes cannot support curvature. The constant
         # fallback is honest: its residual score will fail a non-flat chain.
         total_weight = max(sum(weights), 1e-12)
-        return [sum(weight * value for weight, value in zip(weights, ys)) / total_weight, 0.0, 0.0]
+        return [sum(weight * value for weight, value in zip(weights, ys, strict=True)) / total_weight, 0.0, 0.0]
 
 
 def _solve_three_by_three(matrix: list[list[float]], targets: list[float]) -> list[float]:
@@ -452,7 +578,7 @@ def _solve_three_by_three(matrix: list[list[float]], targets: list[float]) -> li
             factor = augmented[row][column]
             augmented[row] = [
                 value - factor * pivot_value
-                for value, pivot_value in zip(augmented[row], augmented[column])
+                for value, pivot_value in zip(augmented[row], augmented[column], strict=True)
             ]
     return [augmented[index][3] for index in range(3)]
 
@@ -470,20 +596,33 @@ def _evaluate_no_arb(
     valid_quotes: list[dict[str, Any]],
     *,
     max_error: float,
+    option_type: str = "call",
 ) -> dict[str, Any]:
+    """Monotonicity and convexity in strike, in the direction the type requires.
+
+    Call prices must fall as strike rises; put prices must rise. Applying the
+    call direction to a put would flag every well-formed put chain as an
+    arbitrage and block the whole side.
+    """
     monotonic_errors = []
     convexity_errors = []
     reason_codes: list[str] = []
-    for left, right in zip(valid_quotes, valid_quotes[1:]):
+    puts = option_type == "put"
+    for left, right in pairwise(valid_quotes):
         if right["strike"] <= left["strike"]:
             monotonic_errors.append(1.0)
             _append_unique(reason_codes, "SURFACE_DUPLICATE_STRIKE")
             continue
-        if right["mid"] > left["mid"]:
+        violation = (
+            left["mid"] - right["mid"] if puts else right["mid"] - left["mid"]
+        )
+        if violation > 0:
             base = max(abs(left["mid"]), 1e-6)
-            monotonic_errors.append((right["mid"] - left["mid"]) / base)
+            monotonic_errors.append(violation / base)
 
-    for first, second, third in zip(valid_quotes, valid_quotes[1:], valid_quotes[2:]):
+    for first, second, third in zip(
+        valid_quotes, valid_quotes[1:], valid_quotes[2:], strict=False
+    ):
         left_width = second["strike"] - first["strike"]
         right_width = third["strike"] - second["strike"]
         if left_width <= 0 or right_width <= 0:
@@ -536,21 +675,43 @@ def _build_surface_point(
         if premium_currency != "UNKNOWN"
         else "unknown"
     )
-    metrics = _black_scholes_call_metrics(
+    metrics = _black_scholes_metrics(
         underlying_price=quote["underlying_price"],
         strike=quote["strike"],
         iv_percent=fitted_iv,
         dte_days=dte_days,
+        option_type=str(quote.get("option_type") or "call"),
     )
     greek_consistency = _assess_greek_consistency(
         metrics["delta"],
         exchange_greeks.get("delta"),
     )
+    residual_iv = round(quote["mark_iv"] - fitted_iv, 6)
+    # Raw IV points are not comparable across chains or across expiries: one
+    # point of residual is noise on a scattered smile and signal on a tight one,
+    # and it buys very different premium at 7 DTE than at 35 DTE. The z-score
+    # divides out the first difference and the vega-dollar figure the second.
+    residual_scale = fit.get("fit_residual_scale")
+    residual_z = (
+        round(residual_iv / residual_scale, 6)
+        if isinstance(residual_scale, (int, float)) and residual_scale > 1e-9
+        else None
+    )
+    residual_vega_usd = (
+        round(residual_iv * metrics["vega"], 6)
+        if isinstance(metrics.get("vega"), (int, float))
+        else None
+    )
     return {
         "instrument_name": quote["instrument_name"],
         "expiry_date": expiry_date,
+        "option_type": quote.get("option_type"),
         "strike_price": quote["strike"],
         "underlying_price": quote["underlying_price"],
+        "forward_price": quote.get("forward_price"),
+        "index_price": quote.get("index_price"),
+        "underlying_price_source": quote.get("underlying_price_source"),
+        "forward_basis": quote.get("forward_basis"),
         "market_bid": quote["bid"],
         "market_ask": quote["ask"],
         "market_mid": quote["mid"],
@@ -563,7 +724,10 @@ def _build_surface_point(
         "premium_unit": premium_unit,
         "settlement_currency": canonical_metadata.get("settlement_currency"),
         "surface_fitted_iv": fitted_iv,
-        "fit_residual_iv": round(quote["mark_iv"] - fitted_iv, 6),
+        "fit_residual_iv": residual_iv,
+        "fit_residual_z": residual_z,
+        "fit_residual_vega_usd": residual_vega_usd,
+        "fit_residual_scale": residual_scale,
         "model_delta": metrics["delta"],
         "model_gamma": metrics["gamma"],
         "model_theta": metrics["theta"],
@@ -580,6 +744,46 @@ def _build_surface_point(
     }
 
 
+def _black_scholes_metrics(
+    *,
+    underlying_price: float,
+    strike: float,
+    iv_percent: float,
+    dte_days: float,
+    option_type: str = "call",
+) -> dict[str, float]:
+    """Greeks and risk-neutral ITM probability for either option type.
+
+    Gamma, vega and theta are shared by both types under this model; delta and
+    the ITM probability are not. A put's delta is the call's minus one and its
+    ITM probability is the complement, so reusing the call figures for a put
+    would place every put in the wrong delta bucket and invert its assignment
+    odds — silently, because both numbers stay inside their plausible ranges.
+    """
+    sigma = max(iv_percent / 100.0, 1e-6)
+    time_years = max(dte_days / 365.0, 1e-6)
+    denom = sigma * sqrt(time_years)
+    d1 = (log(underlying_price / strike) + 0.5 * sigma * sigma * time_years) / denom
+    d2 = d1 - denom
+    pdf = _NORMAL.pdf(d1)
+    gamma = pdf / (underlying_price * denom)
+    theta = -(underlying_price * pdf * sigma) / (2.0 * sqrt(time_years) * 365.0)
+    vega = (underlying_price * pdf * sqrt(time_years)) / 100.0
+    if option_type == "put":
+        delta = _NORMAL.cdf(d1) - 1.0
+        p_itm = _NORMAL.cdf(-d2)
+    else:
+        delta = _NORMAL.cdf(d1)
+        p_itm = _NORMAL.cdf(d2)
+    return {
+        "delta": round(delta, 6),
+        "gamma": round(gamma, 8),
+        "theta": round(theta, 6),
+        "vega": round(vega, 6),
+        "risk_neutral_p_itm": round(p_itm, 6),
+    }
+
+
 def _black_scholes_call_metrics(
     *,
     underlying_price: float,
@@ -587,23 +791,67 @@ def _black_scholes_call_metrics(
     iv_percent: float,
     dte_days: float,
 ) -> dict[str, float]:
-    sigma = max(iv_percent / 100.0, 1e-6)
-    time_years = max(dte_days / 365.0, 1e-6)
-    denom = sigma * sqrt(time_years)
-    d1 = (log(underlying_price / strike) + 0.5 * sigma * sigma * time_years) / denom
-    d2 = d1 - denom
-    pdf = _NORMAL.pdf(d1)
-    delta = _NORMAL.cdf(d1)
-    gamma = pdf / (underlying_price * denom)
-    theta = -(underlying_price * pdf * sigma) / (2.0 * sqrt(time_years) * 365.0)
-    vega = (underlying_price * pdf * sqrt(time_years)) / 100.0
-    return {
-        "delta": round(delta, 6),
-        "gamma": round(gamma, 8),
-        "theta": round(theta, 6),
-        "vega": round(vega, 6),
-        "risk_neutral_p_itm": round(_NORMAL.cdf(d2), 6),
-    }
+    """Call-only entry point retained for the baseline backtest tracer."""
+    return _black_scholes_metrics(
+        underlying_price=underlying_price,
+        strike=strike,
+        iv_percent=iv_percent,
+        dte_days=dte_days,
+        option_type="call",
+    )
+
+
+def black_scholes_price(
+    *,
+    underlying_price: float,
+    strike: float,
+    iv_percent: float,
+    dte_days: float,
+    option_type: str = "call",
+) -> float | None:
+    """Theoretical option price under the same model the greeks already use.
+
+    Shares the conventions of `_black_scholes_metrics`: zero rate, zero carry,
+    and `underlying_price` treated as the forward — which it is when the venue
+    supplied one, and is not when spot was substituted, a case the quote's
+    `underlying_price_source` records. It exists so a quoted premium can be
+    compared against the fitted surface's own valuation; it is not an
+    independent valuation and inherits every assumption of that model.
+
+    Returns None when the inputs cannot support a price rather than returning a
+    degenerate zero.
+    """
+    if underlying_price <= 0 or strike <= 0 or dte_days <= 0 or iv_percent <= 0:
+        return None
+    sigma = iv_percent / 100.0
+    time_years = dte_days / 365.0
+    denominator = sigma * sqrt(time_years)
+    if denominator <= 0:
+        return None
+    d1 = (log(underlying_price / strike) + 0.5 * sigma * sigma * time_years) / denominator
+    d2 = d1 - denominator
+    call = underlying_price * _NORMAL.cdf(d1) - strike * _NORMAL.cdf(d2)
+    if option_type == "put":
+        # Put-call parity at zero rate with forward = underlying_price.
+        return call - underlying_price + strike
+    return call
+
+
+def black_scholes_call_price(
+    *,
+    underlying_price: float,
+    strike: float,
+    iv_percent: float,
+    dte_days: float,
+) -> float | None:
+    """Call-only entry point retained for existing callers."""
+    return black_scholes_price(
+        underlying_price=underlying_price,
+        strike=strike,
+        iv_percent=iv_percent,
+        dte_days=dte_days,
+        option_type="call",
+    )
 
 
 def _assess_greek_consistency(
@@ -660,6 +908,8 @@ def _build_naked_candidate(
         "dte_days": expiry_report["dte_days"],
         "strike_price": point["strike_price"],
         "underlying_price": point["underlying_price"],
+        "underlying_price_source": point["underlying_price_source"],
+        "forward_basis": point["forward_basis"],
         "market_bid": point["market_bid"],
         "market_ask": point["market_ask"],
         "market_mid": point["market_mid"],
@@ -671,6 +921,10 @@ def _build_naked_candidate(
         "market_ask_iv": point["market_ask_iv"],
         "market_mark_iv": point["market_mark_iv"],
         "surface_fitted_iv": point["surface_fitted_iv"],
+        "fit_residual_iv": point["fit_residual_iv"],
+        "fit_residual_z": point["fit_residual_z"],
+        "fit_residual_vega_usd": point["fit_residual_vega_usd"],
+        "fit_residual_scale": point["fit_residual_scale"],
         "model_delta": point["model_delta"],
         "model_gamma": point["model_gamma"],
         "model_theta": point["model_theta"],
@@ -692,21 +946,44 @@ def _build_naked_candidate(
         "filter_reason_codes": filter_reasons,
         "decision": decision,
         "decision_reason_codes": reason_codes,
+        **_structure_annotations(
+            structure_type="naked_short_call",
+            legs=[_leg(point, quantity=-1.0)],
+            points_by_instrument={point["instrument_name"]: point},
+        ),
     }
 
 
 def _build_spread_candidates(
     points: list[dict[str, Any]],
     expiry_report: dict[str, Any],
+    *,
+    option_type: str = "call",
 ) -> list[dict[str, Any]]:
+    """Vertical credit spreads on one side of the chain.
+
+    Direction is the only thing that differs between the two sides: a call
+    credit spread sells the lower strike and buys the higher one for protection,
+    a put credit spread does the reverse. Everything downstream — width, credit,
+    filters, leg annotations — is identical, which is why this is one function
+    rather than a copy.
+    """
+    structure_type = f"{option_type}_credit_spread"
     spreads = []
     for sell_leg in points:
         sell_filter_reasons = _candidate_filter_reasons(sell_leg, expiry_report)
         applied_thresholds = _premium_thresholds(sell_leg)
         for buy_leg in points:
-            if buy_leg["strike_price"] <= sell_leg["strike_price"]:
+            protective = (
+                buy_leg["strike_price"] > sell_leg["strike_price"]
+                if option_type == "call"
+                else buy_leg["strike_price"] < sell_leg["strike_price"]
+            )
+            if not protective:
                 continue
-            width = round(buy_leg["strike_price"] - sell_leg["strike_price"], 6)
+            width = round(
+                abs(buy_leg["strike_price"] - sell_leg["strike_price"]), 6
+            )
             reason_codes = list(sell_filter_reasons)
             if buy_leg["premium_currency"] != sell_leg["premium_currency"]:
                 reason_codes.append("PREMIUM_UNIT_MISMATCH")
@@ -739,7 +1016,17 @@ def _build_spread_candidates(
                     "candidate_id": (
                         f"{sell_leg['instrument_name']}->{buy_leg['instrument_name']}:spread"
                     ),
-                    "structure_type": "call_credit_spread",
+                    "structure_type": structure_type,
+                    "option_type": option_type,
+                    "mid_credit": _mid_credit(
+                        [(sell_leg, -1.0), (buy_leg, 1.0)]
+                    ),
+                    # Carried so a condor can aggregate its wings' greeks, and
+                    # stripped before the candidate is published.
+                    "_leg_points": {
+                        sell_leg["instrument_name"]: sell_leg,
+                        buy_leg["instrument_name"]: buy_leg,
+                    },
                     "expiry_date": sell_leg["expiry_date"],
                     "dte_days": expiry_report["dte_days"],
                     "sell_leg_instrument_name": sell_leg["instrument_name"],
@@ -765,6 +1052,11 @@ def _build_spread_candidates(
                     "buy_leg_market_mark_iv": buy_leg["market_mark_iv"],
                     "sell_leg_surface_fitted_iv": sell_leg["surface_fitted_iv"],
                     "buy_leg_surface_fitted_iv": buy_leg["surface_fitted_iv"],
+                    "sell_leg_fit_residual_iv": sell_leg["fit_residual_iv"],
+                    "buy_leg_fit_residual_iv": buy_leg["fit_residual_iv"],
+                    "sell_leg_fit_residual_vega_usd": sell_leg["fit_residual_vega_usd"],
+                    "buy_leg_fit_residual_vega_usd": buy_leg["fit_residual_vega_usd"],
+                    "fit_residual_scale": sell_leg["fit_residual_scale"],
                     "sell_leg_depth": sell_leg["depth"],
                     "buy_leg_depth": buy_leg["depth"],
                     "sell_leg_spread_ratio": sell_leg["spread_ratio"],
@@ -782,6 +1074,8 @@ def _build_spread_candidates(
                         sell_leg["model_vega"] - buy_leg["model_vega"], 6
                     ),
                     "risk_neutral_p_itm": sell_leg["risk_neutral_p_itm"],
+                    "underlying_price_source": sell_leg["underlying_price_source"],
+                    "forward_basis": sell_leg["forward_basis"],
                     "surface_quality": {
                         "fit_quality_score": expiry_report["fit_quality_score"],
                         "no_arb_pass": expiry_report["no_arb_pass"],
@@ -792,9 +1086,224 @@ def _build_spread_candidates(
                     "filter_reason_codes": reason_codes,
                     "decision": decision,
                     "decision_reason_codes": decision_reason_codes,
+                    **_structure_annotations(
+                        structure_type=structure_type,
+                        legs=[
+                            _leg(sell_leg, quantity=-1.0),
+                            _leg(buy_leg, quantity=1.0),
+                        ],
+                        points_by_instrument={
+                            sell_leg["instrument_name"]: sell_leg,
+                            buy_leg["instrument_name"]: buy_leg,
+                        },
+                    ),
                 }
             )
     return spreads
+
+
+# An iron condor is one put spread paired with one call spread, so the pair
+# count is the product of two already-quadratic sets. The cap keeps a wide chain
+# from producing a table nobody can read, and the truncation is reported rather
+# than applied silently.
+MAX_IRON_CONDOR_CANDIDATES = 64
+
+
+def _build_iron_condor_candidates(
+    *,
+    put_spreads: list[dict[str, Any]],
+    call_spreads: list[dict[str, Any]],
+    expiry_report: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int]:
+    """Pair defined-risk wings into two-sided structures.
+
+    Only spreads that already passed their own filters are paired. A condor
+    built from a rejected wing inherits that wing's problem, and burying the
+    rejection inside a four-legged aggregate is exactly how a bad leg stops
+    being visible.
+    """
+    eligible_puts = [item for item in put_spreads if item["decision"] == "eligible"]
+    eligible_calls = [item for item in call_spreads if item["decision"] == "eligible"]
+
+    pairs: list[dict[str, Any]] = []
+    truncated = 0
+    for put_spread in sorted(eligible_puts, key=lambda item: item["candidate_id"]):
+        for call_spread in sorted(eligible_calls, key=lambda item: item["candidate_id"]):
+            if put_spread["sell_leg_strike_price"] >= call_spread["sell_leg_strike_price"]:
+                # The short strikes would cross, which is not a condor: the
+                # position would be guaranteed to finish in obligation.
+                continue
+            if len(pairs) >= MAX_IRON_CONDOR_CANDIDATES:
+                truncated += 1
+                continue
+            pairs.append(_iron_condor(put_spread, call_spread, expiry_report))
+    return pairs, truncated
+
+
+def _iron_condor(
+    put_spread: dict[str, Any],
+    call_spread: dict[str, Any],
+    expiry_report: dict[str, Any],
+) -> dict[str, Any]:
+    legs = list(put_spread["structure_legs"]) + list(call_spread["structure_legs"])
+    points = {**put_spread["_leg_points"], **call_spread["_leg_points"]}
+    net_credit = round(put_spread["net_credit"] + call_spread["net_credit"], 6)
+    mid_credit = _sum_optional(
+        put_spread.get("mid_credit"), call_spread.get("mid_credit")
+    )
+    reason_codes = _unique(
+        list(put_spread["filter_reason_codes"])
+        + list(call_spread["filter_reason_codes"])
+    )
+    greek_consistency = _combine_greek_consistency(
+        put_spread["greek_consistency"], call_spread["greek_consistency"]
+    )
+    decision = "eligible"
+    if reason_codes or greek_consistency["status"] == "reject":
+        decision = "reject"
+    elif greek_consistency["status"] == "review":
+        decision = "review"
+
+    return {
+        "candidate_id": (
+            f"{put_spread['candidate_id']}+{call_spread['candidate_id']}:condor"
+        ),
+        "structure_type": "iron_condor",
+        "expiry_date": expiry_report["expiry_date"],
+        "dte_days": expiry_report["dte_days"],
+        "put_spread_id": put_spread["candidate_id"],
+        "call_spread_id": call_spread["candidate_id"],
+        "put_short_strike_price": put_spread["sell_leg_strike_price"],
+        "put_long_strike_price": put_spread["buy_leg_strike_price"],
+        "call_short_strike_price": call_spread["sell_leg_strike_price"],
+        "call_long_strike_price": call_spread["buy_leg_strike_price"],
+        # The margin proxy is the wider wing: only one side can finish in
+        # obligation, so the two widths are not additive.
+        "spread_width": max(put_spread["spread_width"], call_spread["spread_width"]),
+        "net_credit": net_credit,
+        "mid_credit": mid_credit,
+        "underlying_price": call_spread["underlying_price"],
+        "underlying_price_source": call_spread["underlying_price_source"],
+        "forward_basis": call_spread["forward_basis"],
+        "premium_currency": call_spread["premium_currency"],
+        "premium_unit": call_spread["premium_unit"],
+        "settlement_currency": call_spread["settlement_currency"],
+        "applied_filter_thresholds": call_spread["applied_filter_thresholds"],
+        "fit_residual_scale": call_spread["fit_residual_scale"],
+        "sell_leg_market_mark_iv": call_spread["sell_leg_market_mark_iv"],
+        "sell_leg_surface_fitted_iv": call_spread["sell_leg_surface_fitted_iv"],
+        "buy_leg_market_mark_iv": call_spread["buy_leg_market_mark_iv"],
+        "buy_leg_surface_fitted_iv": call_spread["buy_leg_surface_fitted_iv"],
+        # Only one wing can finish in the money, so the two assignment
+        # probabilities are disjoint and add.
+        "risk_neutral_p_itm": round(
+            (put_spread["risk_neutral_p_itm"] or 0.0)
+            + (call_spread["risk_neutral_p_itm"] or 0.0),
+            6,
+        ),
+        "surface_quality": {
+            "fit_quality_score": min(
+                expiry_report["sides"]["call"]["fit_quality_score"],
+                expiry_report["sides"]["put"]["fit_quality_score"],
+            ),
+            "no_arb_pass": (
+                expiry_report["sides"]["call"]["no_arb_pass"]
+                and expiry_report["sides"]["put"]["no_arb_pass"]
+            ),
+            "no_arb_error": max(
+                expiry_report["sides"]["call"]["no_arb_error"],
+                expiry_report["sides"]["put"]["no_arb_error"],
+            ),
+        },
+        "greek_consistency": greek_consistency,
+        "filter_status": "pass" if not reason_codes else "fail",
+        "filter_reason_codes": reason_codes,
+        "decision": decision,
+        "decision_reason_codes": _unique(
+            reason_codes + list(greek_consistency["reason_codes"])
+        ),
+        **_structure_annotations(
+            structure_type="iron_condor",
+            legs=legs,
+            points_by_instrument=points,
+        ),
+    }
+
+
+def _mid_credit(legs: list[tuple[dict[str, Any], float]]) -> float | None:
+    """Credit at the mid of every leg: the yardstick executable credit is measured against."""
+    total = 0.0
+    for point, quantity in legs:
+        mid = point.get("market_mid")
+        if not isinstance(mid, (int, float)) or isinstance(mid, bool):
+            return None
+        total -= quantity * float(mid)
+    return round(total, 6)
+
+
+def _sum_optional(left: Any, right: Any) -> float | None:
+    if not isinstance(left, (int, float)) or isinstance(left, bool):
+        return None
+    if not isinstance(right, (int, float)) or isinstance(right, bool):
+        return None
+    return round(float(left) + float(right), 6)
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.append(value)
+    return seen
+
+
+def _leg(point: dict[str, Any], *, quantity: float) -> dict[str, Any]:
+    return {
+        "option_type": point.get("option_type") or "call",
+        "strike": point["strike_price"],
+        "quantity": quantity,
+        "expiry_date": point["expiry_date"],
+        "instrument_name": point["instrument_name"],
+        # The leg's own fitted volatility travels with it so a consumer can
+        # value any structure from its legs instead of needing a per-structure
+        # formula.
+        "surface_fitted_iv": point["surface_fitted_iv"],
+        "market_mark_iv": point["market_mark_iv"],
+    }
+
+
+def _structure_annotations(
+    *,
+    structure_type: str,
+    legs: list[dict[str, Any]],
+    points_by_instrument: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Attach the candidate's legs and its position greeks.
+
+    Downstream consumers used to negate the long option's greeks by hand to
+    recover the short position's, which is right until a structure mixes
+    directions. Aggregating here with signed quantities means every consumer
+    reads greeks that already face the way the position does, and the legs
+    travel with the candidate so risk bounds can be derived rather than inferred
+    from the structure's name.
+    """
+    structure = build_structure(structure_type=structure_type, legs=legs)
+    greeks = structure.position_greeks(
+        {
+            name: {
+                "delta": point.get("model_delta"),
+                "gamma": point.get("model_gamma"),
+                "theta": point.get("model_theta"),
+                "vega": point.get("model_vega"),
+            }
+            for name, point in points_by_instrument.items()
+        }
+    )
+    return {
+        "structure_legs": legs,
+        "structure_shape": structure.to_dict(),
+        "position_greeks": greeks,
+    }
 
 
 def _combine_greek_consistency(
@@ -865,8 +1374,8 @@ def _premium_thresholds(point: dict[str, Any]) -> dict[str, Any]:
 
 
 def _dte_days(expiry_date: str, evaluation_now_ms: int) -> float:
-    expiry_dt = datetime.fromisoformat(expiry_date).replace(tzinfo=timezone.utc) + timedelta(hours=8)
-    evaluation_dt = datetime.fromtimestamp(evaluation_now_ms / 1000, tz=timezone.utc)
+    expiry_dt = datetime.fromisoformat(expiry_date).replace(tzinfo=UTC) + timedelta(hours=8)
+    evaluation_dt = datetime.fromtimestamp(evaluation_now_ms / 1000, tz=UTC)
     delta = expiry_dt - evaluation_dt
     return round(max(delta.total_seconds(), 0.0) / 86400.0, 6)
 

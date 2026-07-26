@@ -11,10 +11,11 @@ import sys
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ._canonical import canonical_json_bytes
 from .backtest import (
     BASELINE_BACKTEST_SCHEMA_VERSION,
     build_fixed_baseline_backtest_report,
@@ -1637,18 +1638,12 @@ def _validate_baseline_report_object_shapes(
 
 
 def _canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
+    return canonical_json_bytes(value)
 
 
 def _utc_timestamp() -> str:
     return (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .isoformat(timespec="microseconds")
         .replace("+00:00", "Z")
     )
@@ -1849,7 +1844,7 @@ def _promotion_order(
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc), job_id
+    return parsed.astimezone(UTC), job_id
 
 
 def _succeeded_job_promotion_order(

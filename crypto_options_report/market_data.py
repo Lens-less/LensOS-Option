@@ -2,25 +2,21 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
 import hashlib
 import json
-from math import isfinite
 import os
-from pathlib import Path
 import re
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
+from math import isfinite
+from pathlib import Path
 from time import monotonic
-from typing import Any, Iterable
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .storage import (
-    atomic_write_json,
-    read_json_object_from_regular_file,
-    read_json_object_from_stream,
-)
 from .sidecar_auth import (
     ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV,
     MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
@@ -29,6 +25,11 @@ from .sidecar_auth import (
     require_separate_key_file,
     sign_mapping,
     verify_mapping,
+)
+from .storage import (
+    atomic_write_json,
+    read_json_object_from_regular_file,
+    read_json_object_from_stream,
 )
 
 
@@ -58,12 +59,24 @@ DEFAULT_QUALITY_LIMITS = {
     "max_bad_quote_ratio_per_expiry": 0.25,
     "max_spread_ratio": 0.50,
 }
-DEFAULT_TICKER_REQUEST_BUDGET = 20
+# Public ticker requests per snapshot. A two-sided universe needs
+# `min_valid_quotes_per_expiry` quotes on each side of an expiry, so the budget
+# has to cover 2 x that per expiry before more than one expiry fits. At 20 the
+# collector could fill exactly one side of one expiry, which is why the put
+# tables stayed empty on live chains.
+DEFAULT_TICKER_REQUEST_BUDGET = 64
 HTTP_MAX_INSTRUMENT_LIMIT = DEFAULT_TICKER_REQUEST_BUDGET
 MAX_MARKET_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_MARKET_SNAPSHOT_BYTES = 16 * 1024 * 1024
 MAX_MARKET_TRUST_STATE_BYTES = 1024 * 1024
 RESEARCH_DTE_RANGE_DAYS = (7, 35)
+# Out-of-the-money bands, mirrored around spot. The put band is the reflection
+# of the call band, not a copy of it: reusing the call band for puts selects
+# deep in-the-money strikes.
+RESEARCH_CALL_MONEYNESS_BAND = (1.0, 1.3)
+RESEARCH_PUT_MONEYNESS_BAND = (0.7, 1.0)
+RESEARCH_TARGET_CALL_MONEYNESS = 1.1
+RESEARCH_TARGET_PUT_MONEYNESS = 0.9
 # Deribit returns DVOL as one-minute candles. The row timestamp is the candle
 # boundary, so a healthy latest row can be slightly older than 60 seconds at
 # the minute rollover. Keep this stricter than quote staleness (120s) while
@@ -149,7 +162,7 @@ _MONTHS = {
 
 def utc_timestamp() -> str:
     return (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
@@ -170,7 +183,7 @@ def parse_timestamp_ms(value: str | int | float | None) -> int:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         raise ValueError("timestamp must include a timezone")
-    return int(parsed.astimezone(timezone.utc).timestamp() * 1000)
+    return int(parsed.astimezone(UTC).timestamp() * 1000)
 
 
 def resolve_snapshot_fixture_path(
@@ -668,7 +681,7 @@ def _select_research_summaries(
     min_per_expiry = int(DEFAULT_QUALITY_LIMITS["min_valid_quotes_per_expiry"])
     captured_date = datetime.fromtimestamp(
         parse_timestamp_ms(captured_at) / 1000,
-        tz=timezone.utc,
+        tz=UTC,
     ).date()
 
     ranked: list[dict[str, Any]] = []
@@ -711,20 +724,26 @@ def _select_research_summaries(
             }
         )
 
-    preferred_groups: dict[str, list[dict[str, Any]]] = {}
+    # Stratified by expiry *and* option type. Selecting calls only was coherent
+    # while the analysis universe was call-only; with put verticals and condors
+    # in the universe it silently starved the put side, so a two-sided chain
+    # would have produced a one-sided report with nothing saying why.
+    preferred_groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for item in ranked:
         if (
             item["in_target_dte"]
-            and item["option_type"] == "call"
+            and item["option_type"] in {"call", "put"}
             and item["preferred_liquidity"]
         ):
-            preferred_groups.setdefault(item["expiry_date"], []).append(item)
+            preferred_groups.setdefault(
+                (item["expiry_date"], item["option_type"]), []
+            ).append(item)
     for rows in preferred_groups.values():
         rows.sort(key=_research_summary_sort_key)
 
     qualifying_groups = [
-        (expiry, rows)
-        for expiry, rows in sorted(preferred_groups.items())
+        (key, rows)
+        for key, rows in sorted(preferred_groups.items())
         if len(rows) >= min_per_expiry
     ]
     selected_items: list[dict[str, Any]] = []
@@ -754,7 +773,7 @@ def _select_research_summaries(
             ranked,
             key=lambda item: (
                 not item["in_target_dte"],
-                item["option_type"] != "call",
+                item["option_type"] not in {"call", "put"},
                 not item["preferred_liquidity"],
                 abs((item["dte_days"] if item["dte_days"] is not None else 10_000) - 21),
                 item["expiry_date"],
@@ -773,9 +792,12 @@ def _select_research_summaries(
         "ticker_request_budget": DEFAULT_TICKER_REQUEST_BUDGET,
         "effective_limit": effective_limit,
         "preferred_dte_days": list(RESEARCH_DTE_RANGE_DAYS),
-        "preferred_option_type": "call",
-        "preferred_call_moneyness": [1.0, 1.3],
-        "target_call_moneyness": 1.1,
+        "preferred_option_types": ["call", "put"],
+        "stratification": "expiry_and_option_type",
+        "preferred_call_moneyness": list(RESEARCH_CALL_MONEYNESS_BAND),
+        "target_call_moneyness": RESEARCH_TARGET_CALL_MONEYNESS,
+        "preferred_put_moneyness": list(RESEARCH_PUT_MONEYNESS_BAND),
+        "target_put_moneyness": RESEARCH_TARGET_PUT_MONEYNESS,
         "min_quotes_per_expiry": min_per_expiry,
         "max_spread_ratio": DEFAULT_QUALITY_LIMITS["max_spread_ratio"],
         "fallback_used": fallback_used,
@@ -1068,7 +1090,7 @@ def _coerce_exchange_timestamp_ms(value: Any) -> int:
 def _timestamp_from_ms(value: int) -> str:
     try:
         return (
-            datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+            datetime.fromtimestamp(value / 1000, tz=UTC)
             .replace(microsecond=0)
             .isoformat()
             .replace("+00:00", "Z")
@@ -1107,11 +1129,22 @@ def _summary_has_preferred_liquidity(summary: dict[str, Any]) -> bool:
     return (ask - bid) / mid <= DEFAULT_QUALITY_LIMITS["max_spread_ratio"]
 
 
+def _preferred_moneyness_band(option_type: str) -> tuple[float, float, float]:
+    """Out-of-the-money band and target, mirrored for puts.
+
+    The band used to be call-only. Applying `1.0 <= moneyness <= 1.3` to a put
+    selects deep in-the-money puts, which are the illiquid, wide-quoted end of
+    the chain and the opposite of what the research window wants.
+    """
+    if option_type == "put":
+        return (RESEARCH_PUT_MONEYNESS_BAND[0], RESEARCH_PUT_MONEYNESS_BAND[1], RESEARCH_TARGET_PUT_MONEYNESS)
+    return (RESEARCH_CALL_MONEYNESS_BAND[0], RESEARCH_CALL_MONEYNESS_BAND[1], RESEARCH_TARGET_CALL_MONEYNESS)
+
+
 def _research_summary_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
     moneyness = item.get("moneyness")
-    in_preferred_band = (
-        isinstance(moneyness, (int, float)) and 1.0 <= moneyness <= 1.3
-    )
+    low, high, target = _preferred_moneyness_band(str(item.get("option_type") or "call"))
+    in_preferred_band = isinstance(moneyness, (int, float)) and low <= moneyness <= high
     bid = _to_number(item["summary"].get("bid_price"))
     ask = _to_number(item["summary"].get("ask_price"))
     mid = (bid + ask) / 2 if bid is not None and ask is not None else None
@@ -1123,7 +1156,7 @@ def _research_summary_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
     open_interest = _to_number(item["summary"].get("open_interest")) or 0.0
     return (
         not in_preferred_band,
-        abs(moneyness - 1.1) if isinstance(moneyness, (int, float)) else float("inf"),
+        abs(moneyness - target) if isinstance(moneyness, (int, float)) else float("inf"),
         spread_ratio,
         -open_interest,
         item["instrument_name"],
@@ -1427,10 +1460,36 @@ def _normalize_quote_row(
     bid_iv = _to_number(ticker.get("bid_iv"))
     ask_iv = _to_number(ticker.get("ask_iv"))
     mark_iv = _to_number(ticker.get("mark_iv"))
-    underlying_price = _first_number(
+    # Deribit's option ticker reports `underlying_price` as the forward for that
+    # expiry and `index_price` as spot. They are not interchangeable: the basis
+    # between them runs to double-digit annualized rates in a trending market,
+    # and pricing an option off spot while calling it a forward makes every call
+    # on the chain look systematically rich. Falling back to spot is still
+    # allowed — a fitted smile beats no smile — but the substitution is recorded
+    # so a consumer can see the assumption instead of inheriting it silently.
+    forward_price = _first_number(
         ticker.get("underlying_price"),
         summary.get("underlying_price"),
+    )
+    index_price = _first_number(
         ticker.get("index_price"),
+        summary.get("index_price"),
+    )
+    if forward_price is not None:
+        underlying_price = forward_price
+        underlying_price_source = "option_forward"
+    elif index_price is not None:
+        underlying_price = index_price
+        underlying_price_source = "index_spot_fallback"
+    else:
+        underlying_price = None
+        underlying_price_source = "unavailable"
+    forward_basis = (
+        round((forward_price / index_price) - 1.0, 8)
+        if forward_price is not None
+        and index_price is not None
+        and index_price > 0
+        else None
     )
     best_bid_amount = _to_number(ticker.get("best_bid_amount"))
     best_ask_amount = _to_number(ticker.get("best_ask_amount"))
@@ -1467,6 +1526,10 @@ def _normalize_quote_row(
         "ask_iv": ask_iv,
         "mark_iv": mark_iv,
         "underlying_price": underlying_price,
+        "forward_price": forward_price,
+        "index_price": index_price,
+        "underlying_price_source": underlying_price_source,
+        "forward_basis": forward_basis,
         "open_interest": _first_number(
             ticker.get("open_interest"),
             summary.get("open_interest"),
@@ -2115,7 +2178,7 @@ def _trust_evidence_payload(
         "last_pass_at": last_pass_at,
         "observation_seconds": observation_seconds,
         "minimum_observation_seconds": minimum_observation_seconds,
-        "reason_codes": sorted(set(str(item) for item in reason_codes if item)),
+        "reason_codes": sorted({str(item) for item in reason_codes if item}),
         "feed_graph_complete": bool(feed_graph_complete),
         "source_identity": source_identity,
         "rolling_observations": rolling,
@@ -2127,7 +2190,7 @@ def _trust_evidence_payload(
 
 
 def _trust_source_identity(snapshot: dict[str, Any]) -> str:
-    return f"{str(snapshot.get('source') or 'missing')}|{str(snapshot.get('currency') or 'BTC').upper()}"
+    return f"{snapshot.get('source') or 'missing'!s}|{str(snapshot.get('currency') or 'BTC').upper()}"
 
 
 def _safe_nonnegative_int(value: Any) -> int:
@@ -2480,7 +2543,7 @@ def _quality_flags(quote: dict[str, Any], limits: dict[str, float]) -> list[str]
     ):
         flags.append("MISSING_SETTLEMENT_CURRENCY")
 
-    return sorted(set(flag for flag in flags if flag in BLOCKING_QUALITY_FLAGS))
+    return sorted({flag for flag in flags if flag in BLOCKING_QUALITY_FLAGS})
 
 
 def _get_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
@@ -2518,7 +2581,7 @@ def _parse_option_metadata(instrument_name: str | None) -> dict[str, Any]:
     year = 2000 + int(match.group("year"))
     option_type = {"C": "call", "P": "put"}.get(match.group("option"), "unknown")
     try:
-        expiry_date = datetime(year, month, day, tzinfo=timezone.utc).date().isoformat()
+        expiry_date = datetime(year, month, day, tzinfo=UTC).date().isoformat()
     except ValueError as exc:
         raise ValueError(f"invalid option instrument expiry: {instrument_name}") from exc
     return {
@@ -2640,7 +2703,7 @@ def _fetch_vol_index_feed(
     index_name = f"{currency} DVOL"
     try:
         timestamp = (
-            datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+            datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC)
             .replace(microsecond=0)
             .isoformat()
             .replace("+00:00", "Z")
@@ -2800,3 +2863,154 @@ def _normalize_exchange_greeks(payload: Any) -> dict[str, float] | None:
         if value is not None:
             normalized[field_name] = value
     return normalized or None
+
+
+# ---------------------------------------------------------------------------
+# Underlying price history
+#
+# Absolute expected value needs the underlying's realized return distribution,
+# not just today's quotes. Deribit publishes index/perpetual candles publicly,
+# so this history is self-sourced rather than operator-supplied. Historical
+# option quote chains are NOT publicly available and remain vendor-supplied;
+# nothing here should be mistaken for them.
+# ---------------------------------------------------------------------------
+
+UNDERLYING_HISTORY_SCHEMA_VERSION = "underlying_price_history.v1"
+MAX_UNDERLYING_HISTORY_DAYS = 3650
+_UNDERLYING_RESOLUTIONS = {"1D": 86400, "12H": 43200, "1H": 3600}
+
+
+def fetch_deribit_underlying_history(
+    *,
+    currency: str = "BTC",
+    days: int = 1095,
+    resolution: str = "1D",
+    base_url: str = DEFAULT_DERIBIT_BASE_URL,
+    timeout: int = 15,
+    captured_at: str | None = None,
+) -> dict[str, Any]:
+    """Fetch public underlying candles and return a normalized close series.
+
+    Fails closed: any malformed, misaligned, or non-positive row raises rather
+    than being dropped, because a silently shortened series would understate
+    the realized-volatility sample without saying so.
+    """
+    safe_base = validate_deribit_base_url(base_url)
+    if resolution not in _UNDERLYING_RESOLUTIONS:
+        raise ValueError(
+            "underlying history resolution must be one of "
+            + ", ".join(sorted(_UNDERLYING_RESOLUTIONS))
+        )
+    if not isinstance(days, int) or days <= 0 or days > MAX_UNDERLYING_HISTORY_DAYS:
+        raise ValueError(
+            f"underlying history days must be an int in 1..{MAX_UNDERLYING_HISTORY_DAYS}"
+        )
+    base_currency = str(currency or "").strip().upper()
+    if not base_currency.isalpha():
+        raise ValueError("underlying history currency must be alphabetic")
+
+    captured = captured_at or utc_timestamp()
+    end_ms = parse_timestamp_ms(captured)
+    start_ms = max(0, end_ms - days * 86400 * 1000)
+    instrument = f"{base_currency}-PERPETUAL"
+
+    payload = _get_json(
+        f"{safe_base}/api/v2/public/get_tradingview_chart_data",
+        {
+            "instrument_name": instrument,
+            "start_timestamp": start_ms,
+            "end_timestamp": end_ms,
+            "resolution": resolution,
+        },
+        timeout=timeout,
+    )
+    result = _jsonrpc_result(payload, endpoint="get_tradingview_chart_data")
+    if not isinstance(result, dict):
+        raise ValueError("underlying history result must be an object")
+    if str(result.get("status") or "").lower() != "ok":
+        raise ValueError(f"underlying history status not ok: {result.get('status')}")
+
+    ticks = result.get("ticks")
+    closes = result.get("close")
+    if not isinstance(ticks, list) or not isinstance(closes, list):
+        raise ValueError("underlying history must contain ticks and close arrays")
+    if not ticks:
+        raise ValueError("underlying history returned no candles")
+    if len(ticks) != len(closes):
+        raise ValueError("underlying history ticks and close arrays must align")
+
+    observations: list[dict[str, Any]] = []
+    previous_ms: int | None = None
+    for raw_ts, raw_close in zip(ticks, closes, strict=True):
+        timestamp_ms = _coerce_vol_index_timestamp_ms(raw_ts)
+        close = _to_number(raw_close)
+        if close is None or close <= 0:
+            raise ValueError("underlying history close must be a positive number")
+        if previous_ms is not None and timestamp_ms <= previous_ms:
+            raise ValueError("underlying history must be strictly increasing in time")
+        previous_ms = timestamp_ms
+        observations.append(
+            {
+                "timestamp_ms": timestamp_ms,
+                "observed_at": _timestamp_from_ms(timestamp_ms),
+                "close": close,
+            }
+        )
+
+    return {
+        "schema_version": UNDERLYING_HISTORY_SCHEMA_VERSION,
+        "captured_at": captured,
+        "source": f"deribit_live:{safe_base}",
+        "instrument_name": instrument,
+        "currency": base_currency,
+        "resolution": resolution,
+        "resolution_seconds": _UNDERLYING_RESOLUTIONS[resolution],
+        "requested_days": days,
+        "observation_count": len(observations),
+        "first_observed_at": observations[0]["observed_at"],
+        "last_observed_at": observations[-1]["observed_at"],
+        "observations": observations,
+    }
+
+
+def load_underlying_history_fixture(
+    path: str | Path,
+    *,
+    allowed_roots: Iterable[str | Path] | None = None,
+) -> dict[str, Any]:
+    """Load a recorded underlying price history for deterministic replay.
+
+    Production forbids live fetches, so history reaches the report the same way
+    market snapshots do: as an operator-owned file. The payload is validated to
+    the shape `fetch_deribit_underlying_history` emits; a malformed file is
+    rejected rather than partially accepted, because a silently truncated series
+    would understate the sample without saying so.
+    """
+    fixture_path = resolve_snapshot_fixture_path(path, allowed_roots=allowed_roots)
+    payload = read_json_object_from_regular_file(
+        fixture_path,
+        max_bytes=MAX_MARKET_SNAPSHOT_BYTES,
+        description="underlying history fixture",
+    )
+    if payload.get("schema_version") != UNDERLYING_HISTORY_SCHEMA_VERSION:
+        raise ValueError(
+            "underlying history fixture must be "
+            f"{UNDERLYING_HISTORY_SCHEMA_VERSION}"
+        )
+    observations = payload.get("observations")
+    if not isinstance(observations, list) or len(observations) < 2:
+        raise ValueError("underlying history fixture must contain observations")
+    previous_ms: int | None = None
+    for row in observations:
+        if not isinstance(row, dict):
+            raise ValueError("underlying history observations must be objects")
+        close = row.get("close")
+        timestamp_ms = row.get("timestamp_ms")
+        if not isinstance(close, (int, float)) or close <= 0:
+            raise ValueError("underlying history close must be a positive number")
+        if not isinstance(timestamp_ms, int):
+            raise ValueError("underlying history timestamp_ms must be an integer")
+        if previous_ms is not None and timestamp_ms <= previous_ms:
+            raise ValueError("underlying history must be strictly increasing in time")
+        previous_ms = timestamp_ms
+    return payload

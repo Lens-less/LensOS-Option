@@ -125,6 +125,24 @@ export function createExtensionWorkerController(deps: WorkerDeps): {
               fromCache: false,
             };
           }
+          case "REPORT_GET_CACHED_ONLY": {
+            // Offline onboarding path: read whatever was last cached for the
+            // configured origin without touching the network. A miss is not
+            // an error - it just means there is nothing to fall back to yet.
+            const origin = await readOrigin(deps);
+            const cached =
+              await deps.readSession<CachedPanelReport>(PANEL_REPORT_KEY);
+            if (!cached || cached.origin !== origin) {
+              return { ok: true, origin };
+            }
+            const validatedCached = projectLoadedReportEnvelope(cached.loaded);
+            return {
+              ok: true,
+              origin,
+              loaded: { ...validatedCached, cached: true },
+              fromCache: true,
+            };
+          }
           case "DERIBIT_CONTEXT_UPDATE": {
             const tabId = sender?.tab?.id;
             if (typeof tabId !== "number") {

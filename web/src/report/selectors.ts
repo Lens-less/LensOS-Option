@@ -5,6 +5,7 @@ import type {
 } from "../contracts";
 import type { LoadedReport } from "../transport/http";
 import { finiteNumber } from "./numbers";
+import type { EvCandidateScannerProjection } from "./projection";
 
 export type FreshnessPhase = "current" | "warning" | "expired" | "unavailable";
 export type DeribitContractMatchStatus =
@@ -347,5 +348,157 @@ export function selectSidePanelViewModel(
       missingEvidence: strategy?.review?.missing_evidence ?? [],
       promotionConditions: strategy?.review?.promotion_conditions ?? [],
     },
+  };
+}
+
+export interface ContractComparisonRow {
+  candidateId: string | null;
+  label: string;
+  rank: number;
+  action: string | null;
+  ev: number | null;
+  executableCreditUsdc: number | null;
+  rankingScore: number | null;
+  deltaVsCurrent: number | null;
+  isCurrent: boolean;
+  /**
+   * The single Deribit instrument that best represents "viewing this
+   * candidate" (the short leg for a spread, the contract itself for a
+   * naked-call research row). Used to re-target the rest of the panel at
+   * this candidate on selection; never an order target.
+   */
+  primaryInstrument: string | null;
+}
+
+export interface ContractComparison {
+  currentRank: number | null;
+  totalRanked: number;
+  rankingDimensions: string[];
+  absoluteEvAvailable: boolean;
+  rows: ContractComparisonRow[];
+}
+
+interface CandidateIdentity {
+  /** Instrument names that identify a fill against this candidate. */
+  legs: string[];
+  label: string;
+}
+
+/**
+ * `ev_candidate_scanner.ranked_candidates` carries only `candidate_id`; the
+ * human-readable legs and instrument names live in `candidate_research`.
+ * Join them by `candidate_id`, which both surfaces share verbatim.
+ */
+function buildCandidateIdentities(
+  report: ResearchReport,
+): Map<string, CandidateIdentity> {
+  const identities = new Map<string, CandidateIdentity>();
+  const candidateResearch = report.candidate_research;
+
+  const spreadGroups = [
+    candidateResearch?.call_credit_spreads?.eligible,
+    candidateResearch?.call_credit_spreads?.review,
+    candidateResearch?.call_credit_spreads?.rejected,
+  ];
+  for (const group of spreadGroups) {
+    for (const candidate of group ?? []) {
+      if (!candidate.candidate_id) {
+        continue;
+      }
+      const sellLeg = candidate.sell_leg_instrument_name ?? null;
+      const buyLeg = candidate.buy_leg_instrument_name ?? null;
+      const legs = [sellLeg, buyLeg].filter(
+        (leg): leg is string => leg !== null,
+      );
+      const label =
+        sellLeg && buyLeg
+          ? `卖 ${sellLeg} / 买 ${buyLeg}`
+          : (sellLeg ?? buyLeg ?? candidate.candidate_id);
+      identities.set(candidate.candidate_id, { legs, label });
+    }
+  }
+
+  const nakedGroups = [
+    candidateResearch?.naked_short_calls?.eligible,
+    candidateResearch?.naked_short_calls?.review,
+    candidateResearch?.naked_short_calls?.rejected,
+  ];
+  for (const group of nakedGroups) {
+    for (const candidate of group ?? []) {
+      if (!candidate.candidate_id) {
+        continue;
+      }
+      const legs = candidate.instrument_name ? [candidate.instrument_name] : [];
+      identities.set(candidate.candidate_id, {
+        legs,
+        label: candidate.instrument_name ?? candidate.candidate_id,
+      });
+    }
+  }
+
+  return identities;
+}
+
+/**
+ * Where does the contract currently in view rank against every other
+ * candidate the engine scanned on this chain, and what does the best
+ * alternative look like? Answers "does this contract have edge, and is
+ * there a better one" without introducing any order/sizing semantics: every
+ * row is a research rank, never an executable instruction.
+ */
+export function selectContractComparison(
+  report: ResearchReport,
+  currentInstrumentName: string | null | undefined,
+): ContractComparison {
+  const scanner = (
+    report as ResearchReport & {
+      ev_candidate_scanner?: EvCandidateScannerProjection;
+    }
+  ).ev_candidate_scanner;
+  const rankedRows = scanner?.ranked_candidates ?? [];
+  const identities = buildCandidateIdentities(report);
+  const normalizedCurrent = currentInstrumentName?.trim() || null;
+
+  const rows: ContractComparisonRow[] = rankedRows.map((row, index) => {
+    const identity = row.candidate_id
+      ? identities.get(row.candidate_id)
+      : undefined;
+    const isCurrent = Boolean(
+      normalizedCurrent &&
+        (identity?.legs.includes(normalizedCurrent) ||
+          row.candidate_id === normalizedCurrent),
+    );
+    return {
+      candidateId: row.candidate_id,
+      label: identity?.label ?? row.candidate_id ?? "未知合约",
+      rank: index + 1,
+      action: row.action,
+      ev: row.ev_after_cost_usdc,
+      executableCreditUsdc: row.executable_credit_usdc,
+      rankingScore: row.ranking_score,
+      deltaVsCurrent: null,
+      isCurrent,
+      primaryInstrument: identity?.legs[0] ?? null,
+    };
+  });
+
+  const currentRow = rows.find((row) => row.isCurrent) ?? null;
+  const currentEv = currentRow?.ev ?? null;
+  for (const row of rows) {
+    row.deltaVsCurrent =
+      currentEv !== null && row.ev !== null ? row.ev - currentEv : null;
+  }
+
+  const rankingDimensions =
+    report.strategy_research?.strategy_selection?.ranking_dimensions ??
+    scanner?.ranking_basis?.tie_break_order ??
+    [];
+
+  return {
+    currentRank: currentRow?.rank ?? null,
+    totalRanked: rows.length,
+    rankingDimensions,
+    absoluteEvAvailable: scanner?.ranking_basis?.absolute_ev_available ?? false,
+    rows,
   };
 }

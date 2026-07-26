@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from math import isfinite
 import os
-from pathlib import Path
 import sys
 import time
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from math import isfinite
+from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -22,13 +23,12 @@ from .market_data import (
     utc_timestamp,
     validate_deribit_base_url,
 )
-from .storage import atomic_write_json, read_json_object_from_stream
 from .sidecar_auth import (
     SidecarAuthUnavailable,
     sidecar_auth_state_path,
     write_sidecar_auth_state,
 )
-
+from .storage import atomic_write_json, read_json_object_from_stream
 
 DEFAULT_REFRESH_INTERVAL_SECONDS = 15.0
 MAX_ACCOUNT_HTTP_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -118,7 +118,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     currency=currency,
                     base_url=base_url,
                 )
-            except Exception as exc:  # noqa: BLE001 - redact and fail closed
+            except Exception as exc:
                 payload = _failed_snapshot(currency=currency, base_url=base_url)
                 authenticated = _persist_snapshot(output, payload)
                 _log_json(

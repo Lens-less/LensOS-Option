@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -8,8 +8,9 @@ interface ExtensionManifest {
   minimum_chrome_version: string;
   permissions: string[];
   host_permissions: string[];
+  icons: Record<string, string>;
   background: { service_worker: string; type: string };
-  action: { default_title: string };
+  action: { default_title: string; default_icon: Record<string, string> };
   side_panel: { default_path: string };
   content_scripts: Array<{
     matches: string[];
@@ -51,5 +52,28 @@ describe("Chrome extension manifest", () => {
         run_at: "document_idle",
       },
     ]);
+  });
+
+  it("declares icons for every required size and ships the referenced PNG files", () => {
+    const manifest = readManifest();
+    const requiredSizes = ["16", "32", "48", "128"];
+
+    expect(Object.keys(manifest.icons).sort()).toEqual(requiredSizes.sort());
+    expect(Object.keys(manifest.action.default_icon).sort()).toEqual(
+      requiredSizes.sort(),
+    );
+
+    for (const size of requiredSizes) {
+      const iconPath = manifest.icons[size];
+      expect(iconPath).toBe(manifest.action.default_icon[size]);
+      const absolutePath = resolve(process.cwd(), "extension", iconPath);
+      expect(existsSync(absolutePath)).toBe(true);
+      expect(statSync(absolutePath).size).toBeGreaterThan(0);
+      const bytes = readFileSync(absolutePath);
+      // PNG magic number.
+      expect(bytes.subarray(0, 8).toString("hex")).toBe(
+        "89504e470d0a1a0a",
+      );
+    }
   });
 });

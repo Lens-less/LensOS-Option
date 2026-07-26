@@ -12,6 +12,13 @@ export interface SidePanelRuntime {
   setEngineOrigin(origin: string): Promise<string>;
   getContext(): Promise<DeribitContext | null>;
   getReport(force?: boolean): Promise<LoadedReport>;
+  /**
+   * Best-effort read of the last report cached for the current engine
+   * origin, without contacting the engine. Used only to turn an offline
+   * state into "showing last known result" instead of a dead end; returns
+   * `null` on any miss or failure rather than throwing.
+   */
+  getCachedReport(): Promise<LoadedReport | null>;
   getEvidenceUrl(origin: string): string;
 }
 
@@ -71,6 +78,24 @@ export const chromeSidePanelRuntime: SidePanelRuntime = {
       ...response.loaded,
       report: validateResearchReport(response.loaded.report),
     };
+  },
+
+  async getCachedReport(): Promise<LoadedReport | null> {
+    try {
+      const response = await sendMessage({ type: "REPORT_GET_CACHED_ONLY" });
+      if (!response.ok || !("loaded" in response) || !response.loaded) {
+        return null;
+      }
+      if (!Number.isFinite(response.loaded.receivedAtMs)) {
+        return null;
+      }
+      return {
+        ...response.loaded,
+        report: validateResearchReport(response.loaded.report),
+      };
+    } catch {
+      return null;
+    }
   },
 
   getEvidenceUrl(origin: string): string {

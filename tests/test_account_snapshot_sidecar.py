@@ -1,12 +1,12 @@
-from contextlib import redirect_stderr
 import io
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from pathlib import Path
 from unittest import mock
 
 from crypto_options_report import account_snapshot_sidecar
@@ -440,12 +440,11 @@ class AccountSnapshotSidecarTests(unittest.TestCase):
                 "access_token": "must-not-be-used",
                 "scope": "account:read_write trade:read_write",
             },
-        ) as rpc:
-            with self.assertRaisesRegex(ValueError, "exact read-only scopes"):
-                account_snapshot_sidecar.fetch_deribit_account_snapshot(
-                    client_id="configured-id",
-                    client_secret="configured-secret",
-                )
+        ) as rpc, self.assertRaisesRegex(ValueError, "exact read-only scopes"):
+            account_snapshot_sidecar.fetch_deribit_account_snapshot(
+                client_id="configured-id",
+                client_secret="configured-secret",
+            )
         self.assertEqual(1, rpc.call_count)
         self.assertEqual("public/auth", rpc.call_args.args[1])
 
@@ -457,12 +456,11 @@ class AccountSnapshotSidecarTests(unittest.TestCase):
                 "access_token": "must-not-be-used",
                 "scope": "account:read trade:read wallet:read",
             },
-        ) as rpc:
-            with self.assertRaisesRegex(ValueError, "exact read-only scopes"):
-                account_snapshot_sidecar.fetch_deribit_account_snapshot(
-                    client_id="configured-id",
-                    client_secret="configured-secret",
-                )
+        ) as rpc, self.assertRaisesRegex(ValueError, "exact read-only scopes"):
+            account_snapshot_sidecar.fetch_deribit_account_snapshot(
+                client_id="configured-id",
+                client_secret="configured-secret",
+            )
         self.assertEqual(1, rpc.call_count)
         self.assertEqual("public/auth", rpc.call_args.args[1])
 
@@ -483,12 +481,11 @@ class AccountSnapshotSidecarTests(unittest.TestCase):
                 [123],
                 [],
             ],
-        ):
-            with self.assertRaisesRegex(ValueError, "non-object"):
-                account_snapshot_sidecar.fetch_deribit_account_snapshot(
-                    client_id="configured-id",
-                    client_secret="configured-secret",
-                )
+        ), self.assertRaisesRegex(ValueError, "non-object"):
+            account_snapshot_sidecar.fetch_deribit_account_snapshot(
+                client_id="configured-id",
+                client_secret="configured-secret",
+            )
 
     def test_account_age_is_recomputed_from_observed_at_and_fails_closed(self):
         snapshot = {

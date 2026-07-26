@@ -2,6 +2,8 @@ import React from "react";
 import type { DeribitContext } from "../extension/messages";
 import type { SidePanelViewModel } from "../report";
 import {
+  coveredUnderlyingFromModel,
+  contextEntryPointNotice,
   labelForFreshness,
   labelForMatch,
   labelForSource,
@@ -10,11 +12,18 @@ import {
 
 export type PanelStatus = "loading" | "ready" | "offline" | "error";
 
+const ENGINE_START_COMMAND =
+  "python -m crypto_options_report.api --host 127.0.0.1 --port 8000";
+
 interface SidePanelStatusSectionsProps {
   context: DeribitContext | null;
   effectiveInstrument: string;
   error: string | null;
   evidenceUrl: string;
+  /** True only while `status === "offline"` and a last-known report is being
+   * shown from cache; drives the persistent "stale" banner instead of the
+   * full-page first-run checklist. */
+  isStaleOffline: boolean;
   manualInstrument: string;
   model: SidePanelViewModel | null;
   status: PanelStatus;
@@ -81,6 +90,7 @@ export function SidePanelStatusSections({
   effectiveInstrument,
   error,
   evidenceUrl,
+  isStaleOffline,
   manualInstrument,
   model,
   status,
@@ -88,6 +98,11 @@ export function SidePanelStatusSections({
   onRetry,
   onSyncContext,
 }: SidePanelStatusSectionsProps): React.JSX.Element {
+  const entryPointNotice = contextEntryPointNotice(
+    context,
+    coveredUnderlyingFromModel(model),
+  );
+
   return (
     <>
       <section className="panel-card">
@@ -127,7 +142,15 @@ export function SidePanelStatusSections({
             </p>
           </div>
         </div>
-        {model ? (
+        {entryPointNotice ? (
+          <p
+            className={`panel-context-message${
+              entryPointNotice.isWarning ? " is-warning" : ""
+            }`}
+          >
+            {entryPointNotice.text}
+          </p>
+        ) : model ? (
           <p
             className={`panel-context-message${
               model.contractMatch.status === "mismatch" ||
@@ -182,17 +205,82 @@ export function SidePanelStatusSections({
       </section>
 
       {status === "loading" ? (
-        <section className="panel-card panel-status">
+        <section className="panel-card panel-status" role="status">
           <p>正在读取本地研究报告…</p>
         </section>
       ) : null}
 
-      {(status === "offline" || status === "error") && !model ? (
-        <section className="panel-card panel-status">
-          <p className="panel-status-title">
-            {status === "offline" ? "本地引擎离线" : "报告校验失败"}
+      {status === "offline" && isStaleOffline ? (
+        <section
+          className="panel-card panel-status panel-status-stale"
+          role="alert"
+        >
+          <p className="panel-status-title">本地引擎离线 · 显示上次结果</p>
+          <p>
+            当前无法连接本地研究引擎；下方仍是最近一次成功读取的研究结果，可能已经过期。请核对证据年龄后再参考。
           </p>
-          <p>{error}</p>
+          <pre className="panel-status-command">{ENGINE_START_COMMAND}</pre>
+          {error ? (
+            <p className="panel-status-detail">
+              技术细节：<code>{error}</code>
+            </p>
+          ) : null}
+          <div className="panel-inline-actions">
+            <button className="panel-button" onClick={onRetry} type="button">
+              重试
+            </button>
+            <a
+              className="panel-link-button"
+              href={evidenceUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              打开完整证据
+            </a>
+          </div>
+        </section>
+      ) : null}
+
+      {status === "offline" && !isStaleOffline ? (
+        <section className="panel-card panel-status" role="alert">
+          <p className="panel-status-title">本地引擎离线 · 首次设置</p>
+          <p>还没有连接到本地研究引擎，也没有可显示的历史结果。三步即可开始：</p>
+          <ol className="panel-onboarding-steps">
+            <li>在本机启动研究引擎（下方命令可直接复制）。</li>
+            <li>在 Chrome 中打开一个 Deribit 期权详情页。</li>
+            <li>回到这里点击“重试”。</li>
+          </ol>
+          <pre className="panel-status-command">{ENGINE_START_COMMAND}</pre>
+          {error ? (
+            <p className="panel-status-detail">
+              技术细节：<code>{error}</code>
+            </p>
+          ) : null}
+          <div className="panel-inline-actions">
+            <button className="panel-button" onClick={onRetry} type="button">
+              重试
+            </button>
+            <a
+              className="panel-link-button"
+              href={evidenceUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              打开完整证据
+            </a>
+          </div>
+        </section>
+      ) : null}
+
+      {status === "error" ? (
+        <section className="panel-card panel-status" role="alert">
+          <p className="panel-status-title">报告校验失败</p>
+          <p>报告未通过校验，已按 fail-closed 策略拒绝显示。</p>
+          {error ? (
+            <p className="panel-status-detail">
+              技术细节：<code>{error}</code>
+            </p>
+          ) : null}
           <div className="panel-inline-actions">
             <button className="panel-button" onClick={onRetry} type="button">
               重试

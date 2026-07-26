@@ -5,6 +5,7 @@ import {
   Masthead,
   reportFreshness,
 } from "./components/evidence/EvidenceConsole";
+import { ResearchWorkbench } from "./components/workbench/ResearchWorkbench";
 import { validateResearchReport } from "./report";
 import { loadResearchReportHttp } from "./transport";
 import type { LoadedReport } from "./transport";
@@ -13,8 +14,21 @@ export { EvidenceConsole } from "./components/evidence/EvidenceConsole";
 export type {
   EvidenceConsoleProps,
 } from "./components/evidence/EvidenceConsole";
+export { ResearchWorkbench } from "./components/workbench/ResearchWorkbench";
+export type { ResearchWorkbenchProps } from "./components/workbench/ResearchWorkbench";
 
 export type LoadReport = () => Promise<LoadedReport>;
+type AppView = "evidence" | "workbench";
+
+function readViewFromLocation(): AppView {
+  if (typeof window === "undefined") {
+    return "evidence";
+  }
+  return new URLSearchParams(window.location.search).get("view") ===
+    "workbench"
+    ? "workbench"
+    : "evidence";
+}
 
 type AppState =
   | { status: "loading" }
@@ -82,7 +96,33 @@ export function App({
 }: AppProps): React.JSX.Element {
   const [state, setState] = useState<AppState>({ status: "loading" });
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [view, setView] = useState<AppView>(() => readViewFromLocation());
   const requestSequence = useRef(0);
+
+  const switchView = useCallback((nextView: AppView) => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (nextView === "workbench") {
+        params.set("view", "workbench");
+      } else {
+        params.delete("view");
+      }
+      const query = params.toString();
+      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+      window.history.pushState(window.history.state, "", nextUrl);
+    }
+    setView(nextView);
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setView(readViewFromLocation());
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     const sequence = requestSequence.current + 1;
@@ -148,13 +188,38 @@ export function App({
   if (state.status === "error") {
     return <ErrorState onRetry={() => void refresh()} />;
   }
+
+  const consoleProps = {
+    nowMs,
+    onRefresh: () => void refresh(),
+    receivedAtMs: state.loaded.receivedAtMs,
+    refreshing: state.refreshing,
+    report: state.loaded.report,
+  };
+
   return (
-    <EvidenceConsole
-      nowMs={nowMs}
-      onRefresh={() => void refresh()}
-      receivedAtMs={state.loaded.receivedAtMs}
-      refreshing={state.refreshing}
-      report={state.loaded.report}
-    />
+    <>
+      <nav aria-label="视图切换" className="view-switch-bar">
+        <button
+          aria-current={view === "evidence" ? "page" : undefined}
+          onClick={() => switchView("evidence")}
+          type="button"
+        >
+          证据台
+        </button>
+        <button
+          aria-current={view === "workbench" ? "page" : undefined}
+          onClick={() => switchView("workbench")}
+          type="button"
+        >
+          候选筛选工作台
+        </button>
+      </nav>
+      {view === "workbench" ? (
+        <ResearchWorkbench {...consoleProps} />
+      ) : (
+        <EvidenceConsole {...consoleProps} />
+      )}
+    </>
   );
 }

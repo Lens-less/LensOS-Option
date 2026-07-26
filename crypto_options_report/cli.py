@@ -6,8 +6,9 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .account_risk import AVAILABLE_ACCOUNT_SCENARIOS
 from .alerts import (
@@ -17,25 +18,27 @@ from .alerts import (
     save_alert_state,
     validate_alert_evaluation,
 )
+from .analysis_run import AnalysisRecord, build_analysis_record
 from .backtest import (
     build_fixed_baseline_backtest_report,
     load_backtest_fixture,
 )
-from .analysis_run import AnalysisRecord, build_analysis_record
-from .contract import SUPPORTED_MODES
+from .contract import SUPPORTED_MODES, utc_timestamp
 from .full_surface import build_recommendation_projection
+from .historical import build_historical_reconciliation_report, load_historical_fixture
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     fetch_deribit_option_chain_snapshot,
     load_snapshot_fixture,
+    load_underlying_history_fixture,
     validate_ticker_request_limit,
     write_snapshot_fixture,
 )
-from .historical import build_historical_reconciliation_report, load_historical_fixture
 from .path_risk import (
     build_path_risk_report_from_fixture,
     build_path_risk_report_from_historical_report,
 )
+from .signal_validation import build_signal_validation_report
 
 # Process exit codes for scheduled analysis / alerts.
 EXIT_OK = 0
@@ -46,7 +49,38 @@ EXIT_HARD_ERROR = 1
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="crypto-options-report")
+    parser = argparse.ArgumentParser(
+        prog="crypto-options-report",
+        description=(
+            "Evidence-first, fail-closed pre-entry research for crypto options. "
+            "Output is research-only: it never contains an order instruction or "
+            "a tradeable contract count."
+        ),
+        epilog=(
+            "examples:\n"
+            "  # Replay a fixed snapshot (deterministic, no network):\n"
+            "  crypto-options-report analysis \\\n"
+            "      --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json \\\n"
+            "      --generated-at 2026-07-07T00:01:30Z --compact\n"
+            "\n"
+            "  # Capture a live public snapshot for offline analysis:\n"
+            "  crypto-options-report pull-snapshot --instrument-limit 20 \\\n"
+            "      --output artifacts/snapshots/btc-chain.json\n"
+            "\n"
+            "  # Scheduled run; exit 10 when market data is blocked:\n"
+            "  crypto-options-report report \\\n"
+            "      --snapshot-fixture artifacts/snapshots/btc-chain.json \\\n"
+            "      --output artifacts/reports/latest.json --fail-on-blocked\n"
+            "\n"
+            "exit codes:\n"
+            f"  {EXIT_OK}   success\n"
+            f"  {EXIT_HARD_ERROR}   hard error\n"
+            f"  {EXIT_USAGE}   usage error\n"
+            f"  {EXIT_QUALITY_BLOCKED}  market data blocked or missing (--fail-on-blocked)\n"
+            f"  {EXIT_RISK_ALERT}  one or more alerts fired (--fail-on-alert)\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     report = subcommands.add_parser("report", help="emit the shared research report")
@@ -80,10 +114,17 @@ def build_parser() -> argparse.ArgumentParser:
     pull.add_argument("--currency", default="BTC")
     pull.add_argument("--deribit-base-url", default=DEFAULT_DERIBIT_BASE_URL)
     pull.add_argument("--instrument-limit", type=_parse_ticker_request_limit)
-    pull.add_argument(
+    pull_target = pull.add_mutually_exclusive_group(required=True)
+    pull_target.add_argument(
         "--output",
-        required=True,
         help="path to write the snapshot JSON",
+    )
+    pull_target.add_argument(
+        "--output-dir",
+        help=(
+            "directory to append a capture to, named by capture time; use this "
+            "for the repeated captures validate-signal consumes"
+        ),
     )
     pull.add_argument("--compact", action="store_true")
 
@@ -155,6 +196,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--compact",
         action="store_true",
         help="emit compact JSON",
+    )
+
+    validate_signal = subcommands.add_parser(
+        "validate-signal",
+        help="measure whether the ranking signals predict anything",
+    )
+    validate_signal.add_argument(
+        "--snapshot-dir",
+        required=True,
+        help=(
+            "directory of chain snapshots captured over time; one file per "
+            "capture, as written by pull-snapshot"
+        ),
+    )
+    validate_signal.add_argument(
+        "--underlying-history-fixture",
+        required=True,
+        help="underlying price history supplying the settlement proxy",
+    )
+    validate_signal.add_argument(
+        "--generated-at",
+        help="optional ISO timestamp used to keep report output deterministic",
+    )
+    validate_signal.add_argument("--output", help="optional path to write JSON")
+    validate_signal.add_argument("--compact", action="store_true")
+    validate_signal.add_argument(
+        "--fail-on-blocked",
+        action="store_true",
+        help="exit 10 when the sample is too small to publish statistics",
     )
 
     path_risk = subcommands.add_parser(
@@ -263,6 +333,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit_json(report, compact=args.compact)
             return EXIT_OK
 
+        if args.command == "validate-signal":
+            return _cmd_validate_signal(args)
+
         if args.command == "path-risk":
             if args.fixture:
                 report = build_path_risk_report_from_fixture(
@@ -285,7 +358,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             _emit_json(report, compact=args.compact)
             return EXIT_OK
-    except Exception as exc:  # noqa: BLE001 - CLI hard-error mapping
+    except Exception as exc:
         print(
             json.dumps(
                 {"error": str(exc), "type": type(exc).__name__},
@@ -306,7 +379,7 @@ def _cmd_pull_snapshot(args: argparse.Namespace) -> int:
         instrument_limit=args.instrument_limit,
         include_feed_graph=True,
     )
-    path = write_snapshot_fixture(args.output, snapshot)
+    path = write_snapshot_fixture(_snapshot_output_path(args, snapshot), snapshot)
     payload = {
         "schema_version": "snapshot_capture.v1",
         "path": str(path),
@@ -320,6 +393,52 @@ def _cmd_pull_snapshot(args: argparse.Namespace) -> int:
     }
     _emit_json(payload, compact=args.compact)
     if snapshot.get("fetch_errors") and not snapshot.get("rows"):
+        return EXIT_QUALITY_BLOCKED
+    return EXIT_OK
+
+
+def _snapshot_output_path(
+    args: argparse.Namespace, snapshot: dict[str, Any]
+) -> str:
+    """Resolve where this capture is written.
+
+    The series form names the file after the capture timestamp rather than a
+    counter, so a repeated capture can never overwrite an earlier one and the
+    directory sorts chronologically without a manifest.
+    """
+    if args.output:
+        return args.output
+    directory = Path(args.output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    captured_at = str(snapshot.get("captured_at") or utc_timestamp())
+    stamp = captured_at.replace(":", "").replace("-", "").replace("Z", "")
+    currency = str(snapshot.get("currency") or "unknown").lower()
+    return str(directory / f"{currency}-chain-{stamp}.json")
+
+
+def _cmd_validate_signal(args: argparse.Namespace) -> int:
+    """Measure the ranking signals against a directory of captured snapshots.
+
+    The snapshots are loaded through the same guarded loader the report uses, so
+    a directory holding something other than a snapshot fails loudly here rather
+    than becoming a silently smaller sample.
+    """
+    directory = Path(args.snapshot_dir)
+    if not directory.is_dir():
+        raise ValueError(f"snapshot dir is not a directory: {args.snapshot_dir}")
+    paths = sorted(directory.glob("*.json"))
+    if not paths:
+        raise ValueError(f"no snapshot JSON files found in {args.snapshot_dir}")
+
+    snapshots = [load_snapshot_fixture(path) for path in paths]
+    history = load_underlying_history_fixture(args.underlying_history_fixture)
+    report = build_signal_validation_report(
+        snapshots=snapshots,
+        underlying_history=history,
+        generated_at=args.generated_at or utc_timestamp(),
+    )
+    _emit_json(report, compact=args.compact, output=args.output)
+    if args.fail_on_blocked and report.get("status") != "measured":
         return EXIT_QUALITY_BLOCKED
     return EXIT_OK
 
@@ -403,6 +522,13 @@ def _add_report_replay_args(parser: argparse.ArgumentParser) -> None:
         choices=AVAILABLE_ACCOUNT_SCENARIOS,
         help="optional replayable account scenario name",
     )
+    parser.add_argument(
+        "--underlying-history-fixture",
+        help=(
+            "replay recorded underlying price history; required for absolute "
+            "expected value, which is otherwise reported as unavailable"
+        ),
+    )
     parser.add_argument("--generated-at")
 
 
@@ -421,12 +547,31 @@ def _build_analysis_record_from_args(args: argparse.Namespace) -> AnalysisRecord
             instrument_limit=args.instrument_limit,
             include_feed_graph=True,
         )
+    else:
+        # Without a market source the report is honestly, but entirely, empty.
+        # Say so, otherwise a forgotten flag looks like a broken tool.
+        print(
+            "note: no --snapshot-fixture and no --live-deribit; market evidence "
+            "will be reported as missing and every gate will stay closed. "
+            "For a populated example run:\n"
+            "  crypto-options-report report --snapshot-fixture "
+            "tests/fixtures/deribit_btc_option_chain_snapshot.json "
+            "--generated-at 2026-07-07T00:01:30Z",
+            file=sys.stderr,
+        )
+
+    underlying_history = None
+    if getattr(args, "underlying_history_fixture", None):
+        underlying_history = load_underlying_history_fixture(
+            args.underlying_history_fixture
+        )
 
     return build_analysis_record(
         mode=args.mode,
         market_snapshot=market_snapshot,
         account_scenario=args.account_scenario,
         generated_at=args.generated_at,
+        underlying_history=underlying_history,
     )
 
 

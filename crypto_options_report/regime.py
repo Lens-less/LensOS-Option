@@ -7,7 +7,6 @@ from typing import Any
 
 from .market_data import bound_snapshot_trust_evidence
 
-
 DEFAULT_REGIME_INPUTS = {
     "bear_trend_score": 0.35,
     "range_score": 0.55,

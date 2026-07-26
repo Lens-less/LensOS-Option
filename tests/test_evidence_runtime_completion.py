@@ -1,5 +1,5 @@
-import http.client
 import hashlib
+import http.client
 import json
 import subprocess
 import tempfile
@@ -16,13 +16,13 @@ from crypto_options_report.api import (
 )
 from crypto_options_report.contract import _build_data_trust_summary
 from crypto_options_report.evidence_store import (
+    BACKTEST_JOB_SCHEMA_VERSION,
     BacktestArtifactCorrupt,
     BacktestIdempotencyConflict,
     BacktestJobService,
     BacktestJobStoreCorrupt,
     BacktestJobSubmissionFailed,
     BacktestQueueFull,
-    BACKTEST_JOB_SCHEMA_VERSION,
     load_backtest_evidence,
     promote_backtest_evidence_default,
     run_backtest_evidence_job,
@@ -373,12 +373,11 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                     service._executor,
                     "submit",
                     side_effect=RuntimeError("executor unavailable"),
-                ):
-                    with self.assertRaises(BacktestJobSubmissionFailed):
-                        service.submit(
-                            idempotency_key="submission-failure",
-                            request=request,
-                        )
+                ), self.assertRaises(BacktestJobSubmissionFailed):
+                    service.submit(
+                        idempotency_key="submission-failure",
+                        request=request,
+                    )
                 with self.assertRaises(BacktestIdempotencyConflict):
                     service.submit(
                         idempotency_key="submission-failure",
@@ -427,12 +426,11 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                 with patch(
                     "crypto_options_report.evidence_store.atomic_write_json",
                     side_effect=fail_first_mapping_write,
-                ):
-                    with self.assertRaises(BacktestJobSubmissionFailed):
-                        service.submit(
-                            idempotency_key="mapping-write-failure",
-                            request=request,
-                        )
+                ), self.assertRaises(BacktestJobSubmissionFailed):
+                    service.submit(
+                        idempotency_key="mapping-write-failure",
+                        request=request,
+                    )
 
                 service.close()
                 service = BacktestJobService(
@@ -1397,13 +1395,12 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                     patch(
                         "crypto_options_report.evidence_store.atomic_write_json",
                         side_effect=fail_submission_status_write,
-                    ),
+                    ),self.assertRaises(PermissionError)
                 ):
-                    with self.assertRaises(PermissionError):
-                        service.submit(
-                            idempotency_key="status-write-failure",
-                            request=request,
-                        )
+                    service.submit(
+                        idempotency_key="status-write-failure",
+                        request=request,
+                    )
 
                 retry = service.submit(
                     idempotency_key="status-write-failure",

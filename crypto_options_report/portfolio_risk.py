@@ -54,10 +54,26 @@ def build_portfolio_risk_report(
         signals,
         key=lambda signal: SEVERITY_ORDER[signal["severity"]],
     )
+    # Two independent conditions gate the shadow sizing table, and both are
+    # deliberately strict.
+    #
+    # `recommended_size_allowed` is the scanner's own permission flag. The report
+    # contract forces it false until a score model is promoted, which is exactly
+    # what `research_only_reason` on each row already says is missing. Ranking a
+    # chain by relative value, or even attaching a validated expected value to a
+    # candidate, does not promote a model — so neither switches sizing on.
+    #
+    # Path evidence is then required per candidate because the dimensions
+    # consume CVaR and stress loss; without them there is nothing to size from.
+    sizing_permitted = ev_candidate_scanner.get("recommended_size_allowed") is True
     candidates = (
         []
-        if final_signal["severity"] == "halt_system"
-        else ev_candidate_scanner.get("ranked_candidates") or []
+        if final_signal["severity"] == "halt_system" or not sizing_permitted
+        else [
+            candidate
+            for candidate in ev_candidate_scanner.get("ranked_candidates") or []
+            if _candidate_has_path_evidence(candidate)
+        ]
     )
     size_caps = [
         _candidate_size_cap(
@@ -388,6 +404,23 @@ def _malformed_override_signal(source: str, reason_code: str) -> dict[str, Any]:
         severity="halt_system",
         reason=f"{source} override is malformed or has an unknown state.",
         reason_codes=[reason_code],
+    )
+
+
+def _candidate_has_path_evidence(candidate: Any) -> bool:
+    """True when a candidate carries path risk that sizing could consume.
+
+    A scanner that ranks on relative value alone reports `path_risk` as
+    unavailable; those candidates are excluded so no size dimension is derived
+    from evidence that does not exist.
+    """
+    if not isinstance(candidate, dict):
+        return False
+    path_risk = candidate.get("path_risk")
+    if not isinstance(path_risk, dict) or not path_risk:
+        return False
+    return path_risk.get("status") not in {"unavailable", "missing", None} or any(
+        key in path_risk for key in ("cvar_99_usdc", "cvar_95_usdc", "stress_loss_usdc")
     )
 
 

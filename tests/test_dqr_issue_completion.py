@@ -23,8 +23,9 @@ from crypto_options_report.market_data import (
     load_public_replay_fixture,
 )
 from crypto_options_report.paper_ledger import build_paper_reconciliation_runbook
-from crypto_options_report.path_risk import build_path_risk_report_from_historical_report
-
+from crypto_options_report.path_risk import (
+    build_path_risk_report_from_historical_report,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

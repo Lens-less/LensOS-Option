@@ -1,10 +1,10 @@
-import copy
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import UTC
+from pathlib import Path
 from unittest import mock
 
 from crypto_options_report.market_data import (
@@ -16,7 +16,6 @@ from crypto_options_report.market_data import (
     write_snapshot_fixture,
     write_snapshot_trust_state,
 )
-
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CAPTURED_AT = "2026-07-13T00:00:00Z"
@@ -476,10 +475,10 @@ def _complete_live_snapshot(captured_ms):
 
 
 def _iso(timestamp_ms):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     return (
-        datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+        datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")

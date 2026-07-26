@@ -56,7 +56,7 @@
 
 ## GitHub / 数据项目取舍
 
-完整研究见 [`docs/research/deribit-open-source-project-landscape-2026-07-12.md`](../research/deribit-open-source-project-landscape-2026-07-12.md)。结论：
+完整研究见 [`docs/research/deribit-open-source-project-landscape-2026-07-12.md`](deribit-open-source-project-landscape-2026-07-12.md)。结论：
 
 1. CCXT：最适合未来做 read-only shadow adapter；本轮未引入新依赖。
 2. Tardis：最适合真实历史 options chain、trades、L2 与 replay；数据服务需单独采购/授权。

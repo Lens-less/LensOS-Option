@@ -1,11 +1,12 @@
 import React from "react";
-import { selectSidePanelViewModel } from "../report";
+import { selectContractComparison, selectSidePanelViewModel } from "../report";
 import type { LoadedReport } from "../transport";
 import type { DeribitContext } from "../extension/messages";
 import {
   chromeSidePanelRuntime,
   type SidePanelRuntime,
 } from "../extension/runtime";
+import { SidePanelComparisonSection } from "./SidePanelComparisonSection";
 import { SidePanelResearchSections } from "./SidePanelResearchSections";
 import {
   type PanelStatus,
@@ -19,6 +20,12 @@ interface PanelState {
   origin: string;
   context: DeribitContext | null;
   loaded: LoadedReport | null;
+  /**
+   * Last report cached for the current origin, kept only while `status` is
+   * `"offline"`. Lets an unreachable engine still show research content
+   * under a persistent "stale" banner instead of a dead end.
+   */
+  cachedLoaded: LoadedReport | null;
   error: string | null;
 }
 
@@ -27,6 +34,7 @@ const INITIAL_STATE: PanelState = {
   origin: "http://127.0.0.1:8000",
   context: null,
   loaded: null,
+  cachedLoaded: null,
   error: null,
 };
 
@@ -60,6 +68,7 @@ export function SidePanelApp({
           origin,
           context,
           loaded,
+          cachedLoaded: null,
           error: null,
         });
       } catch (error) {
@@ -70,11 +79,16 @@ export function SidePanelApp({
           .catch(() => INITIAL_STATE.origin);
         const context = await runtime.getContext().catch(() => null);
         setDraftOrigin(origin);
+        const offline = isOfflineError(message);
+        const cachedLoaded = offline
+          ? await runtime.getCachedReport().catch(() => null)
+          : null;
         setPanel({
-          status: isOfflineError(message) ? "offline" : "error",
+          status: offline ? "offline" : "error",
           origin,
           context,
           loaded: null,
+          cachedLoaded,
           error: message,
         });
       } finally {
@@ -110,16 +124,35 @@ export function SidePanelApp({
     return () => window.clearInterval(timer);
   }, [runtime]);
 
+  // Offline with a cached report still shows the last known result (under a
+  // persistent banner), rather than nothing; only a genuine validation
+  // failure (status "error") ever leaves both null.
+  const displayLoaded = panel.loaded ?? panel.cachedLoaded;
+  const isStaleOffline =
+    panel.status === "offline" && panel.cachedLoaded !== null;
+
+  const effectiveInstrumentName =
+    manualInstrument.trim() || panel.context?.instrument || null;
+
   const model = React.useMemo(() => {
-    if (!panel.loaded) {
+    if (!displayLoaded) {
       return null;
     }
-    return selectSidePanelViewModel(panel.loaded, {
+    return selectSidePanelViewModel(displayLoaded, {
       nowMs,
-      currentInstrumentName:
-        manualInstrument.trim() || panel.context?.instrument || null,
+      currentInstrumentName: effectiveInstrumentName,
     });
-  }, [manualInstrument, nowMs, panel.context, panel.loaded]);
+  }, [displayLoaded, effectiveInstrumentName, nowMs]);
+
+  const comparison = React.useMemo(() => {
+    if (!displayLoaded) {
+      return null;
+    }
+    return selectContractComparison(
+      displayLoaded.report,
+      effectiveInstrumentName,
+    );
+  }, [displayLoaded, effectiveInstrumentName]);
 
   const syncContext = React.useCallback(async () => {
     setManualInstrument("");
@@ -144,8 +177,7 @@ export function SidePanelApp({
     }
   }, [draftOrigin, load, runtime]);
 
-  const effectiveInstrument =
-    manualInstrument.trim() || panel.context?.instrument || "";
+  const effectiveInstrument = effectiveInstrumentName ?? "";
   const evidenceUrl = runtime.getEvidenceUrl(panel.origin);
 
   return (
@@ -176,12 +208,17 @@ export function SidePanelApp({
         effectiveInstrument={effectiveInstrument}
         error={panel.error}
         evidenceUrl={evidenceUrl}
+        isStaleOffline={isStaleOffline}
         manualInstrument={manualInstrument}
         model={model}
         onManualInstrumentChange={setManualInstrument}
         onRetry={() => void load(true)}
         onSyncContext={() => void syncContext()}
         status={panel.status}
+      />
+      <SidePanelComparisonSection
+        comparison={comparison}
+        onSelectInstrument={setManualInstrument}
       />
       <SidePanelResearchSections model={model} />
 

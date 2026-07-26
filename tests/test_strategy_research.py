@@ -1,5 +1,5 @@
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from crypto_options_report.contract import (
     generate_research_report,

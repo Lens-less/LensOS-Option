@@ -1,10 +1,10 @@
 import http.client
 import json
 import os
-from pathlib import Path
 import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from crypto_options_report.api import (

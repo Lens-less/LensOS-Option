@@ -6,12 +6,24 @@
   "minimum_chrome_version": "114",
   "permissions": ["sidePanel", "storage"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "background": {
     "service_worker": "assets/service-worker.js",
     "type": "module"
   },
   "action": {
-    "default_title": "打开 LensOS 期权研究伴侣"
+    "default_title": "打开 LensOS 期权研究伴侣",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "side_panel": {
     "default_path": "sidepanel.html"

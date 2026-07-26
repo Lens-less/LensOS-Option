@@ -8,17 +8,18 @@ projection and is converted into typed, fail-closed domain records here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
-from enum import Enum
 import hashlib
 import json
 import math
 import re
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+from enum import Enum
+from typing import Any
 
+from ._canonical import canonical_json_text
 from .market_data import snapshot_payload_sha256
-
 
 ANALYSIS_RECORD_SCHEMA = "analysis_record.v1"
 DECISION_MANIFEST_SCHEMA = "decision_manifest.v1"
@@ -117,30 +118,11 @@ def canonical_sha256(value: Any) -> str:
 
 
 def _canonical_json(value: Any) -> str:
+    """Canonical JSON text, with analysis-specific error phrasing."""
     try:
-        return json.dumps(
-            _jsonable(value),
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+        return canonical_json_text(value)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("analysis inputs must contain finite JSON values") from exc
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, Enum):
-        return value.value
-    if hasattr(value, "to_dict") and callable(value.to_dict):
-        return value.to_dict()
-    if isinstance(value, Mapping):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("analysis inputs must contain finite JSON values")
-    return value
 
 
 def _parse_timestamp(value: str, *, field: str) -> datetime:
@@ -152,12 +134,12 @@ def _parse_timestamp(value: str, *, field: str) -> datetime:
         raise ValueError(f"{field} must be an RFC3339 timestamp") from exc
     if parsed.tzinfo is None:
         raise ValueError(f"{field} must include a timezone")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def _timestamp(value: datetime) -> str:
     return (
-        value.astimezone(timezone.utc)
+        value.astimezone(UTC)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
@@ -396,7 +378,7 @@ class PolicyBundle:
         *,
         mandate: AnalysisMandate,
         catalog: PolicyCatalog,
-    ) -> "PolicyBundle":
+    ) -> PolicyBundle:
         payload = {
             "schema_version": POLICY_BUNDLE_SCHEMA,
             "mandate": mandate.to_dict(),
@@ -462,7 +444,7 @@ class ModelBundleRef:
             )
 
     @classmethod
-    def unavailable(cls) -> "ModelBundleRef":
+    def unavailable(cls) -> ModelBundleRef:
         return cls(
             schema_version=MODEL_BUNDLE_SCHEMA,
             model_bundle_id="model-bundle:unavailable",
@@ -479,7 +461,7 @@ class ModelBundleRef:
         *,
         model_bundle_id: str,
         artifact_hash: str,
-    ) -> "ModelBundleRef":
+    ) -> ModelBundleRef:
         return cls(
             schema_version=MODEL_BUNDLE_SCHEMA,
             model_bundle_id=model_bundle_id,
@@ -498,7 +480,7 @@ class ModelBundleRef:
         artifact_hash: str,
         promotion_evidence_hash: str,
         evidence_class: str,
-    ) -> "ModelBundleRef":
+    ) -> ModelBundleRef:
         return cls(
             schema_version=MODEL_BUNDLE_SCHEMA,
             model_bundle_id=model_bundle_id,
@@ -1146,7 +1128,7 @@ class DomainEvent:
         evidence_refs: Iterable[str],
         reason_codes: Iterable[str],
         payload: Mapping[str, Any],
-    ) -> "DomainEvent":
+    ) -> DomainEvent:
         payload_json = _canonical_json(payload)
         identity = {
             "event_type": event_type,
@@ -1358,7 +1340,7 @@ class AnalysisRequest:
         configuration_hash: str | None = None,
         opportunity_detected_at: str | None = None,
         detector_versions: tuple[str, ...] = ("legacy-candidate-screen:v1",),
-    ) -> "AnalysisRequest":
+    ) -> AnalysisRequest:
         _parse_timestamp(evaluation_clock, field="evaluation_clock")
         projection_json = _canonical_json(report_projection)
         projection = json.loads(projection_json)
@@ -1669,6 +1651,7 @@ def build_analysis_record(
     configuration: Any | None = None,
     configuration_hash: str | None = None,
     opportunity_detected_at: str | None = None,
+    underlying_history: dict[str, Any] | None = None,
 ) -> AnalysisRecord:
     """Build the legacy projection once, then evaluate one immutable record."""
     from . import contract as contract_module
@@ -1684,6 +1667,7 @@ def build_analysis_record(
         paper_ledger_path=paper_ledger_path,
         manual_approval_runbook_path=manual_approval_runbook_path,
         persist_paper_ledger=persist_paper_ledger,
+        underlying_history=underlying_history,
     )
     request = AnalysisRequest.from_projection(
         evaluation_clock=evaluation_clock,
@@ -2882,18 +2866,7 @@ def _migration_cost_evidence(
 ) -> dict[str, EconomicValue | None]:
     raw = candidate.get("analysis_cost_evidence")
     if not isinstance(raw, Mapping):
-        return {
-            name: None
-            for name in (
-                "fee",
-                "slippage_reserve",
-                "depth_impact",
-                "legging_reserve",
-                "hedge_reserve",
-                "model_uncertainty_reserve",
-                "conservative_net_edge",
-            )
-        }
+        return dict.fromkeys(("fee", "slippage_reserve", "depth_impact", "legging_reserve", "hedge_reserve", "model_uncertainty_reserve", "conservative_net_edge"))
     result: dict[str, EconomicValue | None] = {}
     for name in (
         "fee",
@@ -3109,7 +3082,6 @@ def _admission_conditions(
 ) -> tuple[tuple[AdmissionCondition, ...], tuple[str, ...]]:
     data_status = projection.get("data_status") or {}
     quality = data_status.get("quality_gate") or {}
-    response = data_status.get("public_response_contract") or {}
     feeds = data_status.get("feed_coverage") or {}
     permission = projection.get("permission_state") or {}
     account = projection.get("account_status") or {}
@@ -4077,7 +4049,7 @@ def _timestamp_from_ms(value: Any) -> str | None:
     ):
         return None
     try:
-        return _timestamp(datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc))
+        return _timestamp(datetime.fromtimestamp(float(value) / 1000, tz=UTC))
     except (OSError, OverflowError, ValueError):
         return None
 
