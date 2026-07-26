@@ -27,8 +27,26 @@ DEFAULT_SURFACE_LIMITS = {
     "min_open_interest": 10.0,
     "max_spread_ratio": 0.25,
     "max_quote_age_sec": 120.0,
-    "min_spread_width": 5000.0,
-    "max_spread_width": 15000.0,
+    # Spread width as a fraction of the underlying, resolved per candidate.
+    #
+    # These were absolute dollars, which made the search a different search at
+    # every price level: 5000-15000 is 7.8%-23.3% of spot at 64k and 4.2%-12.5%
+    # at 120k, and BTC covered both inside the sample this product measures
+    # against. The resolved dollar bounds are published per candidate so the
+    # artifact still shows exactly what was applied.
+    "min_spread_width_fraction": 0.05,
+    "max_spread_width_fraction": 0.25,
+    # A protective leg is insurance bought once, not the source of the credit,
+    # so it is gated on what crossing it actually costs rather than on the ratio
+    # that cost bears to its own tiny premium. A deep out-of-the-money wing
+    # quoted 0.0003/0.0004 shows a 28% spread ratio and costs about three
+    # dollars to cross; rejecting it on that ratio threw away the structures
+    # that bound risk — and, because a condor needs a defined-risk wing on both
+    # sides, every condor with it.
+    "max_protective_leg_cost_ratio": 0.25,
+    # Data sanity for any leg, well above the executable gate: a quote this wide
+    # is a broken print rather than an expensive one.
+    "max_quote_spread_ratio_hard": 0.75,
     "min_net_credit": 0.01,
     "min_net_credit_btc": 0.0001,
     "delta_diff_review_threshold": 0.03,
@@ -984,13 +1002,14 @@ def _build_spread_candidates(
             width = round(
                 abs(buy_leg["strike_price"] - sell_leg["strike_price"]), 6
             )
+            width_bounds = _spread_width_bounds(sell_leg["underlying_price"])
             reason_codes = list(sell_filter_reasons)
             if buy_leg["premium_currency"] != sell_leg["premium_currency"]:
                 reason_codes.append("PREMIUM_UNIT_MISMATCH")
-            if width < DEFAULT_SURFACE_LIMITS["min_spread_width"] or width > DEFAULT_SURFACE_LIMITS["max_spread_width"]:
+            if width_bounds is None:
+                reason_codes.append("SPREAD_WIDTH_BOUNDS_UNAVAILABLE")
+            elif width < width_bounds["min"] or width > width_bounds["max"]:
                 reason_codes.append("SPREAD_WIDTH_OUT_OF_RANGE")
-            if (buy_leg["spread_ratio"] or 0.0) > DEFAULT_SURFACE_LIMITS["max_spread_ratio"]:
-                reason_codes.append("BUY_LEG_SPREAD_TOO_WIDE")
             if (buy_leg["quote_age_sec"] or 0.0) > DEFAULT_SURFACE_LIMITS["max_quote_age_sec"]:
                 reason_codes.append("BUY_LEG_QUOTE_TOO_STALE")
             if (buy_leg["open_interest"] or 0.0) < DEFAULT_SURFACE_LIMITS["min_open_interest"]:
@@ -998,6 +1017,8 @@ def _build_spread_candidates(
             net_credit = round(sell_leg["market_bid"] - buy_leg["market_ask"], 6)
             if net_credit < applied_thresholds["min_net_credit"]:
                 reason_codes.append("NET_CREDIT_TOO_LOW")
+            protective_cost = _protective_leg_cost(buy_leg, net_credit=net_credit)
+            reason_codes.extend(protective_cost["reason_codes"])
 
             greek_consistency = _combine_greek_consistency(
                 sell_leg["greek_consistency"],
@@ -1034,6 +1055,8 @@ def _build_spread_candidates(
                     "sell_leg_strike_price": sell_leg["strike_price"],
                     "buy_leg_strike_price": buy_leg["strike_price"],
                     "spread_width": width,
+                    "spread_width_bounds": width_bounds,
+                    "protective_leg_cost": protective_cost["detail"],
                     "net_credit": net_credit,
                     "premium_currency": sell_leg["premium_currency"],
                     "premium_unit": sell_leg["premium_unit"],
@@ -1255,6 +1278,78 @@ def _unique(values: list[str]) -> list[str]:
         if value not in seen:
             seen.append(value)
     return seen
+
+
+def _spread_width_bounds(underlying_price: Any) -> dict[str, Any] | None:
+    """Resolve the fractional width window against this candidate's own underlying."""
+    if not isinstance(underlying_price, (int, float)) or isinstance(
+        underlying_price, bool
+    ):
+        return None
+    if not underlying_price > 0:
+        return None
+    return {
+        "min": round(
+            underlying_price * DEFAULT_SURFACE_LIMITS["min_spread_width_fraction"], 6
+        ),
+        "max": round(
+            underlying_price * DEFAULT_SURFACE_LIMITS["max_spread_width_fraction"], 6
+        ),
+        "min_fraction": DEFAULT_SURFACE_LIMITS["min_spread_width_fraction"],
+        "max_fraction": DEFAULT_SURFACE_LIMITS["max_spread_width_fraction"],
+        "underlying_price": underlying_price,
+    }
+
+
+def _protective_leg_cost(
+    buy_leg: dict[str, Any], *, net_credit: float
+) -> dict[str, Any]:
+    """What crossing the protective leg costs, against what it is protecting.
+
+    The sell leg is gated on its spread ratio because that ratio *is* the cost:
+    the credit is taken at the bid. The buy leg is not — it is a one-off
+    insurance premium, and a deep wing's ratio is large because its premium is
+    tiny, not because crossing it is expensive. Measuring the crossing cost
+    against the credit it protects is the same question asked in units that
+    mean something.
+    """
+    bid = buy_leg.get("market_bid")
+    ask = buy_leg.get("market_ask")
+    ratio = buy_leg.get("spread_ratio")
+    reason_codes: list[str] = []
+
+    if not isinstance(bid, (int, float)) or not isinstance(ask, (int, float)):
+        return {
+            "reason_codes": ["BUY_LEG_QUOTE_UNAVAILABLE"],
+            "detail": {"status": "unavailable"},
+        }
+    if isinstance(ratio, (int, float)) and ratio > DEFAULT_SURFACE_LIMITS[
+        "max_quote_spread_ratio_hard"
+    ]:
+        reason_codes.append("BUY_LEG_QUOTE_IMPLAUSIBLE")
+
+    half_spread = max((ask - bid) / 2.0, 0.0)
+    cost_ratio = (
+        half_spread / net_credit if net_credit > 0 else None
+    )
+    if cost_ratio is None:
+        reason_codes.append("BUY_LEG_COST_NOT_COMPARABLE")
+    elif cost_ratio > DEFAULT_SURFACE_LIMITS["max_protective_leg_cost_ratio"]:
+        reason_codes.append("BUY_LEG_COST_EXCEEDS_CREDIT_SHARE")
+
+    return {
+        "reason_codes": reason_codes,
+        "detail": {
+            "status": "measured",
+            "half_spread": round(half_spread, 8),
+            "quote_spread_ratio": ratio,
+            "cost_share_of_credit": (
+                round(cost_ratio, 6) if cost_ratio is not None else None
+            ),
+            "max_cost_share": DEFAULT_SURFACE_LIMITS["max_protective_leg_cost_ratio"],
+            "basis": "half_spread_over_net_credit",
+        },
+    }
 
 
 def _leg(point: dict[str, Any], *, quantity: float) -> dict[str, Any]:

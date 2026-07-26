@@ -10,6 +10,7 @@
 | [`glossary.md`](glossary.md) | 术语表。项目自造词较多，读其他文档前建议先看这里。 |
 | [`api-reference.md`](api-reference.md) | HTTP 端点参考：路径、方法、鉴权、响应契约。 |
 | [`architecture.md`](architecture.md) | 面向贡献者的架构总览与信任链路。 |
+| [`model-promotion.md`](model-promotion.md) | **提案**：模型提升需要什么证据、改变什么、以及如何降级。信号验证出结果之前必须先定下来的那些决定。 |
 | [`../DESIGN.md`](../DESIGN.md) | Evidence Console 与 Chrome 伴侣的产品与交互契约。 |
 | [`operations/production-runbook.md`](operations/production-runbook.md) | 支持的本地与生产运行流程、健康检查、回滚、密钥轮换。 |
 | [`../SECURITY.md`](../SECURITY.md) | 安全边界与漏洞报告流程。 |

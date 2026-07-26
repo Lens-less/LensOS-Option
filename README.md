@@ -88,7 +88,7 @@ HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标�
 | --- | --- |
 | 本地确定性 / 回放研究工具链 | **GO** |
 | paper / manual 交易、自动下单、真实账户执行 | **NO-GO** |
-| 校准与模型提升（model promotion） | 未实现 |
+| 校准与模型提升（model promotion） | 未实现（规格见 [model-promotion.md](docs/model-promotion.md)，待定稿） |
 | 对外发布授权 | **NO-GO** |
 
 对外发布门禁要求 WebSocket gap/resync、24 小时 soak 与连续 7 天证据。这些系统观察
