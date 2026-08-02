@@ -50,7 +50,7 @@ export function EvidenceConsole({
 
   const body = (
     <>
-      <SectionNavigation />
+      {embedded ? null : <SectionNavigation />}
       <main
         className="console"
         id={embedded ? "surface-main" : "evidence-main"}

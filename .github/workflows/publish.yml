@@ -10,6 +10,9 @@ permissions:
 
 env:
   PYTHONUNBUFFERED: "1"
+  LENSOS_EVIDENCE_REPO_SYNC_ENABLED: ${{ vars.LENSOS_EVIDENCE_REPO_SYNC_ENABLED || 'false' }}
+  LENSOS_EVIDENCE_REPO_SLUG: ${{ vars.LENSOS_EVIDENCE_REPO_SLUG || '' }}
+  LENSOS_EVIDENCE_REPO_BRANCH: ${{ vars.LENSOS_EVIDENCE_REPO_BRANCH || 'main' }}
 
 jobs:
   capture_and_publish:
@@ -31,10 +34,30 @@ jobs:
         shell: pwsh
         env:
           FAILURE_WEBHOOK_SECRET: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
+          EVIDENCE_REPO_PUSH_TOKEN: ${{ secrets.LENSOS_EVIDENCE_REPO_PUSH_TOKEN }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:FAILURE_WEBHOOK_SECRET)) {
             throw "CAPTURE_FAILURE_WEBHOOK_URL secret is required; scheduled evidence loss must not fail silently."
           }
+          if ($env:LENSOS_EVIDENCE_REPO_SYNC_ENABLED -eq 'true') {
+            if ([string]::IsNullOrWhiteSpace($env:LENSOS_EVIDENCE_REPO_SLUG)) {
+              throw "LENSOS_EVIDENCE_REPO_SLUG must be configured when durable evidence sync is enabled."
+            }
+            if ([string]::IsNullOrWhiteSpace($env:EVIDENCE_REPO_PUSH_TOKEN)) {
+              throw "LENSOS_EVIDENCE_REPO_PUSH_TOKEN secret is required when durable evidence sync is enabled."
+            }
+          }
+
+      - name: Checkout durable evidence repo
+        if: env.LENSOS_EVIDENCE_REPO_SYNC_ENABLED == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: ${{ env.LENSOS_EVIDENCE_REPO_SLUG }}
+          ref: ${{ env.LENSOS_EVIDENCE_REPO_BRANCH }}
+          token: ${{ secrets.LENSOS_EVIDENCE_REPO_PUSH_TOKEN }}
+          path: evidence-repo
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Capture evidence
         id: capture
@@ -43,7 +66,17 @@ jobs:
         env:
           CAPTURE_DAILY_CAPTURE_DVOL: "true"
           CAPTURE_DAILY_FAILURE_WEBHOOK_URL: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
-        run: ./tools/capture-daily.ps1 -RepoRoot $PWD
+          CAPTURE_DAILY_EVIDENCE_SYNC: ${{ env.LENSOS_EVIDENCE_REPO_SYNC_ENABLED }}
+          CAPTURE_DAILY_EVIDENCE_REPO_ROOT: ${{ github.workspace }}/evidence-repo
+        run: |
+          $syncArgs = @()
+          if ($env:LENSOS_EVIDENCE_REPO_SYNC_ENABLED -eq 'true') {
+            $syncArgs = @(
+              '-EnableEvidenceRepoSync',
+              '-EvidenceRepoRoot', (Join-Path $PWD 'evidence-repo')
+            )
+          }
+          ./tools/capture-daily.ps1 -RepoRoot $PWD @syncArgs
 
       - name: Build dist/site or publish contract
         id: publish_site

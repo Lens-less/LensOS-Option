@@ -74,6 +74,13 @@ _FORBIDDEN_PUBLICATION_KEYS = {
     "trade_instruction",
     "trade_instructions",
 }
+_ABSOLUTE_LOCAL_PATH_RE = re.compile(
+    r"(?:file://|(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\[^\\]"
+    r"|/(?:Users|home|root|tmp|var(?:/tmp)?|Volumes|private/(?:tmp|var)"
+    r"|workspace|workspaces|github/workspace|mnt|opt)(?:[\\/]|$)"
+    r"|(?:^|\s)~[\\/])",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +139,8 @@ def publish_site(
         max_bytes=64 * 1024 * 1024,
         description="series artifact",
     )
+    _validate_publication_payload(signal_payload, description="signal artifact")
+    _validate_publication_payload(series_payload, description="series artifact")
 
     captured_at = str(snapshot_payload.get("captured_at") or "")
     captured_dt = _parse_timestamp(captured_at, field="snapshot.captured_at")
@@ -859,13 +868,32 @@ def _project_full_system_surface(value: Any) -> dict[str, Any]:
 
 
 def _build_summary(*, report: dict[str, Any], vrp_status: dict[str, Any]) -> dict[str, Any]:
+    vrp_evidence_class = vrp_status.get("evidence_class")
     current = {
         "vrp_percent_points": vrp_status.get("current_vrp_percent_points"),
         "dvol_percent": vrp_status.get("current_dvol_percent"),
         "rv30_percent": vrp_status.get("current_rv30_percent"),
         "percentile": vrp_status.get("percentile"),
         "band": vrp_status.get("band"),
-        "evidence_class": vrp_status.get("evidence_class"),
+        "evidence_class": vrp_evidence_class,
+        "field_evidence": {
+            "vrp_percent_points": {
+                "evidence_class": vrp_evidence_class,
+                "unit": "percent_points",
+            },
+            "dvol_percent": {
+                "evidence_class": vrp_evidence_class,
+                "unit": "percent",
+            },
+            "rv30_percent": {
+                "evidence_class": vrp_evidence_class,
+                "unit": "percent",
+            },
+            "percentile": {
+                "evidence_class": vrp_evidence_class,
+                "unit": "fraction_0_1",
+            },
+        },
     }
     return {
         "schema_version": PUBLICATION_SUMMARY_SCHEMA,
@@ -878,7 +906,7 @@ def _build_summary(*, report: dict[str, Any], vrp_status: dict[str, Any]) -> dic
         "vrp": current,
         "data_status": {
             "status": (report.get("data_status") or {}).get("status"),
-            "evidence_class": vrp_status.get("evidence_class"),
+            "evidence_class": (report.get("data_trust") or {}).get("verdict"),
         },
         "release_gates": (report.get("full_system_surface") or {}).get("release_gates"),
     }
@@ -1099,10 +1127,24 @@ def _ensure_publication_privacy(out_path: Path) -> None:
             ):
                 if forbidden in content:
                     raise ValueError(f"publication blocked: forbidden token {forbidden}")
+            if _contains_absolute_local_path(content):
+                raise ValueError(
+                    f"publication blocked: absolute local path found in {relative_path}"
+                )
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if _contains_forbidden_publication_key(payload):
-            raise ValueError("publication blocked: forbidden private/execution field found")
+        _validate_publication_payload(payload, description=relative_path)
+
+
+def _validate_publication_payload(value: Any, *, description: str) -> None:
+    if _contains_forbidden_publication_key(value):
+        raise ValueError(
+            f"publication blocked: forbidden private/execution field in {description}"
+        )
+    if _contains_absolute_local_path(value):
+        raise ValueError(
+            f"publication blocked: absolute local path found in {description}"
+        )
 
 
 def _contains_forbidden_publication_key(value: Any) -> bool:
@@ -1115,6 +1157,16 @@ def _contains_forbidden_publication_key(value: Any) -> bool:
         return False
     if isinstance(value, list):
         return any(_contains_forbidden_publication_key(item) for item in value)
+    return False
+
+
+def _contains_absolute_local_path(value: Any) -> bool:
+    if isinstance(value, str):
+        return _ABSOLUTE_LOCAL_PATH_RE.search(value) is not None
+    if isinstance(value, dict):
+        return any(_contains_absolute_local_path(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_absolute_local_path(item) for item in value)
     return False
 
 

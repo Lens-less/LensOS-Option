@@ -19,7 +19,7 @@ export const NARRATIVE_LINKS = [
   {
     href: `${APP_INDEX_HREF}?view=signal`,
     id: "signal",
-    label: "排序灵不灵",
+    label: "这套排序灵不灵",
   },
   {
     href: `${APP_INDEX_HREF}#limitations`,

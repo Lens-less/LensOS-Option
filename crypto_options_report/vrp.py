@@ -155,13 +155,13 @@ def build_vrp_status(
         "current": _empty_current(),
         "time_series": [],
         "missing_days": [],
-        "remediation": {
-            "command": _remediation_command(
+        "remediation": _remediation(
+            _remediation_command(
                 "dvol",
                 _currency_from_histories(dvol_history, underlying_history),
                 window_days,
             )
-        },
+        ),
     }
     if (
         not isinstance(window_days, int)
@@ -172,13 +172,13 @@ def build_vrp_status(
         return {
             **base,
             "reason_codes": ["INVALID_WINDOW_DAYS"],
-            "remediation": {
-                "command": _remediation_command(
+            "remediation": _remediation(
+                _remediation_command(
                     "dvol",
                     _currency_from_histories(dvol_history, underlying_history),
                     1095,
                 )
-            },
+            ),
         }
     try:
         evaluation_date = datetime.fromtimestamp(
@@ -219,7 +219,7 @@ def build_vrp_status(
         return {
             **base,
             "reason_codes": reason_codes,
-            "remediation": {"command": " && ".join(remediation_commands)},
+            "remediation": _remediation(*remediation_commands),
         }
 
     dvol_payload = dvol_validation["history"]
@@ -251,20 +251,16 @@ def build_vrp_status(
         return {
             **base,
             "reason_codes": ["NO_SHARED_HISTORY_RANGE"],
-            "remediation": {
-                "command": " && ".join(
-                    [
-                        _remediation_command(
-                            "dvol", dvol_payload["currency"], max(window_days, 1095)
-                        ),
-                        _remediation_command(
-                            "underlying",
-                            underlying_payload["currency"],
-                            max(window_days, 1095),
-                        ),
-                    ]
-                )
-            },
+            "remediation": _remediation(
+                _remediation_command(
+                    "dvol", dvol_payload["currency"], max(window_days, 1095)
+                ),
+                _remediation_command(
+                    "underlying",
+                    underlying_payload["currency"],
+                    max(window_days, 1095),
+                ),
+            ),
         }
 
     missing_days = _combined_missing_days(
@@ -305,20 +301,16 @@ def build_vrp_status(
             **base,
             "reason_codes": ["INSUFFICIENT_ALIGNED_HISTORY"],
             "missing_days": missing_days,
-            "remediation": {
-                "command": " && ".join(
-                    [
-                        _remediation_command(
-                            "dvol", dvol_payload["currency"], max(window_days, 1095)
-                        ),
-                        _remediation_command(
-                            "underlying",
-                            underlying_payload["currency"],
-                            max(window_days, 1095),
-                        ),
-                    ]
-                )
-            },
+            "remediation": _remediation(
+                _remediation_command(
+                    "dvol", dvol_payload["currency"], max(window_days, 1095)
+                ),
+                _remediation_command(
+                    "underlying",
+                    underlying_payload["currency"],
+                    max(window_days, 1095),
+                ),
+            ),
         }
 
     enriched_points: list[dict[str, Any]] = []
@@ -353,11 +345,11 @@ def build_vrp_status(
             "time_series": enriched_points,
             "missing_days": missing_days,
             "series_sample_count": len(enriched_points),
-            "remediation": {
-                "command": _remediation_command(
+            "remediation": _remediation(
+                _remediation_command(
                     "dvol", dvol_payload["currency"], max(window_days, 1095)
                 )
-            },
+            ),
         }
 
     current = dict(enriched_points[-1])
@@ -376,11 +368,11 @@ def build_vrp_status(
         "time_series": enriched_points,
         "missing_days": missing_days,
         "series_sample_count": len(enriched_points),
-        "remediation": {
-            "command": _remediation_command(
+        "remediation": _remediation(
+            _remediation_command(
                 "dvol", dvol_payload["currency"], max(window_days, 1095)
             )
-        },
+        ),
     }
 
 
@@ -602,6 +594,15 @@ def _remediation_command(kind: str, currency: str, days: int) -> str:
         f"--currency {currency} --days {days} --resolution 1D "
         f"--output artifacts/history/{currency.lower()}-dvol.json"
     )
+
+
+def _remediation(*commands: str) -> dict[str, Any]:
+    """Return commands as data plus a newline-safe copy/paste representation."""
+    items = [command for command in commands if command]
+    return {
+        "commands": items,
+        "command": "\n".join(items),
+    }
 
 
 def _parse_dvol_row(row: Any) -> tuple[int, float]:

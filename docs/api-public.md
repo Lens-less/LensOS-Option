@@ -11,9 +11,11 @@ The public publication tree exposes read-only JSON from static files. All payloa
 
 `/research/signal`
 - Canonical signal artifact copied from the CLI input and re-encoded canonically.
+- Rejected before any site file is written if it contains a private/execution key or a local absolute path.
 
 `/research/series`
 - Canonical series-history artifact copied from the CLI input and re-encoded canonically.
+- Uses the same preflight privacy boundary as the signal artifact.
 
 `/api/v1/manifest.json`
 - Publication manifest.
@@ -34,6 +36,10 @@ The public publication tree exposes read-only JSON from static files. All payloa
   - `vrp.percentile`
   - `vrp.band`
   - `vrp.evidence_class`
+  - `vrp.field_evidence.<numeric_field>.evidence_class`
+  - `vrp.field_evidence.<numeric_field>.unit`
+  - `data_status.status`
+  - `data_status.evidence_class` (the report's data-trust verdict, separate from VRP provenance)
   - `release_gates`
 
 `/api/v1/thermo.json`
@@ -92,4 +98,4 @@ The publication root emits `_headers` for static hosts that support it:
 
 - `health.json` does not expose a time-evolving `is_stale`; consumers must compare wall clock time to `stale_after`.
 - `published_at` must be greater than or equal to the snapshot `captured_at`.
-- Publication is fail-closed. If market-data quality blocks or VRP is not production-valid, `publish` exits without writing a partial site.
+- Publication is fail-closed. If market-data quality blocks or VRP is not production-valid, `publish` never emits a successful manifest. Forwarded signal/series artifacts are privacy-preflighted while the output directory is still empty.

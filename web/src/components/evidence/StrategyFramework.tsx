@@ -482,7 +482,9 @@ export function StrategyFrameworkSection({
                 <article data-status={condition.status} key={condition.id}>
                   <div>
                     <span>
-                      {CONDITION_LABELS[condition.id] ?? condition.id}
+                      {isPublished && condition.id === "market_freshness"
+                        ? "发布计算时数据新鲜度"
+                        : (CONDITION_LABELS[condition.id] ?? condition.id)}
                     </span>
                     <strong>
                       {CONDITION_STATUS_LABELS[condition.status] ??
@@ -490,7 +492,8 @@ export function StrategyFrameworkSection({
                     </strong>
                   </div>
                   <p>
-                    当前：{formatConditionObserved(condition.id, condition.observed)}
+                    {isPublished ? "当次评估" : "当前"}：
+                    {formatConditionObserved(condition.id, condition.observed)}
                   </p>
                   <small>要求：{condition.requirement ?? "见策略合同"}</small>
                 </article>

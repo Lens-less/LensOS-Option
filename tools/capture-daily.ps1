@@ -17,8 +17,11 @@
     failures are never swallowed: the script writes the failure summary, emits
     an optional failure webhook, and exits non-zero immediately.
 
-    Any remote evidence-repo integration exposed here is preflight-only. This
-    script never pushes, force-syncs, or overwrites a remote evidence repo.
+    When explicitly enabled, the script can mirror this run's snapshots,
+    histories, logs, and reports into a separate evidence git repo, then
+    `git add` / `git commit` / `git push` that durable copy. Push failures are
+    fatal and flow into the same failure summary + webhook path as capture
+    failures.
 
 .PARAMETER Currency
     Base currency to capture. Defaults to BTC.
@@ -44,9 +47,8 @@
     the run summary and never includes secrets in the webhook payload.
 
 .PARAMETER EvidenceRepoRoot
-    Optional path to a separate evidence git repo for sync preflight checks.
-    The script validates the path and remote configuration only; it never
-    pushes or copies files into the repo.
+    Optional path to a separate evidence git repo. The repo must already exist,
+    already be a git worktree, and already have a configured remote.
 
 .PARAMETER EvidenceRepoRemote
     Remote name expected inside the evidence repo when preflight runs.
@@ -54,6 +56,11 @@
 .PARAMETER EnableEvidenceRepoPreflight
     Run the explicit evidence-repo preflight stage. When omitted, the script
     also checks CAPTURE_DAILY_EVIDENCE_PREFLIGHT.
+
+.PARAMETER EnableEvidenceRepoSync
+    Opt into copying this run's snapshots/history/logs/reports into the
+    separate evidence repo and pushing the resulting commit. When omitted, the
+    script also checks CAPTURE_DAILY_EVIDENCE_SYNC.
 #>
 
 [CmdletBinding()]
@@ -67,7 +74,8 @@ param(
     [string] $FailureWebhookUrl,
     [string] $EvidenceRepoRoot,
     [string] $EvidenceRepoRemote = 'origin',
-    [switch] $EnableEvidenceRepoPreflight
+    [switch] $EnableEvidenceRepoPreflight,
+    [switch] $EnableEvidenceRepoSync
 )
 
 $ErrorActionPreference = 'Stop'
@@ -113,6 +121,25 @@ function Write-CanonicalJson {
 
 function Get-IsoTimestamp {
     return (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+}
+
+function Resolve-NormalizedPath {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+    return [System.IO.Path]::GetFullPath($resolved).TrimEnd('\', '/')
+}
+
+function Test-PathWithin {
+    param(
+        [Parameter(Mandatory)] [string] $ChildPath,
+        [Parameter(Mandatory)] [string] $ParentPath
+    )
+
+    $comparison = [System.StringComparison]::OrdinalIgnoreCase
+    $normalizedParent = $ParentPath.TrimEnd('\', '/')
+    $prefix = $normalizedParent + [System.IO.Path]::DirectorySeparatorChar
+    return $ChildPath.StartsWith($prefix, $comparison)
 }
 
 function Ensure-Directory {
@@ -181,6 +208,27 @@ function Invoke-ExternalCommand {
     finally {
         Remove-Item -LiteralPath $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Invoke-GitChecked {
+    param(
+        [Parameter(Mandatory)] [string] $RepoRoot,
+        [Parameter(Mandatory)] [string[]] $Arguments,
+        [Parameter(Mandatory)] [string] $Context
+    )
+
+    $result = Invoke-ExternalCommand -Executable 'git' -Arguments @('-C', $RepoRoot) + $Arguments
+    if ($result.exit_code -ne 0) {
+        $stderr = $result.stderr.Trim()
+        if ([string]::IsNullOrWhiteSpace($stderr)) {
+            $stderr = $result.stdout.Trim()
+        }
+        if ([string]::IsNullOrWhiteSpace($stderr)) {
+            $stderr = "$Context failed"
+        }
+        throw "$Context failed: $stderr"
+    }
+    return $result
 }
 
 function Parse-JsonText {
@@ -293,23 +341,34 @@ function Invoke-EvidenceRepoPreflight {
         throw "evidence repo path does not exist: $Path"
     }
 
-    $resolvedEvidenceRoot = (Resolve-Path -LiteralPath $Path).Path
-    $resolvedProductRoot = (Resolve-Path -LiteralPath $ProductRepoRoot).Path
+    $resolvedEvidenceRoot = Resolve-NormalizedPath -Path $Path
+    $resolvedProductRoot = Resolve-NormalizedPath -Path $ProductRepoRoot
     if ($resolvedEvidenceRoot -eq $resolvedProductRoot) {
         throw 'evidence repo root must not be the product repo root'
     }
-
-    $gitTopLevel = Invoke-ExternalCommand -Executable 'git' -Arguments @('-C', $resolvedEvidenceRoot, 'rev-parse', '--show-toplevel')
-    if ($gitTopLevel.exit_code -ne 0) {
-        throw "evidence repo is not a git worktree: $resolvedEvidenceRoot"
+    if (Test-PathWithin -ChildPath $resolvedEvidenceRoot -ParentPath $resolvedProductRoot) {
+        throw 'evidence repo root must live outside the product repo tree'
+    }
+    if (Test-PathWithin -ChildPath $resolvedProductRoot -ParentPath $resolvedEvidenceRoot) {
+        throw 'product repo root must not live inside the evidence repo tree'
     }
 
-    $remote = Invoke-ExternalCommand -Executable 'git' -Arguments @('-C', $resolvedEvidenceRoot, 'remote', 'get-url', $RemoteName)
-    if ($remote.exit_code -ne 0) {
+    $gitTopLevel = Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @('rev-parse', '--show-toplevel') -Context 'evidence repo git root'
+    $topLevelPath = $gitTopLevel.stdout.Trim()
+    if ([string]::IsNullOrWhiteSpace($topLevelPath)) {
+        throw "evidence repo is not a git worktree: $resolvedEvidenceRoot"
+    }
+    $topLevelPath = Resolve-NormalizedPath -Path $topLevelPath
+    if ($topLevelPath -ne $resolvedEvidenceRoot) {
+        throw 'evidence repo root must point at the git toplevel, not a subdirectory'
+    }
+
+    $remote = Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @('remote', 'get-url', $RemoteName) -Context "evidence repo remote $RemoteName"
+    if ([string]::IsNullOrWhiteSpace($remote.stdout.Trim())) {
         throw "evidence repo remote is not configured: $RemoteName"
     }
 
-    $requiredDirectories = @('snapshots', 'history', 'logs')
+    $requiredDirectories = @('snapshots', 'history', 'logs', 'reports')
     $checks = foreach ($dir in $requiredDirectories) {
         $fullPath = Join-Path $resolvedEvidenceRoot $dir
         [ordered]@{
@@ -331,8 +390,110 @@ function Invoke-EvidenceRepoPreflight {
             remote_name = $RemoteName
             remote_configured = $true
             required_directories = $checks
-            manual_sync_required = $true
-            note = 'capture-daily.ps1 only performs preflight. Review and sync the evidence repo manually.'
+            sync_ready = $true
+        }
+    }
+}
+
+function Copy-ArtifactIntoEvidenceRepo {
+    param(
+        [Parameter(Mandatory)] [string] $SourcePath,
+        [Parameter(Mandatory)] [string] $DestinationPath
+    )
+
+    if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+        throw "evidence sync source is missing: $SourcePath"
+    }
+
+    Ensure-Directory -Path (Split-Path -Parent $DestinationPath)
+    Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
+    return $DestinationPath
+}
+
+function Get-EvidenceRepoBranch {
+    param([Parameter(Mandatory)] [string] $RepoRoot)
+
+    $result = Invoke-GitChecked -RepoRoot $RepoRoot -Arguments @('symbolic-ref', '--quiet', '--short', 'HEAD') -Context 'evidence repo branch'
+    $branch = $result.stdout.Trim()
+    if ([string]::IsNullOrWhiteSpace($branch) -or $branch -eq 'HEAD') {
+        throw 'evidence repo must be on a named branch before sync'
+    }
+    return $branch
+}
+
+function Invoke-EvidenceRepoSync {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $RemoteName,
+        [Parameter(Mandatory)] [string] $ProductRepoRoot,
+        [Parameter(Mandatory)] [string[]] $SourceFiles
+    )
+
+    $preflight = Invoke-EvidenceRepoPreflight -Path $Path -RemoteName $RemoteName -ProductRepoRoot $ProductRepoRoot
+    $resolvedEvidenceRoot = [string] $preflight.output_path
+    $branch = Get-EvidenceRepoBranch -RepoRoot $resolvedEvidenceRoot
+
+    $copiedRelativePaths = [System.Collections.Generic.List[string]]::new()
+    foreach ($source in $SourceFiles) {
+        if ([string]::IsNullOrWhiteSpace($source)) {
+            continue
+        }
+        $sourceRoot = Resolve-NormalizedPath -Path $ProductRepoRoot
+        $resolvedSource = Resolve-NormalizedPath -Path $source
+        if (-not (Test-PathWithin -ChildPath $resolvedSource -ParentPath $sourceRoot)) {
+            throw "evidence sync source must stay inside the product repo: $resolvedSource"
+        }
+        $relativePath = $resolvedSource.Substring($sourceRoot.Length).TrimStart('\', '/')
+        if ([string]::IsNullOrWhiteSpace($relativePath)) {
+            throw "evidence sync source produced an empty relative path: $resolvedSource"
+        }
+        $destination = Join-Path $resolvedEvidenceRoot $relativePath
+        Copy-ArtifactIntoEvidenceRepo -SourcePath $resolvedSource -DestinationPath $destination | Out-Null
+        $normalizedRelativePath = $relativePath.Replace('\', '/')
+        if (-not $copiedRelativePaths.Contains($normalizedRelativePath)) {
+            $copiedRelativePaths.Add($normalizedRelativePath)
+        }
+    }
+
+    if ($copiedRelativePaths.Count -eq 0) {
+        throw 'evidence sync did not receive any source files'
+    }
+
+    Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @('add', '--') + $copiedRelativePaths.ToArray() -Context 'evidence repo git add' | Out-Null
+
+    $cachedDiff = Invoke-ExternalCommand -Executable 'git' -Arguments @('-C', $resolvedEvidenceRoot, 'diff', '--cached', '--quiet', '--')
+    if ($cachedDiff.exit_code -eq 0) {
+        return [ordered]@{
+            output_path = $resolvedEvidenceRoot
+            details = [ordered]@{
+                repo_root = $resolvedEvidenceRoot
+                remote_name = $RemoteName
+                branch = $branch
+                mode = 'noop'
+                copied_paths = $copiedRelativePaths
+            }
+        }
+    }
+    if ($cachedDiff.exit_code -ne 1) {
+        throw 'evidence repo staged diff check failed'
+    }
+
+    $commitMessage = @(
+        'Preserve daily market evidence outside the product workspace',
+        '',
+        "Tested: capture-daily evidence sync $script:RunId"
+    ) -join [Environment]::NewLine
+    Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @('commit', '-m', $commitMessage) -Context 'evidence repo git commit' | Out-Null
+    Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @('push', $RemoteName, "HEAD:$branch") -Context 'evidence repo git push' | Out-Null
+
+    return [ordered]@{
+        output_path = $resolvedEvidenceRoot
+        details = [ordered]@{
+            repo_root = $resolvedEvidenceRoot
+            remote_name = $RemoteName
+            branch = $branch
+            mode = 'pushed'
+            copied_paths = $copiedRelativePaths
         }
     }
 }
@@ -391,7 +552,8 @@ if (-not $FailureWebhookUrl) {
 if (-not $EvidenceRepoRoot) {
     $EvidenceRepoRoot = [Environment]::GetEnvironmentVariable('CAPTURE_DAILY_EVIDENCE_REPO_ROOT')
 }
-$evidenceRepoPreflightEnabled = $EnableEvidenceRepoPreflight.IsPresent -or (Get-EnvFlag -Name 'CAPTURE_DAILY_EVIDENCE_PREFLIGHT')
+$evidenceRepoSyncEnabled = $EnableEvidenceRepoSync.IsPresent -or (Get-EnvFlag -Name 'CAPTURE_DAILY_EVIDENCE_SYNC')
+$evidenceRepoPreflightEnabled = $EnableEvidenceRepoPreflight.IsPresent -or $evidenceRepoSyncEnabled -or (Get-EnvFlag -Name 'CAPTURE_DAILY_EVIDENCE_PREFLIGHT')
 
 $currencyLower = $Currency.ToLowerInvariant()
 $artifactsRoot = Join-Path $RepoRoot 'artifacts'
@@ -410,6 +572,7 @@ $script:StageResults = [System.Collections.Generic.List[object]]::new()
 
 $runStartedAt = Get-IsoTimestamp
 $runStamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+$script:RunId = "capture-daily-$currencyLower-$runStamp"
 $summaryPath = Join-Path $logDir "capture-daily-$currencyLower-$runStamp.summary.json"
 $latestSummaryPath = Join-Path $logDir "capture-daily-$currencyLower.latest.summary.json"
 
@@ -425,8 +588,60 @@ $signalPreflightPath = Join-Path $reportDir 'signal-preflight.json'
 $lastSuccessfulSnapshot = Get-LatestSnapshotPath -SeriesDirectory $seriesDir
 $failedStage = $null
 $failureMessage = $null
+$webhookState = [ordered]@{
+    configured = -not [string]::IsNullOrWhiteSpace($FailureWebhookUrl)
+    attempted = $false
+    delivered = $null
+    url = if ([string]::IsNullOrWhiteSpace($FailureWebhookUrl)) { $null } else { 'redacted' }
+    error = $null
+}
 
-Write-Log "capture start currency=$Currency limit=$InstrumentLimit dvol_enabled=$CaptureDvolHistory evidence_preflight=$evidenceRepoPreflightEnabled"
+function Write-CaptureSummary {
+    $summary = [ordered]@{
+        schema_version = 'capture_daily_summary.v1'
+        run_id = $script:RunId
+        status = if ($failureMessage) { 'failed' } else { 'ok' }
+        currency = $Currency
+        capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { $snapshotResult.details.captured_at } else { $runStartedAt }
+        run_started_at = $runStartedAt
+        repo_root = $RepoRoot
+        summary_path = $summaryPath
+        summary_latest_path = $latestSummaryPath
+        failed_stage = $failedStage
+        error = $failureMessage
+        directories = [ordered]@{
+            snapshots = $snapshotsRoot
+            series = $seriesDir
+            history = $historyDir
+            logs = $logDir
+            reports = $reportDir
+        }
+        outputs = [ordered]@{
+            snapshot = $snapshotPath
+            underlying_history = $underlyingHistoryPath
+            dvol_history = if ($CaptureDvolHistory) { $dvolHistoryPath } else { $null }
+            series_history = $seriesHistoryPath
+            signal_preflight = $signalPreflightPath
+        }
+        last_successful_snapshot = $lastSuccessfulSnapshot
+        options = [ordered]@{
+            capture_dvol_history = [bool] $CaptureDvolHistory
+            dvol_history_days = $DvolHistoryDays
+            evidence_repo_root = if ([string]::IsNullOrWhiteSpace($EvidenceRepoRoot)) { $null } else { $EvidenceRepoRoot }
+            evidence_repo_remote = $EvidenceRepoRemote
+            evidence_repo_preflight = $evidenceRepoPreflightEnabled
+            evidence_repo_sync = $evidenceRepoSyncEnabled
+        }
+        webhook = $webhookState
+        stages = $script:StageResults
+    }
+
+    Write-CanonicalJson -Path $summaryPath -InputObject $summary
+    Write-CanonicalJson -Path $latestSummaryPath -InputObject $summary
+    return $summary
+}
+
+Write-Log "capture start currency=$Currency limit=$InstrumentLimit dvol_enabled=$CaptureDvolHistory evidence_preflight=$evidenceRepoPreflightEnabled evidence_sync=$evidenceRepoSyncEnabled"
 
 Set-Location $RepoRoot
 
@@ -542,63 +757,36 @@ try {
         } | Out-Null
     }
 
+    if ($evidenceRepoSyncEnabled) {
+        Write-CaptureSummary | Out-Null
+        $displayPath = if ([string]::IsNullOrWhiteSpace($EvidenceRepoRoot)) { '<unset>' } else { $EvidenceRepoRoot }
+        $syncCommand = "evidence-repo-sync --root `"$displayPath`" --remote `"$EvidenceRepoRemote`""
+        Invoke-Stage -Name 'evidence_repo_sync' -Command $syncCommand -Action {
+            Invoke-EvidenceRepoSync -Path $EvidenceRepoRoot -RemoteName $EvidenceRepoRemote -ProductRepoRoot $RepoRoot -SourceFiles @(
+                $snapshotPath
+                $underlyingHistoryPath
+                $(if ($CaptureDvolHistory) { $dvolHistoryPath } else { $null })
+                $seriesHistoryPath
+                $signalPreflightPath
+                $script:LogFile
+                $summaryPath
+                $latestSummaryPath
+            )
+        } | Out-Null
+    }
+
     Write-Log "captures in series: $((Get-ChildItem -LiteralPath $seriesDir -Filter '*.json' -File -ErrorAction SilentlyContinue).Count)"
 }
 catch {
     $failedStage = if ($script:StageResults.Count -gt 0) { $script:StageResults[$script:StageResults.Count - 1].name } else { 'unknown' }
     $failureMessage = $_.Exception.Message
 }
-
-$summary = [ordered]@{
-    schema_version = 'capture_daily_summary.v1'
-    run_id = "capture-daily-$currencyLower-$runStamp"
-    status = if ($failureMessage) { 'failed' } else { 'ok' }
-    currency = $Currency
-    capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { $snapshotResult.details.captured_at } else { $runStartedAt }
-    run_started_at = $runStartedAt
-    repo_root = $RepoRoot
-    summary_path = $summaryPath
-    summary_latest_path = $latestSummaryPath
-    failed_stage = $failedStage
-    error = $failureMessage
-    directories = [ordered]@{
-        snapshots = $snapshotsRoot
-        series = $seriesDir
-        history = $historyDir
-        logs = $logDir
-        reports = $reportDir
-    }
-    outputs = [ordered]@{
-        snapshot = $snapshotPath
-        underlying_history = $underlyingHistoryPath
-        dvol_history = if ($CaptureDvolHistory) { $dvolHistoryPath } else { $null }
-        series_history = $seriesHistoryPath
-        signal_preflight = $signalPreflightPath
-    }
-    last_successful_snapshot = $lastSuccessfulSnapshot
-    options = [ordered]@{
-        capture_dvol_history = [bool] $CaptureDvolHistory
-        dvol_history_days = $DvolHistoryDays
-        evidence_repo_root = if ([string]::IsNullOrWhiteSpace($EvidenceRepoRoot)) { $null } else { $EvidenceRepoRoot }
-        evidence_repo_remote = $EvidenceRepoRemote
-        evidence_repo_preflight = $evidenceRepoPreflightEnabled
-    }
-    webhook = [ordered]@{
-        configured = -not [string]::IsNullOrWhiteSpace($FailureWebhookUrl)
-        attempted = $false
-        delivered = $null
-        url = if ([string]::IsNullOrWhiteSpace($FailureWebhookUrl)) { $null } else { 'redacted' }
-        error = $null
-    }
-    stages = $script:StageResults
-}
+$summary = Write-CaptureSummary
 
 if ($failureMessage -and -not [string]::IsNullOrWhiteSpace($FailureWebhookUrl)) {
-    $summary.webhook = Send-FailureWebhook -Url $FailureWebhookUrl -Summary $summary
+    $webhookState = Send-FailureWebhook -Url $FailureWebhookUrl -Summary $summary
+    $summary = Write-CaptureSummary
 }
-
-Write-CanonicalJson -Path $summaryPath -InputObject $summary
-Write-CanonicalJson -Path $latestSummaryPath -InputObject $summary
 
 if ($failureMessage) { exit 1 }
 exit 0

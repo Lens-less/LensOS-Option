@@ -1394,7 +1394,9 @@ describe("EvidenceConsole", () => {
       "href",
       "./index.html#framework",
     );
-    expect(within(navigation).getByRole("link", { name: "排序灵不灵" })).toHaveAttribute(
+    expect(
+      within(navigation).getByRole("link", { name: "这套排序灵不灵" }),
+    ).toHaveAttribute(
       "href",
       "./index.html?view=signal",
     );
@@ -1419,6 +1421,9 @@ describe("EvidenceConsole", () => {
       "href",
       "./terms.html",
     );
+    expect(
+      screen.queryByRole("navigation", { name: "页面章节" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides account and portfolio execution evidence in published mode", async () => {
@@ -1439,9 +1444,16 @@ describe("EvidenceConsole", () => {
     );
 
     await screen.findByRole("navigation", { name: "五幕叙事" });
-    const boundary = screen.getByRole("region", { name: "发布与能力边界" });
-    expect(boundary).toHaveTextContent("执行授权");
-    expect(boundary).toHaveTextContent("公开发布GO");
+    const boundary = screen.getByRole("region", {
+      name: "研究边界与证据缺口",
+    });
+    const truthStrip = within(boundary).getByRole("region", {
+      name: "三项研究边界",
+    });
+    expect(truthStrip).toHaveTextContent("RESEARCH_ONLY · NO_TRADE");
+    expect(boundary).not.toHaveTextContent("执行授权");
+    expect(boundary).not.toHaveTextContent("公开发布");
+    expect(boundary).not.toHaveTextContent("NO-GO");
     expect(boundary).not.toHaveTextContent("发布状态");
     expect(boundary).not.toHaveTextContent("缺少独立发布复核");
     expect(boundary).not.toHaveTextContent("缺少账户 API 快照");
@@ -1453,6 +1465,11 @@ describe("EvidenceConsole", () => {
     expect(screen.queryByText("新增保证金上限")).not.toBeInTheDocument();
     expect(screen.queryByText("实际张数")).not.toBeInTheDocument();
     expect(screen.getByText("已发布快照")).toBeInTheDocument();
+    const publishedFreshnessGate = screen
+      .getByText("发布计算时数据新鲜度")
+      .closest("article");
+    expect(publishedFreshnessGate).toHaveTextContent(/当次评估：\d+ 秒/);
+    expect(publishedFreshnessGate).not.toHaveTextContent(/当前：\d+ 秒/);
     expect(screen.queryByText(/Regime、账户、路径风险/)).not.toBeInTheDocument();
     expect(
       screen.getByText(/Regime、路径风险和成本覆盖尚未同时通过/),

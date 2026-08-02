@@ -234,6 +234,20 @@ class BuildVrpStatusTests(unittest.TestCase):
         self.assertIsNone(report["current"]["vrp_percent_points"])
         self.assertIn("crypto-options-dvol-history", report["remediation"]["command"])
 
+    def test_multiple_remediation_commands_are_structured_and_cross_shell_safe(self):
+        report = build_vrp_status(
+            dvol_history=None,
+            underlying_history=None,
+            generated_at="2026-08-02T08:00:00Z",
+        )
+
+        commands = report["remediation"]["commands"]
+        self.assertEqual(2, len(commands))
+        self.assertIn("crypto-options-dvol-history", commands[0])
+        self.assertIn("crypto-options-underlying-history", commands[1])
+        self.assertEqual("\n".join(commands), report["remediation"]["command"])
+        self.assertNotIn("&&", report["remediation"]["command"])
+
     def test_short_history_cannot_publish_a_placeholder_headline(self):
         report = build_vrp_status(
             dvol_history=_dvol_history([50.0] * 40),

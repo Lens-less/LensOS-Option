@@ -24,6 +24,8 @@ class CaptureDailyContractTests(unittest.TestCase):
         self.assertIn("CAPTURE_DAILY_CAPTURE_DVOL", source)
         self.assertIn("Get-EnvFlag -Name 'CAPTURE_DAILY_CAPTURE_DVOL' -Default $true", source)
         self.assertIn("CAPTURE_DAILY_EVIDENCE_PREFLIGHT", source)
+        self.assertIn("CAPTURE_DAILY_EVIDENCE_SYNC", source)
+        self.assertIn("EnableEvidenceRepoSync", source)
 
         for stage in (
             "snapshot",
@@ -32,6 +34,7 @@ class CaptureDailyContractTests(unittest.TestCase):
             "series_history",
             "signal_preflight",
             "evidence_repo_preflight",
+            "evidence_repo_sync",
         ):
             with self.subTest(stage=stage):
                 self.assertRegex(source, rf"-Name '{stage}'")
@@ -39,13 +42,40 @@ class CaptureDailyContractTests(unittest.TestCase):
     def test_capture_script_creates_required_directories_and_redacts_webhook(self) -> None:
         source = self.SCRIPT.read_text(encoding="utf-8")
 
-        for segment in ("artifacts", "artifacts\\logs", "artifacts\\history", "artifacts\\snapshots"):
+        for segment in (
+            "artifacts",
+            "artifacts\\logs",
+            "artifacts\\history",
+            "artifacts\\snapshots",
+            "artifacts\\reports",
+        ):
             with self.subTest(segment=segment):
                 normalized = segment.replace("\\", "/")
                 self.assertIn(normalized.split("/")[-1], source)
 
         self.assertIn("url = 'redacted'", source)
-        self.assertIn("never pushes, force-syncs, or overwrites", source)
+        self.assertIn("git", source)
+        self.assertIn("commit", source)
+        self.assertIn("push", source)
+
+    def test_capture_script_sync_contract_requires_independent_git_repo(self) -> None:
+        source = self.SCRIPT.read_text(encoding="utf-8")
+
+        expected_fragments = (
+            "evidence repo root must not be the product repo root",
+            "evidence repo root must live outside the product repo tree",
+            "product repo root must not live inside the evidence repo tree",
+            "evidence repo is not a git worktree",
+            "evidence repo remote is not configured",
+            "evidence repo is missing required directories: ",
+            "$requiredDirectories = @('snapshots', 'history', 'logs', 'reports')",
+            "Arguments @('add', '--')",
+            "Arguments @('commit', '-m', $commitMessage)",
+            "Arguments @('push', $RemoteName, \"HEAD:$branch\")",
+        )
+        for fragment in expected_fragments:
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, source)
 
     def test_capture_script_contains_no_hardcoded_secret_like_literals(self) -> None:
         source = self.SCRIPT.read_text(encoding="utf-8")
@@ -90,6 +120,7 @@ class CaptureDailyContractTests(unittest.TestCase):
         self.assertIn("FailureWebhookUrl", help_text)
         self.assertIn("EvidenceRepoRoot", help_text)
         self.assertIn("EnableEvidenceRepoPreflight", help_text)
+        self.assertIn("EnableEvidenceRepoSync", help_text)
 
     def test_capture_failure_writes_a_machine_readable_summary(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
@@ -163,6 +194,22 @@ class PublishWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("capture_dvol_history:", workflow)
         self.assertNotIn("dvol_history' -and -not", workflow)
 
+    def test_publish_workflow_can_explicitly_enable_evidence_repo_sync(self) -> None:
+        workflow = self.WORKFLOW.read_text(encoding="utf-8")
+
+        fragments = (
+            "LENSOS_EVIDENCE_REPO_SYNC_ENABLED",
+            "LENSOS_EVIDENCE_REPO_SLUG",
+            "LENSOS_EVIDENCE_REPO_PUSH_TOKEN",
+            "path: evidence-repo",
+            "CAPTURE_DAILY_EVIDENCE_SYNC: ${{ env.LENSOS_EVIDENCE_REPO_SYNC_ENABLED }}",
+            "CAPTURE_DAILY_EVIDENCE_REPO_ROOT: ${{ github.workspace }}/evidence-repo",
+            "EnableEvidenceRepoSync",
+        )
+        for fragment in fragments:
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, workflow)
+
     def test_publish_workflow_documents_status_history_and_stale_after_contracts(self) -> None:
         workflow = self.WORKFLOW.read_text(encoding="utf-8")
         security = self.SECURITY.read_text(encoding="utf-8")
@@ -180,6 +227,7 @@ class PublishWorkflowContractTests(unittest.TestCase):
             "30-day status history requires persisted evidence artifacts",
             "compare the current time to `publish_edition.stale_after`",
             "Do not rely on a static JSON artifact",
+            "durable backup still requires the separately owned evidence repository",
         )
         for fragment in security_fragments:
             with self.subTest(security_fragment=fragment):

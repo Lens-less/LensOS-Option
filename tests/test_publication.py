@@ -246,6 +246,7 @@ class PublicationTests(unittest.TestCase):
         snapshot_payload: dict | None = None,
         underlying_payload: dict | None = None,
         dvol_payload: dict | None = None,
+        signal_payload: dict | None = None,
         published_at: str | None = None,
         out_name: str = "site",
     ) -> tuple[Path, dict]:
@@ -261,7 +262,7 @@ class PublicationTests(unittest.TestCase):
         )
         signal_path = self._write_json(
             tempdir / "signal.json",
-            _build_signal_artifact(snapshot["captured_at"]),
+            signal_payload or _build_signal_artifact(snapshot["captured_at"]),
         )
         series_path = self._write_json(
             tempdir / "series.json",
@@ -372,6 +373,11 @@ class PublicationTests(unittest.TestCase):
             health = json.loads(
                 (output_dir / "api" / "v1" / "health.json").read_text(encoding="utf-8")
             )
+            summary = json.loads(
+                (output_dir / "api" / "v1" / "summary.json").read_text(
+                    encoding="utf-8"
+                )
+            )
             gates = {
                 gate["name"]: gate
                 for gate in report["full_system_surface"]["release_gates"]
@@ -398,6 +404,28 @@ class PublicationTests(unittest.TestCase):
             )
             self.assertEqual("GO", gates["research_publication"]["status"])
             self.assertEqual("NO-GO", gates["execution_authorization"]["status"])
+            self.assertEqual(
+                report["data_trust"]["verdict"],
+                summary["data_status"]["evidence_class"],
+            )
+            self.assertNotEqual(
+                summary["vrp"]["evidence_class"],
+                summary["data_status"]["evidence_class"],
+            )
+            field_evidence = summary["vrp"]["field_evidence"]
+            self.assertEqual(
+                {
+                    "dvol_percent",
+                    "percentile",
+                    "rv30_percent",
+                    "vrp_percent_points",
+                },
+                set(field_evidence),
+            )
+            for field in field_evidence.values():
+                self.assertEqual(
+                    summary["vrp"]["evidence_class"], field["evidence_class"]
+                )
             self.assertFalse(health["is_stale_at_publish"])
 
     def test_publish_marks_a_50_hour_old_edition_as_stale_at_publish(self) -> None:
@@ -590,6 +618,30 @@ class PublicationTests(unittest.TestCase):
                 with self.subTest(relative=relative):
                     payload = json.loads(path.read_text(encoding="utf-8"))
                     self.assertFalse(_contains_forbidden_key(payload, forbidden))
+
+    def test_publish_preflights_forwarded_artifact_privacy_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tempdir = Path(tmp)
+            snapshot = load_snapshot_fixture(str(SNAPSHOT_FIXTURE))
+            cases = {
+                "private-field": {"account_status": {"status": "missing"}},
+                "absolute-path": {
+                    "diagnostic_path": r"C:\Users\operator\private\signal.json"
+                },
+            }
+            for out_name, injected in cases.items():
+                with self.subTest(out_name=out_name):
+                    signal = _build_signal_artifact(snapshot["captured_at"])
+                    signal.update(injected)
+                    with self.assertRaisesRegex(ValueError, "publication blocked"):
+                        self._publish(
+                            tempdir,
+                            signal_payload=signal,
+                            out_name=out_name,
+                        )
+                    output_dir = tempdir / out_name
+                    self.assertTrue(output_dir.is_dir())
+                    self.assertEqual([], list(output_dir.rglob("*")))
 
     def test_publish_trims_future_history_rows_to_snapshot_date(self) -> None:
         with tempfile.TemporaryDirectory() as first_tmp, tempfile.TemporaryDirectory() as second_tmp:

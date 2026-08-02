@@ -14,6 +14,7 @@ function TruthStrip({
   freshness: Freshness;
   report: ResearchReport;
 }): React.JSX.Element {
+  const isPublished = report.runtime_context?.mode === "published";
   const trustVerdict = report.data_trust?.verdict;
   const displayState = marketDisplayState(report, freshness);
   const evidenceBoundary =
@@ -31,7 +32,10 @@ function TruthStrip({
           : { label: "不可声明", tone: "danger" };
 
   return (
-    <section className="truth-strip" aria-label="四项运行边界">
+    <section
+      className="truth-strip"
+      aria-label={isPublished ? "三项研究边界" : "四项运行边界"}
+    >
       <dl>
         <div data-tone="safe">
           <dt>报告服务</dt>
@@ -45,16 +49,18 @@ function TruthStrip({
           <dt>执行边界</dt>
           <dd>RESEARCH_ONLY · NO_TRADE</dd>
         </div>
-        <div data-tone="neutral">
-          <dt>公开发布</dt>
-          <dd>
-            {report.full_system_surface?.release_gates?.find(
-              (gate) => gate.name === "research_publication",
-            )?.status ??
-              report.full_system_surface?.release_readiness?.status ??
-              "未声明"}
-          </dd>
-        </div>
+        {isPublished ? null : (
+          <div data-tone="neutral">
+            <dt>公开发布</dt>
+            <dd>
+              {report.full_system_surface?.release_gates?.find(
+                (gate) => gate.name === "research_publication",
+              )?.status ??
+                report.full_system_surface?.release_readiness?.status ??
+                "未声明"}
+            </dd>
+          </div>
+        )}
       </dl>
     </section>
   );
@@ -116,10 +122,9 @@ export function ReleaseBoundary({
   const isPublished = report.runtime_context?.mode === "published";
   const legacyRelease =
     report.full_system_surface?.release_readiness?.status ?? "NO-GO";
-  const executionAuthorization =
-    report.full_system_surface?.release_gates?.find(
-      (gate) => gate.name === "execution_authorization",
-    )?.status ?? "NO-GO";
+  const boundaryTitle = isPublished
+    ? "研究边界与证据缺口"
+    : "发布与能力边界";
   return (
     <section
       id="limitations"
@@ -128,13 +133,19 @@ export function ReleaseBoundary({
     >
       <header className="research-section-heading boundary-heading">
         <div>
-          <p className="section-kicker">Release boundary / 次级状态</p>
-          <h2 id="limitations-title">发布与能力边界</h2>
+          <p className="section-kicker">
+            {isPublished
+              ? "Research boundary / 研究边界"
+              : "Release boundary / 次级状态"}
+          </p>
+          <h2 id="limitations-title">{boundaryTitle}</h2>
         </div>
-        <div className="release-lockup">
-          <span>{isPublished ? "执行授权" : "发布状态"}</span>
-          <strong>{isPublished ? executionAuthorization : legacyRelease}</strong>
-        </div>
+        {isPublished ? null : (
+          <div className="release-lockup">
+            <span>发布状态</span>
+            <strong>{legacyRelease}</strong>
+          </div>
+        )}
       </header>
       <TruthStrip freshness={freshness} report={report} />
       <div className="blocked-output-note">
@@ -179,7 +190,11 @@ export function ReleaseBoundary({
         <div className="queue-grid">
           <BlockerQueue
             blockers={operatorBlockers}
-            description="需要凭证、账户快照或独立发布复核的外部输入。"
+            description={
+              isPublished
+                ? "需要外部输入或独立复核的研究缺口。"
+                : "需要凭证、账户快照或独立发布复核的外部输入。"
+            }
             queue="operator"
             title="操作员与外部动作"
           />

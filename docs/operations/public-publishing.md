@@ -71,7 +71,7 @@ At minimum:
 - `published_at` earlier than snapshot `captured_at`: abort.
 - Market-data quality not `validated` or `trusted`: abort.
 - VRP not `validated` with at least 1000 effective published readings: abort.
-- Forbidden private/execution fields detected in the published JSON tree: abort.
+- Forbidden private/execution fields or local absolute paths in forwarded artifacts: abort before any site file is written.
 
 ## Determinism contract
 
@@ -86,6 +86,7 @@ Before analysis and hashing, underlying and DVOL histories are cut off at the sn
 ## Hosting notes
 
 - `index.html` is rewritten so bundle URLs resolve from `/assets/`.
+- Durable backup is a separate contract from static hosting: `tools/capture-daily.ps1 -EnableEvidenceRepoSync` can mirror the current run into an already-provisioned evidence git repo, while the GitHub Actions workflow keeps 90-day artifacts only as a temporary safety copy when that repo sync is not configured.
 - `_headers` sets:
   - `/api/v1/*` → CORS `*`, `Cache-Control: public, max-age=300`
   - `/research/*` → `Cache-Control: public, max-age=300`
