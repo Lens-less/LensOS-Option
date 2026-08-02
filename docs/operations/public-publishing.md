@@ -86,7 +86,8 @@ Before analysis and hashing, underlying and DVOL histories are cut off at the sn
 ## Hosting notes
 
 - `index.html` is rewritten so bundle URLs resolve from `/assets/`.
-- Durable backup is a separate contract from static hosting: `tools/capture-daily.ps1 -EnableEvidenceRepoSync` can mirror the current run into an already-provisioned evidence git repo, while the GitHub Actions workflow keeps 90-day artifacts only as a temporary safety copy when that repo sync is not configured.
+- Durable backup is a separate contract from static hosting: `tools/capture-daily.ps1 -EnableEvidenceRepoSync` mirrors the current run into an already-provisioned evidence git repo, while the GitHub Actions workflow keeps 90-day artifacts only as a temporary safety copy. The evidence repo must be a clean, named-branch git top-level outside the product tree, with a configured remote and committed `snapshots/`, `history/`, `logs/`, and `reports/` directories. Capture files are copied beneath those four roots before a bot-authored commit and ordinary (never forced) push.
+- In Actions, the product checkout lives at `${{ github.workspace }}/product` and the evidence checkout at `${{ github.workspace }}/evidence-repo`. They are siblings by design; placing the evidence checkout under the product repo fails preflight.
 - `_headers` sets:
   - `/api/v1/*` → CORS `*`, `Cache-Control: public, max-age=300`
   - `/research/*` → `Cache-Control: public, max-age=300`

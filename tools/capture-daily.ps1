@@ -155,6 +155,47 @@ function Ensure-Directory {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
 }
 
+function Assert-RealDirectory {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [string] $Context = 'directory'
+    )
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer) {
+        throw "$Context must be a directory: $Path"
+    }
+    if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        throw "reparse points are not allowed in evidence sync paths: $Path"
+    }
+}
+
+function Ensure-RealDirectoryTree {
+    param(
+        [Parameter(Mandatory)] [string] $RootPath,
+        [Parameter(Mandatory)] [string] $DirectoryPath
+    )
+
+    $resolvedRoot = Resolve-NormalizedPath -Path $RootPath
+    $normalizedDirectory = [System.IO.Path]::GetFullPath($DirectoryPath).TrimEnd('\', '/')
+    if ($normalizedDirectory -ne $resolvedRoot -and -not (
+            Test-PathWithin -ChildPath $normalizedDirectory -ParentPath $resolvedRoot
+        )) {
+        throw "evidence sync destination escaped the evidence repo: $normalizedDirectory"
+    }
+
+    Assert-RealDirectory -Path $resolvedRoot -Context 'evidence repo root'
+    $relative = $normalizedDirectory.Substring($resolvedRoot.Length).TrimStart('\', '/')
+    $current = $resolvedRoot
+    foreach ($segment in @($relative -split '[\\/]' | Where-Object { $_ })) {
+        $current = Join-Path $current $segment
+        if (-not (Test-Path -LiteralPath $current)) {
+            New-Item -ItemType Directory -Path $current -ErrorAction Stop | Out-Null
+        }
+        Assert-RealDirectory -Path $current -Context 'evidence sync destination ancestor'
+    }
+}
+
 function Resolve-ToolCommand {
     param(
         [Parameter(Mandatory)] [string] $CommandName,
@@ -196,7 +237,13 @@ function Invoke-ExternalCommand {
 
     $stdoutFile = [System.IO.Path]::GetTempFileName()
     $stderrFile = [System.IO.Path]::GetTempFileName()
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
+        # Windows PowerShell 5.1 promotes native stderr to its error stream.
+        # Commands such as `git push` write ordinary progress there even on a
+        # zero exit, so rely on the native exit code instead of terminating on
+        # the presence of stderr text.
+        $ErrorActionPreference = 'Continue'
         & $Executable @Arguments 1> $stdoutFile 2> $stderrFile
         $exitCode = if ($null -ne $LASTEXITCODE) { [int] $LASTEXITCODE } else { 0 }
         return [ordered]@{
@@ -206,6 +253,7 @@ function Invoke-ExternalCommand {
         }
     }
     finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Remove-Item -LiteralPath $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
     }
 }
@@ -217,7 +265,8 @@ function Invoke-GitChecked {
         [Parameter(Mandatory)] [string] $Context
     )
 
-    $result = Invoke-ExternalCommand -Executable 'git' -Arguments @('-C', $RepoRoot) + $Arguments
+    $gitArguments = @('-C', $RepoRoot) + $Arguments
+    $result = Invoke-ExternalCommand -Executable 'git' -Arguments $gitArguments
     if ($result.exit_code -ne 0) {
         $stderr = $result.stderr.Trim()
         if ([string]::IsNullOrWhiteSpace($stderr)) {
@@ -226,7 +275,7 @@ function Invoke-GitChecked {
         if ([string]::IsNullOrWhiteSpace($stderr)) {
             $stderr = "$Context failed"
         }
-        throw "$Context failed: $stderr"
+        throw "$Context failed with exit code $($result.exit_code): $stderr"
     }
     return $result
 }
@@ -343,6 +392,7 @@ function Invoke-EvidenceRepoPreflight {
 
     $resolvedEvidenceRoot = Resolve-NormalizedPath -Path $Path
     $resolvedProductRoot = Resolve-NormalizedPath -Path $ProductRepoRoot
+    Assert-RealDirectory -Path $resolvedEvidenceRoot -Context 'evidence repo root'
     if ($resolvedEvidenceRoot -eq $resolvedProductRoot) {
         throw 'evidence repo root must not be the product repo root'
     }
@@ -371,16 +421,30 @@ function Invoke-EvidenceRepoPreflight {
     $requiredDirectories = @('snapshots', 'history', 'logs', 'reports')
     $checks = foreach ($dir in $requiredDirectories) {
         $fullPath = Join-Path $resolvedEvidenceRoot $dir
+        $item = Get-Item -LiteralPath $fullPath -ErrorAction SilentlyContinue
         [ordered]@{
             directory = $dir
             path = $fullPath
-            exists = [bool] (Test-Path -LiteralPath $fullPath -PathType Container)
+            exists = [bool] ($item -and $item.PSIsContainer)
+            reparse_point = [bool] ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint))
         }
     }
     $missing = @($checks | Where-Object { -not $_.exists })
     if ($missing.Count -gt 0) {
         $names = ($missing | ForEach-Object { $_.directory }) -join ', '
         throw "evidence repo is missing required directories: $names"
+    }
+    $linked = @($checks | Where-Object { $_.reparse_point })
+    if ($linked.Count -gt 0) {
+        $names = ($linked | ForEach-Object { $_.directory }) -join ', '
+        throw "evidence repo required directories must not be reparse points: $names"
+    }
+
+    $status = Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @(
+        'status', '--porcelain=v1', '--untracked-files=all'
+    ) -Context 'evidence repo clean-worktree check'
+    if (-not [string]::IsNullOrWhiteSpace($status.stdout)) {
+        throw 'evidence repo must be clean before sync'
     }
 
     return [ordered]@{
@@ -398,15 +462,46 @@ function Invoke-EvidenceRepoPreflight {
 function Copy-ArtifactIntoEvidenceRepo {
     param(
         [Parameter(Mandatory)] [string] $SourcePath,
-        [Parameter(Mandatory)] [string] $DestinationPath
+        [Parameter(Mandatory)] [string] $DestinationPath,
+        [Parameter(Mandatory)] [string] $EvidenceRepoRoot
     )
 
-    if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+    $sourceItem = Get-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
+    if (-not $sourceItem -or $sourceItem.PSIsContainer) {
         throw "evidence sync source is missing: $SourcePath"
     }
+    if ($sourceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        throw "evidence sync source must not be a reparse point: $SourcePath"
+    }
 
-    Ensure-Directory -Path (Split-Path -Parent $DestinationPath)
-    Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
+    $destinationParent = Split-Path -Parent $DestinationPath
+    Ensure-RealDirectoryTree -RootPath $EvidenceRepoRoot -DirectoryPath $destinationParent
+
+    if (Test-Path -LiteralPath $DestinationPath) {
+        $destinationItem = Get-Item -LiteralPath $DestinationPath -Force -ErrorAction Stop
+        if ($destinationItem.PSIsContainer) {
+            throw "evidence sync destination exists as a directory: $DestinationPath"
+        }
+        if ($destinationItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            throw "evidence sync destination must not be a reparse point: $DestinationPath"
+        }
+    }
+
+    $temporaryDestination = Join-Path $destinationParent (
+        ".lensos-sync-$([Guid]::NewGuid().ToString('N')).tmp"
+    )
+    try {
+        Copy-Item -LiteralPath $SourcePath -Destination $temporaryDestination -ErrorAction Stop
+        if (Test-Path -LiteralPath $DestinationPath) {
+            Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction Stop
+        }
+        Move-Item -LiteralPath $temporaryDestination -Destination $DestinationPath -ErrorAction Stop
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryDestination) {
+            Remove-Item -LiteralPath $temporaryDestination -Force -ErrorAction SilentlyContinue
+        }
+    }
     return $DestinationPath
 }
 
@@ -438,17 +533,17 @@ function Invoke-EvidenceRepoSync {
         if ([string]::IsNullOrWhiteSpace($source)) {
             continue
         }
-        $sourceRoot = Resolve-NormalizedPath -Path $ProductRepoRoot
+        $sourceRoot = Resolve-NormalizedPath -Path (Join-Path $ProductRepoRoot 'artifacts')
         $resolvedSource = Resolve-NormalizedPath -Path $source
         if (-not (Test-PathWithin -ChildPath $resolvedSource -ParentPath $sourceRoot)) {
-            throw "evidence sync source must stay inside the product repo: $resolvedSource"
+            throw "evidence sync source must stay inside the product artifacts directory: $resolvedSource"
         }
         $relativePath = $resolvedSource.Substring($sourceRoot.Length).TrimStart('\', '/')
         if ([string]::IsNullOrWhiteSpace($relativePath)) {
             throw "evidence sync source produced an empty relative path: $resolvedSource"
         }
         $destination = Join-Path $resolvedEvidenceRoot $relativePath
-        Copy-ArtifactIntoEvidenceRepo -SourcePath $resolvedSource -DestinationPath $destination | Out-Null
+        Copy-ArtifactIntoEvidenceRepo -SourcePath $resolvedSource -DestinationPath $destination -EvidenceRepoRoot $resolvedEvidenceRoot | Out-Null
         $normalizedRelativePath = $relativePath.Replace('\', '/')
         if (-not $copiedRelativePaths.Contains($normalizedRelativePath)) {
             $copiedRelativePaths.Add($normalizedRelativePath)
@@ -459,7 +554,8 @@ function Invoke-EvidenceRepoSync {
         throw 'evidence sync did not receive any source files'
     }
 
-    Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @('add', '--') + $copiedRelativePaths.ToArray() -Context 'evidence repo git add' | Out-Null
+    $gitAddArguments = @('add', '--') + $copiedRelativePaths.ToArray()
+    Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments $gitAddArguments -Context 'evidence repo git add' | Out-Null
 
     $cachedDiff = Invoke-ExternalCommand -Executable 'git' -Arguments @('-C', $resolvedEvidenceRoot, 'diff', '--cached', '--quiet', '--')
     if ($cachedDiff.exit_code -eq 0) {
@@ -481,9 +577,16 @@ function Invoke-EvidenceRepoSync {
     $commitMessage = @(
         'Preserve daily market evidence outside the product workspace',
         '',
+        'Constraint: Deribit option-chain captures cannot be backfilled',
+        'Confidence: high',
+        'Scope-risk: narrow',
         "Tested: capture-daily evidence sync $script:RunId"
     ) -join [Environment]::NewLine
-    Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @('commit', '-m', $commitMessage) -Context 'evidence repo git commit' | Out-Null
+    Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @(
+        '-c', 'user.name=LensOS Capture Bot',
+        '-c', 'user.email=lensos-capture-bot@users.noreply.github.com',
+        'commit', '-m', $commitMessage
+    ) -Context 'evidence repo git commit' | Out-Null
     Invoke-GitChecked -RepoRoot $resolvedEvidenceRoot -Arguments @('push', $RemoteName, "HEAD:$branch") -Context 'evidence repo git push' | Out-Null
 
     return [ordered]@{

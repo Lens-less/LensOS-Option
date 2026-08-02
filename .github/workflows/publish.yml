@@ -19,13 +19,19 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+    defaults:
+      run:
+        working-directory: product
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          path: product
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
           cache: pip
+          cache-dependency-path: product/pyproject.toml
 
       - name: Install package
         run: python -m pip install -e .
@@ -73,7 +79,7 @@ jobs:
           if ($env:LENSOS_EVIDENCE_REPO_SYNC_ENABLED -eq 'true') {
             $syncArgs = @(
               '-EnableEvidenceRepoSync',
-              '-EvidenceRepoRoot', (Join-Path $PWD 'evidence-repo')
+              '-EvidenceRepoRoot', $env:CAPTURE_DAILY_EVIDENCE_REPO_ROOT
             )
           }
           ./tools/capture-daily.ps1 -RepoRoot $PWD @syncArgs
@@ -186,7 +192,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-site
-          path: dist/site
+          path: product/dist/site
           if-no-files-found: error
 
       - name: Upload captured evidence backup
@@ -195,10 +201,10 @@ jobs:
         with:
           name: captured-evidence
           path: |
-            artifacts/snapshots
-            artifacts/history
-            artifacts/logs
-            artifacts/reports
+            product/artifacts/snapshots
+            product/artifacts/history
+            product/artifacts/logs
+            product/artifacts/reports
           if-no-files-found: error
           retention-days: 90
 

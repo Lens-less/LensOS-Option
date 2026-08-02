@@ -404,6 +404,29 @@ class PublicationTests(unittest.TestCase):
             )
             self.assertEqual("GO", gates["research_publication"]["status"])
             self.assertEqual("NO-GO", gates["execution_authorization"]["status"])
+            self.assertNotIn(
+                "account_age_sec",
+                [item["metric"] for item in report["strategy_research"]["monitoring"]],
+            )
+            self.assertNotIn(
+                "account_gate",
+                [
+                    item["id"]
+                    for item in report["strategy_research"]["playbook"]["entry_contract"][
+                        "conditions"
+                    ]
+                ],
+            )
+            self.assertEqual(
+                [],
+                report["strategy_research"]["playbook"]["exit_contract"][
+                    "position_states"
+                ],
+            )
+            self.assertNotIn(
+                "Attach a fresh read-only account snapshot before any sizing study.",
+                report["strategy_research"]["review"]["promotion_conditions"],
+            )
             self.assertEqual(
                 report["data_trust"]["verdict"],
                 summary["data_status"]["evidence_class"],

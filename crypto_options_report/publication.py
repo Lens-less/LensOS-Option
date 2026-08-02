@@ -308,7 +308,10 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
         "backtest_status": _project_status_pair(report.get("backtest_status")),
         "vol_surface_status": _project_vol_surface_status(report.get("vol_surface_status")),
         "candidate_research": _project_candidate_research(report.get("candidate_research")),
-        "strategy_research": _project_strategy_research(report.get("strategy_research")),
+        "strategy_research": _project_strategy_research(
+            report.get("strategy_research"),
+            published=bool((report.get("runtime_context") or {}).get("mode") == "published"),
+        ),
         "ev_candidate_scanner": _project_ev_candidate_scanner(
             report.get("ev_candidate_scanner")
         ),
@@ -585,7 +588,11 @@ def _project_strategy_condition(value: Any) -> dict[str, Any]:
     }
 
 
-def _project_strategy_research(value: Any) -> dict[str, Any] | None:
+def _project_strategy_research(
+    value: Any,
+    *,
+    published: bool = False,
+) -> dict[str, Any] | None:
     strategy = dict(value or {})
     if not strategy:
         return None
@@ -601,6 +608,21 @@ def _project_strategy_research(value: Any) -> dict[str, Any] | None:
     next_expiry = dict(volatility.get("next_expiry") or {})
     selection = dict(strategy.get("strategy_selection") or {})
     review = dict(strategy.get("review") or {})
+    monitoring = list(strategy.get("monitoring") or [])
+    if published:
+        monitoring = [
+            item
+            for item in monitoring
+            if dict(item or {}).get("metric") != "account_age_sec"
+        ]
+    promotion_conditions = list(review.get("promotion_conditions") or [])
+    if published:
+        promotion_conditions = [
+            item
+            for item in promotion_conditions
+            if item
+            != "Attach a fresh read-only account snapshot before any sizing study."
+        ]
     return {
         "schema_version": strategy.get("schema_version"),
         "generated_at": strategy.get("generated_at"),
@@ -694,22 +716,22 @@ def _project_strategy_research(value: Any) -> dict[str, Any] | None:
             "ranked_candidate_ids": list(selection.get("ranked_candidate_ids") or []),
             "ranking_dimensions": list(selection.get("ranking_dimensions") or []),
         },
-        "playbook": _project_playbook(strategy.get("playbook")),
-        "monitoring": list(strategy.get("monitoring") or []),
+        "playbook": _project_playbook(strategy.get("playbook"), published=published),
+        "monitoring": monitoring,
         "review": {
             "status": review.get("status"),
             "backtest_status": review.get("backtest_status"),
             "calibration_status": review.get("calibration_status"),
             "path_risk_status": review.get("path_risk_status"),
             "missing_evidence": list(review.get("missing_evidence") or []),
-            "promotion_conditions": list(review.get("promotion_conditions") or []),
+            "promotion_conditions": promotion_conditions,
             "journal_template": list(review.get("journal_template") or []),
         },
         "degradation": list(strategy.get("degradation") or []),
     }
 
 
-def _project_playbook(value: Any) -> dict[str, Any] | None:
+def _project_playbook(value: Any, *, published: bool = False) -> dict[str, Any] | None:
     if value is None:
         return None
     playbook = dict(value or {})
@@ -718,6 +740,15 @@ def _project_playbook(value: Any) -> dict[str, Any] | None:
     entry = dict(playbook.get("entry_contract") or {})
     exit_contract = dict(playbook.get("exit_contract") or {})
     time_management = dict(exit_contract.get("time_management") or {})
+    conditions = [
+        _project_strategy_condition(item) for item in entry.get("conditions") or []
+    ]
+    if published:
+        conditions = [
+            item
+            for item in conditions
+            if item.get("id") != "account_gate"
+        ]
     return {
         "structure": playbook.get("structure"),
         "candidate": {
@@ -759,27 +790,33 @@ def _project_playbook(value: Any) -> dict[str, Any] | None:
             "revalidate_on_refresh": entry.get("revalidate_on_refresh"),
             "price_basis": entry.get("price_basis"),
             "execution_assumption": entry.get("execution_assumption"),
-            "conditions": [
-                _project_strategy_condition(item) for item in entry.get("conditions") or []
-            ],
+            "conditions": conditions,
         },
         "exit_contract": {
             "policy_status": exit_contract.get("policy_status"),
-            "profit_capture": list(exit_contract.get("profit_capture") or []),
-            "position_states": list(exit_contract.get("position_states") or []),
+            "profit_capture": [] if published else list(exit_contract.get("profit_capture") or []),
+            "position_states": [] if published else list(exit_contract.get("position_states") or []),
             "time_management": {
-                "review_below_dte_days": time_management.get("review_below_dte_days"),
-                "roll_allowed_states": list(time_management.get("roll_allowed_states") or []),
-                "roll_delta_band": list(time_management.get("roll_delta_band") or []),
-                "roll_must_improve": list(time_management.get("roll_must_improve") or []),
-                "defensive_roll_minimum_stress_reduction": time_management.get(
-                    "defensive_roll_minimum_stress_reduction"
-                ),
-                "loss_deferral_alone_is_forbidden": time_management.get(
-                    "loss_deferral_alone_is_forbidden"
-                ),
+                "review_below_dte_days": None
+                if published
+                else time_management.get("review_below_dte_days"),
+                "roll_allowed_states": []
+                if published
+                else list(time_management.get("roll_allowed_states") or []),
+                "roll_delta_band": []
+                if published
+                else list(time_management.get("roll_delta_band") or []),
+                "roll_must_improve": []
+                if published
+                else list(time_management.get("roll_must_improve") or []),
+                "defensive_roll_minimum_stress_reduction": None
+                if published
+                else time_management.get("defensive_roll_minimum_stress_reduction"),
+                "loss_deferral_alone_is_forbidden": None
+                if published
+                else time_management.get("loss_deferral_alone_is_forbidden"),
             },
-            "kill_switches": list(exit_contract.get("kill_switches") or []),
+            "kill_switches": [] if published else list(exit_contract.get("kill_switches") or []),
         },
     }
 

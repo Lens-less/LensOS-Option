@@ -202,11 +202,17 @@ LensOS 现在是 **"按需运行的函数"**。这两者之间的距离，就是
 **改动**：
 1. 新建独立私有仓库 `lensos-option-evidence`（**不**放进产品仓，避免 diff 噪音与
    仓库膨胀）。目录 `snapshots/btc-series/`、`history/`、`logs/`。
-2. `capture-daily.ps1` 末尾追加：`git add -A && git commit && git push` 到该仓库。
-   提交信息含采集时刻与快照条数。
+2. `capture-daily.ps1` 末尾追加显式路径白名单的 `git add`、bot 身份 `git commit`
+   与普通（非 force）`git push` 到该仓库。证据仓必须干净、位于产品仓之外；任何
+   操作者的预存修改都会让同步 fail-closed，而不会被顺手提交。
 3. 采集失败 / push 失败 → 发一条通知（邮件或 webhook）。**静默失败一周就毁掉一周样本**，
    脚本注释里已经写了这句话，现在要让它成立。
 4. 立即手工提交当前 9 份快照与 `btc-daily.json` 建立基线。
+
+**落地状态（2026-08-02）**：同步、隔离预检、失败摘要/通知通道及 GitHub Actions
+双仓 sibling checkout 已实现；本地 bare remote 端到端测试已证明 copy → commit → push。
+真实私有 evidence remote、push token、failure webhook 以及现存快照的首次基线推送仍需
+外部配置，未把 90 天 Actions artifact 冒充为永久版本控制。
 
 **验收**：
 - 断开本地磁盘，从远端仓库 clone 后，`validate-signal --preflight` 输出与本地逐字节一致；
@@ -473,6 +479,11 @@ GET /api/v1/health.json     # 发布健康：last_published_at、is_stale、next
    「日期 × 合约」去重（README:207）。**双采集是最便宜的保险。**
 5. 采集失败 / 发布失败 → 通知，并且**不覆盖上一版已发布内容**（旧数据配正确的
    "距今 N 小时"标注，好过空白）。
+
+**落地状态（2026-08-02）**：08:10 UTC 定时/手工 workflow、采集、私有证据仓同步、
+静态构建、90 天临时 artifact 与 fail-closed 通知契约已实现。域名与静态托管尚未拍板，
+因此 workflow 有意停在可部署的 `dist/site`，没有暗自绑定某一家托管商；本地冗余计划
+任务与外部心跳也仍是部署侧动作。
 
 **验收**：
 - 关掉本地笔记本连续 3 天，站点仍每日更新；
