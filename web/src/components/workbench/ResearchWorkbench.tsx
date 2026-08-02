@@ -5,6 +5,7 @@ import { Masthead } from "../evidence/Shell";
 import {
   finiteNumber,
   friendlySource,
+  marketDisplayState,
   reportFreshness,
 } from "../evidence/reportModel";
 import { CandidateDetailPanel } from "./CandidateDetailPanel";
@@ -32,6 +33,7 @@ import { ScreenerEmptyState } from "./ScreenerEmptyState";
 import { ScoreProvenance } from "./ScoreProvenance";
 import { ReasonCodeNotice } from "../shell/ReasonCodeNotice";
 import { CombinationRiskPanel } from "./CombinationRiskPanel";
+import { SiteFooter } from "../shell/SiteFooter";
 
 const FILTER_PARAM_KEYS = [
   "structure",
@@ -113,6 +115,8 @@ export function ResearchWorkbench({
   const status = scannerStatus(report);
   const scanner = evCandidateScannerOf(report);
   const freshness = reportFreshness(report, receivedAtMs, nowMs);
+  const displayState = marketDisplayState(report, freshness);
+  const isPublished = report.runtime_context?.mode === "published";
   const source = friendlySource(report.data_status?.source);
   const spotUsdc = finiteNumber(report.strategy_research?.analysis?.market?.spot_usd);
 
@@ -187,7 +191,10 @@ export function ResearchWorkbench({
     setFilters(defaultFilters());
   };
 
-  const isBlockedStatus = status === "unavailable" || status === "blocked";
+  const isBlockedStatus =
+    displayState === "stale" || status === "unavailable" || status === "blocked";
+  const blockedScannerStatus: "blocked" | "unavailable" =
+    status === "blocked" ? "blocked" : "unavailable";
 
   const hiddenByTier = allRows.filter(
     (row) => !filters.actionTiers.includes(row.action),
@@ -219,11 +226,16 @@ export function ResearchWorkbench({
             structureOptions={structureOptions}
           />
           <ScreenerBlockedState
-            reasonCode={scanner?.reason_code ?? null}
-            status={status}
+            reasonCode={
+              displayState === "stale"
+                ? "PUBLISHED_EDITION_STALE"
+                : (scanner?.reason_code ?? null)
+            }
+            status={displayState === "stale" ? "blocked" : blockedScannerStatus}
           />
           <ReasonCodeNotice
             codes={[
+              ...(displayState === "stale" ? ["PUBLISHED_EDITION_STALE"] : []),
               ...(scanner?.reason_code ? [scanner.reason_code] : []),
               ...(report.reason_codes ?? []),
             ]}
@@ -267,6 +279,7 @@ export function ResearchWorkbench({
           {selectedRow ? (
             <CandidateDetailPanel
               headingRef={headingRef}
+              hideExecutionDetails={isPublished}
               onClose={handleClose}
               report={report}
               row={selectedRow}
@@ -313,12 +326,6 @@ export function ResearchWorkbench({
       <section className="truth-strip" aria-label="三项运行边界">
         <dl>
           <div data-tone="danger">
-            <dt>外部发布授权</dt>
-            <dd>
-              {report.full_system_surface?.release_readiness?.status ?? "NO-GO"}
-            </dd>
-          </div>
-          <div data-tone="danger">
             <dt>执行边界</dt>
             <dd>RESEARCH_ONLY · NO_TRADE</dd>
           </div>
@@ -329,10 +336,7 @@ export function ResearchWorkbench({
         </dl>
       </section>
       {body}
-      <footer className="page-footer">
-        <span>LensOS Option · research only</span>
-        <p>真实市场数据用于研究阅读；页面不连接下单与自动执行。</p>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

@@ -1,5 +1,10 @@
 import type { ResearchReport } from "../../contracts";
-import { OUTPUT_LABELS, evidenceItems, humanize } from "./reportModel";
+import {
+  OUTPUT_LABELS,
+  evidenceItems,
+  humanize,
+  marketDisplayState,
+} from "./reportModel";
 import type { Blocker, Freshness, Queue } from "./reportModel";
 
 function TruthStrip({
@@ -10,8 +15,11 @@ function TruthStrip({
   report: ResearchReport;
 }): React.JSX.Element {
   const trustVerdict = report.data_trust?.verdict;
+  const displayState = marketDisplayState(report, freshness);
   const evidenceBoundary =
-    freshness.phase === "current" && trustVerdict === "trusted"
+    displayState === "stale"
+      ? { label: "发布已停摆", tone: "danger" }
+      : freshness.phase === "current" && trustVerdict === "trusted"
       ? { label: "当前且可信", tone: "safe" }
       : freshness.phase === "current" &&
           report.data_status?.validated === true
@@ -34,14 +42,18 @@ function TruthStrip({
           <dd>{evidenceBoundary.label}</dd>
         </div>
         <div data-tone="danger">
-          <dt>外部发布授权</dt>
-          <dd>
-            {report.full_system_surface?.release_readiness?.status ?? "NO-GO"}
-          </dd>
-        </div>
-        <div data-tone="danger">
           <dt>执行边界</dt>
           <dd>RESEARCH_ONLY · NO_TRADE</dd>
+        </div>
+        <div data-tone="neutral">
+          <dt>公开发布</dt>
+          <dd>
+            {report.full_system_surface?.release_gates?.find(
+              (gate) => gate.name === "research_publication",
+            )?.status ??
+              report.full_system_surface?.release_readiness?.status ??
+              "未声明"}
+          </dd>
         </div>
       </dl>
     </section>
@@ -101,8 +113,13 @@ export function ReleaseBoundary({
   systemBlockers: Blocker[];
 }): React.JSX.Element {
   const blockedOutputs = report.blocked_outputs ?? [];
-  const release =
+  const isPublished = report.runtime_context?.mode === "published";
+  const legacyRelease =
     report.full_system_surface?.release_readiness?.status ?? "NO-GO";
+  const executionAuthorization =
+    report.full_system_surface?.release_gates?.find(
+      (gate) => gate.name === "execution_authorization",
+    )?.status ?? "NO-GO";
   return (
     <section
       id="limitations"
@@ -115,8 +132,8 @@ export function ReleaseBoundary({
           <h2 id="limitations-title">发布与能力边界</h2>
         </div>
         <div className="release-lockup">
-          <span>发布状态</span>
-          <strong>{release}</strong>
+          <span>{isPublished ? "执行授权" : "发布状态"}</span>
+          <strong>{isPublished ? executionAuthorization : legacyRelease}</strong>
         </div>
       </header>
       <TruthStrip freshness={freshness} report={report} />

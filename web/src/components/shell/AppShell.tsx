@@ -1,35 +1,36 @@
+import { useEffect, useState } from "react";
+
 import type { ResearchReport } from "../../contracts";
+import { APP_INDEX_HREF, NARRATIVE_LINKS, RAW_REPORT_HREF } from "../../publicPaths";
 import type { Freshness } from "../evidence/reportModel";
+import { formatCutoffTime } from "../evidence/reportModel";
+import { PublishedEditionBar } from "./PublishedEditionBar";
 import { ReplayBanner } from "./ReplayBanner";
+import { SiteFooter } from "./SiteFooter";
 
 export type AppView = "evidence" | "workbench" | "series" | "signal";
 
-const VIEWS: Array<{ id: AppView; label: string; hint: string }> = [
-  { id: "evidence", label: "证据台", hint: "结论与它依赖的每一份证据" },
-  { id: "workbench", label: "候选工作台", hint: "筛选、排序、并排比较候选" },
-  { id: "series", label: "序列历史", hint: "同一个行权价在过去每天的读数" },
-  { id: "signal", label: "信号验证", hint: "排序信号有没有预测力，以及样本攒到哪一步" },
-];
-
-function releaseStatus(report: ResearchReport): string {
-  return report.full_system_surface?.release_readiness?.status ?? "NO-GO";
+function currentNarrativeId(view: AppView): string {
+  if (view === "series") {
+    return "series";
+  }
+  if (view === "signal" || view === "workbench") {
+    return "signal";
+  }
+  if (typeof window === "undefined") {
+    return "vrp";
+  }
+  const hash = window.location.hash.replace(/^#/, "");
+  if (hash === "framework" || hash === "limitations" || hash === "vrp") {
+    return hash;
+  }
+  return "vrp";
 }
 
-/**
- * The single spine both surfaces hang from.
- *
- * The two views used to be switched by a bare button bar floating above the
- * masthead, and each then re-rendered its own masthead and its own copy of the
- * run state — release authority, execution boundary and data freshness appeared
- * two or three times on one page while the way to reach the other view appeared
- * nowhere except a URL parameter. Stating each fact once, in a place that does
- * not move between views, is the whole job of this component.
- */
 export function AppShell({
   children,
   freshness,
   onRefresh,
-  onViewChange,
   refreshing,
   report,
   source,
@@ -38,26 +39,44 @@ export function AppShell({
   children: React.ReactNode;
   freshness?: Freshness;
   onRefresh?: () => void;
-  onViewChange: (view: AppView) => void;
   refreshing: boolean;
   report: ResearchReport;
   source?: string;
   view: AppView;
 }): React.JSX.Element {
+  const [activeNarrative, setActiveNarrative] = useState(() => currentNarrativeId(view));
+
+  useEffect(() => {
+    const sync = () => {
+      setActiveNarrative(currentNarrativeId(view));
+    };
+    sync();
+    window.addEventListener("hashchange", sync);
+    window.addEventListener("popstate", sync);
+    return () => {
+      window.removeEventListener("hashchange", sync);
+      window.removeEventListener("popstate", sync);
+    };
+  }, [view]);
+
   const age =
     freshness?.ageSec === null || freshness?.ageSec === undefined
       ? null
-      : `${freshness.ageSec.toLocaleString("zh-CN")} 秒`;
-  const replay = report.runtime_context?.replay === true;
+      : freshness.mode === "published"
+        ? null
+        : `${freshness.ageSec.toLocaleString("zh-CN")} 秒`;
+  const cutoff = report.publish_edition?.captured_at ?? report.generated_at ?? null;
+  const publishedStale =
+    report.runtime_context?.mode === "published" && freshness?.phase === "expired";
 
   return (
-    <div className="app-shell app-shell-spine" data-replay={replay || undefined}>
+    <div className="app-shell app-shell-spine">
       <a className="skip-link" href="#surface-main">
         跳到主要内容
       </a>
 
       <header className="spine-masthead">
-        <a className="brand" href="/evidence" aria-label="LensOS 期权研究台首页">
+        <a className="brand" href={APP_INDEX_HREF} aria-label="LensOS 期权研究台首页">
           <span className="brand-mark" aria-hidden="true">
             LO
           </span>
@@ -67,17 +86,15 @@ export function AppShell({
           </span>
         </a>
 
-        <nav aria-label="视图切换" className="spine-views">
-          {VIEWS.map((item) => (
-            <button
-              aria-current={view === item.id ? "page" : undefined}
+        <nav aria-label="五幕叙事" className="spine-views">
+          {NARRATIVE_LINKS.map((item) => (
+            <a
+              aria-current={activeNarrative === item.id ? "page" : undefined}
+              href={item.href}
               key={item.id}
-              onClick={() => onViewChange(item.id)}
-              title={item.hint}
-              type="button"
             >
               {item.label}
-            </button>
+            </a>
           ))}
         </nav>
 
@@ -85,17 +102,17 @@ export function AppShell({
           {freshness ? (
             <span
               className="source-indicator"
-              data-state={replay ? "replay" : freshness.phase}
-              aria-label={`市场来源 ${source ?? "未提供"}，数据年龄 ${age ?? "不可用"}`}
+              data-state={freshness.phase}
+              aria-label={`市场来源 ${source ?? "未提供"}，数据年龄 ${age ?? "由公开版时效条展示"}`}
             >
               <span aria-hidden="true" />
-              {replay ? "回放" : source}
+              {source}
               {age ? ` · ${age}` : ""}
             </span>
           ) : null}
           <a
             className="text-link"
-            href="/research/report"
+            href={RAW_REPORT_HREF}
             rel="noreferrer"
             target="_blank"
           >
@@ -115,33 +132,49 @@ export function AppShell({
         </div>
       </header>
 
+      {freshness ? <PublishedEditionBar freshness={freshness} report={report} /> : null}
       <ReplayBanner report={report} />
 
-      {/* Stated once, for both views. It used to be repeated per view, which
-          made the boundary read as decoration rather than as a constraint. */}
       <div className="spine-boundary" role="note">
         <dl>
-          <div data-tone="danger">
-            <dt>外部发布授权</dt>
-            <dd>{releaseStatus(report)}</dd>
-          </div>
           <div data-tone="danger">
             <dt>执行边界</dt>
             <dd>RESEARCH_ONLY · NO_TRADE</dd>
           </div>
           <div data-tone="neutral">
-            <dt>报告契约</dt>
-            <dd>{report.schema_version}</dd>
+            <dt>数据截止</dt>
+            <dd>{formatCutoffTime(cutoff)}</dd>
           </div>
         </dl>
       </div>
 
-      {children}
+      {publishedStale ? (
+        <main className="published-stop-main" id="surface-main">
+          <section className="published-stop-card" role="alert">
+            <p className="section-kicker">publication stalled / fail closed</p>
+            <h1>发布已停摆</h1>
+            <p>
+              当前公开版已超过 48 小时时效边界。VRP、DVOL、曲面、候选与历史验证数值均已收起，
+              直到下一版通过数据质量门禁并完成发布。
+            </p>
+            {onRefresh ? (
+              <button
+                aria-busy={refreshing}
+                className="refresh-button"
+                disabled={refreshing}
+                onClick={onRefresh}
+                type="button"
+              >
+                {refreshing ? "正在重读" : "重新读取"}
+              </button>
+            ) : null}
+          </section>
+        </main>
+      ) : (
+        children
+      )}
 
-      <footer className="page-footer">
-        <span>LensOS Option · research only</span>
-        <p>真实市场数据用于研究阅读；页面不连接下单与自动执行。</p>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

@@ -54,6 +54,21 @@ class AlertsAndOpsTests(unittest.TestCase):
         self.assertEqual(0, second["summary"]["fired"])
         self.assertGreaterEqual(second["summary"]["suppressed"], 1)
 
+    def test_release_alert_tracks_publication_not_permanent_execution_boundary(self):
+        report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+        for gate in report["full_system_surface"]["release_gates"]:
+            if gate["name"] == "research_publication":
+                gate["status"] = "GO"
+                gate["satisfied"] = True
+                gate["reason_codes"] = []
+
+        evaluation = evaluate_alerts(report, cooldown_sec=0)
+
+        self.assertNotIn(
+            "release_readiness.nogo",
+            {event["rule_id"] for event in evaluation["events"]},
+        )
+
     def test_alert_eval_treats_malformed_last_fired_as_empty_state(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
 

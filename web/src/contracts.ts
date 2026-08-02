@@ -344,6 +344,15 @@ export interface ReleasePrerequisite {
   reason_codes?: string[];
 }
 
+export interface ReleaseGate {
+  name: string;
+  status?: string;
+  satisfied?: boolean;
+  evidence_class?: string | null;
+  reason_code?: string | null;
+  reason_codes?: string[];
+}
+
 export type EdgeComponentStatus = "OK" | "CAUTION" | "UNKNOWN" | "BLOCKED";
 
 export interface EdgeComponent {
@@ -469,7 +478,7 @@ export interface EvCandidateScanner {
  */
 export interface RuntimeContext {
   profile?: string;
-  mode?: "live" | "replay";
+  mode?: "live" | "replay" | "published";
   replay?: boolean;
   evaluation_clock?: string | null;
   snapshot_fixture?: string | null;
@@ -477,9 +486,53 @@ export interface RuntimeContext {
   notice?: string | null;
 }
 
+export interface PublishEdition {
+  captured_at?: string | null;
+  published_at?: string | null;
+  next_expected_at?: string | null;
+  cadence?: string | null;
+  stale_after?: string | null;
+}
+
+export interface VrpStatusPoint {
+  observed_at?: string | null;
+  vrp_percent_points?: number | null;
+  dvol_percent?: number | null;
+  rv30_percent?: number | null;
+  percentile?: number | null;
+  band?: string | null;
+  evidence_class?: string | null;
+}
+
+export interface VrpStatus {
+  schema_version?: string;
+  status?:
+    | "available"
+    | "validated"
+    | "unavailable"
+    | "blocked"
+    | "insufficient_history"
+    | string;
+  current_vrp_percent_points?: number | null;
+  current_dvol_percent?: number | null;
+  current_rv30_percent?: number | null;
+  percentile?: number | null;
+  band?: string | null;
+  evidence_class?: string | null;
+  reason_code?: string | null;
+  action?: string | null;
+  series?: VrpStatusPoint[];
+  missing_dates?: string[];
+  sample_count?: number | null;
+  minimum_series_sample_count?: number | null;
+  window_days?: number | null;
+}
+
 export interface ResearchReport {
   schema_version: "research_report.v1";
   runtime_context?: RuntimeContext;
+  publish_edition?: PublishEdition;
+  vrp_status?: VrpStatus;
   /**
    * What the leading candidates do held together. Left `unknown` like the
    * scanner beside it: the shape is parsed defensively at the edge rather than
@@ -561,5 +614,6 @@ export interface ResearchReport {
       status?: string;
       prerequisites?: ReleasePrerequisite[];
     };
+    release_gates?: ReleaseGate[];
   };
 }

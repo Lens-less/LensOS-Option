@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { Freshness } from "./reportModel";
+import { APP_INDEX_HREF, RAW_REPORT_HREF } from "../../publicPaths";
 
 export function Masthead({
   freshness,
@@ -19,7 +20,7 @@ export function Masthead({
       : `${freshness.ageSec.toLocaleString("zh-CN")} 秒`;
   return (
     <header className="masthead">
-      <a className="brand" href="/evidence" aria-label="LensOS 期权研究台首页">
+      <a className="brand" href={APP_INDEX_HREF} aria-label="LensOS 期权研究台首页">
         <span className="brand-mark" aria-hidden="true">
           LO
         </span>
@@ -43,7 +44,7 @@ export function Masthead({
         <span className="read-only-indicator">READ-ONLY</span>
         <a
           className="text-link"
-          href="/research/report"
+          href={RAW_REPORT_HREF}
           rel="noreferrer"
           target="_blank"
         >
@@ -66,12 +67,12 @@ export function Masthead({
 }
 
 const SECTION_LINKS = [
-  { id: "brief", label: "市场简报" },
-  { id: "framework", label: "策略闭环" },
-  { id: "surface", label: "曲面" },
-  { id: "candidates", label: "候选" },
-  { id: "limitations", label: "边界" },
-  { id: "evidence-chain", label: "证据" },
+  { id: "vrp", label: "现在贵不贵" },
+  { id: "brief", label: "贵在哪里" },
+  { id: "framework", label: "卖它值不值" },
+  { id: "surface", label: "贵在哪里 / 曲面" },
+  { id: "limitations", label: "凭什么信" },
+  { id: "evidence-chain", label: "证据链" },
 ] as const;
 
 type SectionId = (typeof SECTION_LINKS)[number]["id"];

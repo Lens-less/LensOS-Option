@@ -54,10 +54,12 @@ export function SignalValidationView({
         <header className="research-section-heading">
           <div>
             <p className="section-kicker">Signal validation / 信号验证</p>
-            <h1>尚未接入验证产物</h1>
+            <h1>排序信号有没有预测力</h1>
           </div>
         </header>
-        <p className="signal-empty">{artifact.detail}</p>
+        <p className="signal-empty">
+          {artifact.detail || "验证产物尚未接入；这不改变研究边界，只是当前无法展示统计结论。"}
+        </p>
       </main>
     );
   }

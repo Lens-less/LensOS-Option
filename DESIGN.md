@@ -437,3 +437,91 @@ side as an explicitly unbounded tail — never a finite floor, which would imply
 maximum loss that does not exist. A credit spread caps at width minus credit.
 Mark spot and breakeven; label the vertical axis as per-contract P&L so it can
 never be read as a position result.
+
+## 15. Public Research Observatory
+
+The public product is a daily, precomputed research edition. It is not a
+public deployment of the local API. A controlled publisher evaluates one
+captured snapshot, binds the resulting report and supporting artifacts by
+hash, and emits a directory that can be served by an inert static host. The
+public host has no Deribit client, credentials, account sidecar, analysis
+process, order path, or sizing controls.
+
+### 15.1 Narrative before tooling
+
+The public navigation follows one fixed five-act question sequence:
+
+1. Is volatility expensive now? — the VRP thermometer and its history.
+2. Where is it expensive? — term structure and smile evidence.
+3. Is selling it worth the risk? — relative value and absolute expected value,
+   still kept separate.
+4. Does the ranking predict anything? — preregistered signal validation,
+   including an honest `no_detectable_edge` outcome.
+5. Why trust it? — evidence classes, samples, sources, limitations, and the
+   independently reproducible methodology.
+
+Existing evidence, workbench, series, and signal components remain useful
+implementation modules, but their module names are not the public information
+architecture. The first viewport leads with the measured state and its
+evidence, not an authorization warning.
+
+### 15.2 Published time has two clocks
+
+A published edition evaluates at the snapshot's `captured_at` instant so the
+analysis remains reproducible. Reader-facing age always uses the real wall
+clock. The report declares `captured_at`, `published_at`, `next_expected_at`,
+and `stale_after`; the browser compares the wall clock with `stale_after`.
+After 48 hours without a new daily edition, every research number is hidden
+and the page becomes an explicit publication-stall state.
+
+Only snapshot age is evaluated against the capture-bound clock. Missing rows,
+invalid units, incomplete chains, unsupported evidence, and every other
+quality gate retain their fail-closed behavior. A static health file cannot
+change after publication, so it records `is_stale_at_publish` and
+`stale_after`; monitors must compare their current time with the latter.
+
+### 15.3 Publication is not execution
+
+`research_publication` and `execution_authorization` are independent gates.
+Publication can become `GO` only from explicit evidence for data quality, the
+hash manifest, methodology, and disclaimer. Execution is a non-configurable
+product boundary and remains `NO-GO` in every edition. No publish-time option,
+environment variable, query parameter, or frontend control may change it.
+
+The legacy `release_readiness` projection remains append-only compatible for
+local consumers. Public surfaces lead with `research_publication`; they may
+show the permanent execution boundary as supporting context, never as the
+headline state of the site.
+
+### 15.4 VRP headline contract
+
+The headline is one measurement, not a weighted score:
+
+`VRP(t) = BTC DVOL close(t) - RV30(t)`
+
+Both values use percentage points. `RV30` is the sample standard deviation of
+30 daily close-to-close log returns, annualized by `sqrt(365)`. The gauge is
+the empirical percentile of the current VRP in the trailing 1095 calendar-day
+window. Missing dates are neither interpolated nor forward-filled; they are
+excluded and listed, with the actual sample count published. Thresholds are
+registered as P90/P70/P30/P10 and may not change silently.
+
+Every rendering keeps the limitation next to the number: positive VRP is not
+proof of opportunity. It may be compensation for future volatility. Missing,
+ambiguous-unit, or insufficient history produces an unavailable state and a
+remediation command, never zero or a placeholder.
+
+### 15.5 Public artifact and privacy boundary
+
+The canonical public seams are static `/research/*`, `/api/v1/*.json`, legal
+and methodology pages, and `.well-known/publish-manifest.json`. JSON is
+canonical and content-hashed; identical inputs, publication time, and git SHA
+must produce byte-identical trees. Hosting metadata supplies public CORS and
+bounded cache headers without adding an application server.
+
+Publication starts from public market inputs only. Private account snapshots,
+positions, margin, sidecar authentication material, credentials, orders, and
+sizing data are excluded recursively from the emitted tree. The public site
+sets no cookies and loads no analytics, ad, tracker, font, or image request
+from a third party. Until a repository and data license are explicitly chosen,
+the generated legal pages must not imply a redistribution grant.

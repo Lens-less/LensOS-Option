@@ -19,6 +19,10 @@ export interface ReportFreshness {
   ageSec: number | null;
   maxAgeSec: number;
   phase: FreshnessPhase;
+  mode?: "live" | "replay" | "published";
+  capturedAt?: string | null;
+  publishedAt?: string | null;
+  staleAfter?: string | null;
 }
 
 export interface DeribitContractMatch {
@@ -109,6 +113,38 @@ export function selectReportFreshness(
   receivedAtMs: number,
   nowMs: number,
 ): ReportFreshness {
+  if (
+    report.runtime_context?.mode === "published" &&
+    report.publish_edition?.captured_at
+  ) {
+    const capturedAtMs = Date.parse(report.publish_edition.captured_at);
+    const staleAfterMs = report.publish_edition.stale_after
+      ? Date.parse(report.publish_edition.stale_after)
+      : Number.NaN;
+    if (Number.isFinite(capturedAtMs)) {
+      const ageSec = Math.max(0, Math.floor((nowMs - capturedAtMs) / 1_000));
+      const maxAgeSec =
+        Number.isFinite(staleAfterMs) && staleAfterMs > capturedAtMs
+          ? Math.max(1, Math.floor((staleAfterMs - capturedAtMs) / 1_000))
+          : 48 * 60 * 60;
+      const warningAgeSec = Math.max(1, Math.floor(maxAgeSec * 0.75));
+      return {
+        ageSec,
+        maxAgeSec,
+        phase:
+          ageSec >= maxAgeSec
+            ? "expired"
+            : ageSec >= warningAgeSec
+              ? "warning"
+              : "current",
+        mode: "published",
+        capturedAt: report.publish_edition.captured_at,
+        publishedAt: report.publish_edition.published_at ?? null,
+        staleAfter: report.publish_edition.stale_after ?? null,
+      };
+    }
+  }
+
   const reportedAge = report.data_status?.market_data_age_sec;
   const configuredMaxAge =
     report.data_status?.quality_gate?.thresholds?.market_data_max_age_sec;
@@ -124,7 +160,12 @@ export function selectReportFreshness(
     !Number.isFinite(reportedAge) ||
     reportedAge < 0
   ) {
-    return { ageSec: null, maxAgeSec, phase: "unavailable" };
+    return {
+      ageSec: null,
+      maxAgeSec,
+      phase: "unavailable",
+      mode: report.runtime_context?.mode ?? "live",
+    };
   }
 
   const elapsedSec = Math.max(0, nowMs - receivedAtMs) / 1_000;
@@ -137,7 +178,12 @@ export function selectReportFreshness(
         ? "warning"
         : "current";
 
-  return { ageSec, maxAgeSec, phase };
+  return {
+    ageSec,
+    maxAgeSec,
+    phase,
+    mode: report.runtime_context?.mode ?? "live",
+  };
 }
 
 function selectContractMatch(

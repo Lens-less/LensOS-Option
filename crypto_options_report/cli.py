@@ -42,6 +42,7 @@ from .path_risk import (
     build_path_risk_report_from_historical_report,
 )
 from .pnl import build_pnl_evidence_report
+from .publication import publish_site
 from .series_history import build_series_history_report
 from .signal_validation import (
     build_signal_preflight_report,
@@ -119,6 +120,48 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_report_replay_args(analysis)
     analysis.add_argument("--output", help="optional path to write JSON")
+
+    publish = subcommands.add_parser(
+        "publish",
+        help="build one deterministic static public publication tree",
+    )
+    publish.add_argument("--snapshot", required=True, help="snapshot fixture JSON path")
+    publish.add_argument(
+        "--underlying-history",
+        required=True,
+        help="underlying history JSON path",
+    )
+    publish.add_argument(
+        "--dvol-history",
+        required=True,
+        help="DVOL history JSON path",
+    )
+    publish.add_argument(
+        "--signal-artifact",
+        required=True,
+        help="signal artifact JSON path",
+    )
+    publish.add_argument(
+        "--series-artifact",
+        required=True,
+        help="series artifact JSON path",
+    )
+    publish.add_argument(
+        "--out",
+        required=True,
+        help="output directory; must not already contain files",
+    )
+    publish.add_argument(
+        "--published-at",
+        required=True,
+        help="RFC3339 publication timestamp used for deterministic output",
+    )
+    publish.add_argument("--git-sha", help="optional git SHA recorded in the manifest")
+    publish.add_argument(
+        "--web-build",
+        help="optional prebuilt evidence bundle directory; defaults to static/evidence",
+    )
+    publish.add_argument("--compact", action="store_true", help="emit compact JSON")
 
     pull = subcommands.add_parser(
         "pull-snapshot",
@@ -394,6 +437,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 compact=args.compact,
                 output=args.output,
             )
+            return EXIT_OK
+        if args.command == "publish":
+            payload = publish_site(
+                snapshot=args.snapshot,
+                underlying_history=args.underlying_history,
+                dvol_history=args.dvol_history,
+                signal_artifact=args.signal_artifact,
+                series_artifact=args.series_artifact,
+                out=args.out,
+                published_at=args.published_at,
+                git_sha=args.git_sha,
+                web_build=args.web_build,
+            )
+            _emit_json(payload, compact=args.compact)
             return EXIT_OK
 
         if args.command in {

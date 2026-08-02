@@ -5,9 +5,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App, EvidenceConsole } from "./App";
+import { AppShell } from "./components/shell/AppShell";
+import {
+  friendlySource,
+  reportFreshness,
+} from "./components/evidence/EvidenceConsole";
 import type { ResearchReport } from "./contracts";
 import evidenceStyles from "./styles.css?raw";
 import type { LoadedReport } from "./transport";
@@ -435,9 +440,65 @@ const strategyResearchFixture: NonNullable<
   },
 };
 
+const vrpStatusFixture = {
+  schema_version: "vrp_status.v1",
+  status: "available",
+  current_vrp_percent_points: 12.4,
+  current_dvol_percent: 37.66,
+  current_rv30_percent: 25.26,
+  percentile: 0.93,
+  band: "P90+",
+  evidence_class: "trusted",
+  series: [
+    {
+      observed_at: "2026-07-30T08:00:00Z",
+      vrp_percent_points: 8.2,
+      dvol_percent: 36.1,
+      rv30_percent: 27.9,
+      percentile: 0.76,
+      band: "P70+",
+      evidence_class: "trusted",
+    },
+    {
+      observed_at: "2026-07-31T08:00:00Z",
+      vrp_percent_points: 10.3,
+      dvol_percent: 36.9,
+      rv30_percent: 26.6,
+      percentile: 0.84,
+      band: "P70+",
+      evidence_class: "trusted",
+    },
+    {
+      observed_at: "2026-08-01T08:00:00Z",
+      vrp_percent_points: 11.6,
+      dvol_percent: 37.3,
+      rv30_percent: 25.7,
+      percentile: 0.89,
+      band: "P70+",
+      evidence_class: "trusted",
+    },
+    {
+      observed_at: "2026-08-02T08:00:14Z",
+      vrp_percent_points: 12.4,
+      dvol_percent: 37.66,
+      rv30_percent: 25.26,
+      percentile: 0.93,
+      band: "P90+",
+      evidence_class: "trusted",
+    },
+  ],
+  missing_dates: [],
+  sample_count: 1095,
+  window_days: 1095,
+} as const;
+
 const liveResearchReport = {
   ...blockedReport,
   generated_at: "2026-07-24T10:25:00Z",
+  runtime_context: {
+    mode: "live",
+    replay: false,
+  },
   reason_codes: [
     "MISSING_ACCOUNT_API_SNAPSHOT",
     "BACKTEST_NOT_RUN",
@@ -587,9 +648,96 @@ const liveResearchReport = {
     },
   },
   strategy_research: strategyResearchFixture,
+  vrp_status: vrpStatusFixture,
 } as unknown as ResearchReport;
 
+const publishedReport: ResearchReport = {
+  ...liveResearchReport,
+  runtime_context: {
+    mode: "published",
+    replay: false,
+    evaluation_clock: "2026-08-01T08:00:14Z",
+  },
+  publish_edition: {
+    captured_at: "2026-08-01T08:00:14Z",
+    published_at: "2026-08-01T08:06:31Z",
+    next_expected_at: "2026-08-02T08:00:00Z",
+    cadence: "daily",
+    stale_after: "2026-08-03T08:00:00Z",
+  },
+  full_system_surface: {
+    ...liveResearchReport.full_system_surface,
+    release_gates: [
+      { name: "research_publication", status: "GO", satisfied: true },
+      { name: "execution_authorization", status: "NO-GO", satisfied: false },
+    ],
+  },
+};
+
+const stalePublishedReport: ResearchReport = {
+  ...publishedReport,
+  publish_edition: {
+    captured_at: "2026-07-31T08:00:14Z",
+    published_at: "2026-07-31T08:06:31Z",
+    next_expected_at: "2026-08-01T08:00:00Z",
+    cadence: "daily",
+    stale_after: "2026-08-02T08:00:00Z",
+  },
+};
+
+const replayReport: ResearchReport = {
+  ...liveResearchReport,
+  runtime_context: {
+    mode: "replay",
+    replay: true,
+    evaluation_clock: "2026-07-24T10:25:04Z",
+    snapshot_fixture: "fixtures/research-report.json",
+  },
+};
+
+const missingVrpReport: ResearchReport = {
+  ...publishedReport,
+  vrp_status: {
+    schema_version: "vrp_status.v1",
+    status: "unavailable",
+    reason_code: "MISSING_DVOL_HISTORY",
+    evidence_class: "missing",
+    missing_dates: ["2026-08-01"],
+    sample_count: 0,
+    window_days: 1095,
+  },
+};
+
+const insufficientVrpReport: ResearchReport = {
+  ...publishedReport,
+  vrp_status: {
+    schema_version: "vrp_status.v1",
+    status: "insufficient_history",
+    reason_code: "INSUFFICIENT_VRP_HISTORY",
+    current_vrp_percent_points: null,
+    current_dvol_percent: null,
+    current_rv30_percent: null,
+    percentile: null,
+    band: null,
+    evidence_class: "insufficient",
+    sample_count: 365,
+    minimum_series_sample_count: 1000,
+    window_days: 1095,
+    series: [...vrpStatusFixture.series],
+  },
+};
+
 describe("EvidenceConsole", () => {
+  beforeEach(() => {
+    window.history.pushState(window.history.state, "", "/");
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    window.history.pushState(window.history.state, "", "/");
+    vi.useRealTimers();
+  });
+
   it("keeps source, trust and the research loop visible at compact widths", () => {
     for (const selector of [
       ".source-indicator",
@@ -778,7 +926,7 @@ describe("EvidenceConsole", () => {
     expect(within(truthStrip).getByText("已连接并验证")).toBeInTheDocument();
     expect(within(truthStrip).getByText("市场证据")).toBeInTheDocument();
     expect(within(truthStrip).getByText("不可声明")).toBeInTheDocument();
-    expect(within(truthStrip).getByText("外部发布授权")).toBeInTheDocument();
+    expect(within(truthStrip).getByText("公开发布")).toBeInTheDocument();
     expect(within(truthStrip).getByText("NO-GO")).toBeInTheDocument();
     expect(within(truthStrip).getByText("执行边界")).toBeInTheDocument();
     expect(within(truthStrip).getByText("RESEARCH_ONLY · NO_TRADE")).toBeInTheDocument();
@@ -797,13 +945,13 @@ describe("EvidenceConsole", () => {
       name: "页面章节",
     });
     const briefLink = within(sectionNavigation).getByRole("link", {
-      name: "市场简报",
+      name: "贵在哪里",
     });
     const frameworkLink = within(sectionNavigation).getByRole("link", {
-      name: "策略闭环",
+      name: "卖它值不值",
     });
     const limitationsLink = within(sectionNavigation).getByRole("link", {
-      name: "边界",
+      name: "凭什么信",
     });
     expect(briefLink).toHaveAttribute("aria-current", "location");
     expect(briefLink).toHaveAttribute("href", "#brief");
@@ -1034,7 +1182,9 @@ describe("EvidenceConsole", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("正在读取市场研究");
     expect(await screen.findByRole("alert")).toHaveTextContent("研究数据不可用");
-    expect(screen.getByRole("alert")).toHaveTextContent("NO-GO · NO_TRADE");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "RESEARCH_ONLY · NO_TRADE",
+    );
     expect(screen.queryByText(/\d+\s*秒/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
@@ -1057,6 +1207,265 @@ describe("EvidenceConsole", () => {
     expect(
       await screen.findByRole("button", { name: "刷新" }),
     ).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("shows a published edition bar with wall-clock age instead of replay language", async () => {
+    const nowMs = Date.parse("2026-08-02T09:00:14Z");
+    const receivedAtMs = Date.parse("2026-08-02T09:00:14Z");
+    render(
+      <AppShell
+        freshness={reportFreshness(publishedReport, receivedAtMs, nowMs)}
+        refreshing={false}
+        report={publishedReport}
+        source={friendlySource(publishedReport.data_status?.source)}
+        view="evidence"
+      >
+        <main id="surface-main" />
+      </AppShell>,
+    );
+
+    expect(screen.getAllByText(/数据截止/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/距今 25 小时/)).toBeInTheDocument();
+    expect(screen.queryByText("回放")).not.toBeInTheDocument();
+    expect(screen.queryByText("外部发布授权")).not.toBeInTheDocument();
+  });
+
+  it("uses the published VRP DVOL as the compact public-report fallback", () => {
+    const compactPublishedReport: ResearchReport = {
+      ...publishedReport,
+      data_status: {
+        ...publishedReport.data_status,
+        source: "deribit_published_snapshot",
+        public_response_contract: undefined,
+      },
+    };
+    render(
+      <EvidenceConsole
+        nowMs={Date.parse("2026-08-02T09:00:00Z")}
+        receivedAtMs={Date.parse("2026-08-02T09:00:00Z")}
+        report={compactPublishedReport}
+      />,
+    );
+
+    const summary = screen.getByRole("region", { name: "实时研究摘要" });
+    expect(within(summary).getByText("37.66%")).toBeInTheDocument();
+    expect(within(summary).getByText("Deribit 日更快照")).toBeInTheDocument();
+  });
+
+  it("enters a published stop state after stale_after and hides market numbers", () => {
+    render(
+      <EvidenceConsole
+        nowMs={Date.parse("2026-08-02T10:00:00Z")}
+        receivedAtMs={Date.parse("2026-08-02T10:00:00Z")}
+        report={stalePublishedReport}
+      />,
+    );
+
+    expect(screen.getAllByText("发布已停摆").length).toBeGreaterThan(0);
+    expect(screen.queryByText("$65,058")).not.toBeInTheDocument();
+    expect(screen.queryByText("37.66%")).not.toBeInTheDocument();
+    expect(screen.queryByText("20 / 20 条有效报价")).not.toBeInTheDocument();
+  });
+
+  it("blocks every narrative view when a published edition is stale", () => {
+    const nowMs = Date.parse("2026-08-02T10:00:00Z");
+    render(
+      <AppShell
+        freshness={reportFreshness(stalePublishedReport, nowMs, nowMs)}
+        refreshing={false}
+        report={stalePublishedReport}
+        view="series"
+      >
+        <main id="surface-main">37.66% should never render</main>
+      </AppShell>,
+    );
+
+    expect(screen.getAllByText("发布已停摆").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/37\.66% should never render/)).not.toBeInTheDocument();
+  });
+
+  it("distinguishes a quality-blocked report from a stale published edition", () => {
+    const qualityBlockedPublished: ResearchReport = {
+      ...blockedReport,
+      runtime_context: {
+        mode: "published",
+        replay: false,
+      },
+      publish_edition: {
+        captured_at: "2026-08-02T08:00:14Z",
+        published_at: "2026-08-02T08:06:31Z",
+        next_expected_at: "2026-08-03T08:00:00Z",
+        cadence: "daily",
+        stale_after: "2026-08-04T08:00:00Z",
+      },
+    };
+
+    render(
+      <EvidenceConsole
+        nowMs={Date.parse("2026-08-02T09:00:00Z")}
+        receivedAtMs={Date.parse("2026-08-02T09:00:00Z")}
+        report={qualityBlockedPublished}
+      />,
+    );
+
+    expect(screen.getByText("市场数据当前不可发布")).toBeInTheDocument();
+    expect(screen.queryByText("发布已停摆")).not.toBeInTheDocument();
+  });
+
+  it("renders an unavailable VRP section with a backfill command and no fake zero", async () => {
+    render(
+      <App
+        loadReport={() =>
+          Promise.resolve(
+            loadedReport(
+              missingVrpReport,
+              Date.parse("2026-08-02T09:00:00Z"),
+            ),
+          )
+        }
+      />,
+    );
+
+    const vrpSection = await screen.findByRole("region", {
+      name: "现在贵不贵",
+    });
+    expect(within(vrpSection).getByText("不可用")).toBeInTheDocument();
+    expect(
+      within(vrpSection).getByText(/crypto-options-dvol-history/),
+    ).toBeInTheDocument();
+    expect(within(vrpSection).queryByText(/0\.0+\s*pt/)).not.toBeInTheDocument();
+  });
+
+  it("treats insufficient VRP history as unavailable and keeps the headline hidden", async () => {
+    render(
+      <App
+        loadReport={() =>
+          Promise.resolve(
+            loadedReport(
+              insufficientVrpReport,
+              Date.parse("2026-08-02T09:00:00Z"),
+            ),
+          )
+        }
+      />,
+    );
+
+    const vrpSection = await screen.findByRole("region", {
+      name: "现在贵不贵",
+    });
+    expect(within(vrpSection).getByText("样本不足")).toBeInTheDocument();
+    expect(within(vrpSection).getByText(/365 \/ 1000/)).toBeInTheDocument();
+    expect(
+      within(vrpSection).getByText(/crypto-options-dvol-history/),
+    ).toBeInTheDocument();
+    expect(within(vrpSection).queryByText("12.4 pt")).not.toBeInTheDocument();
+  });
+
+  it("keeps replay compatibility for legacy replay reports", async () => {
+    render(
+      <App
+        loadReport={() =>
+          Promise.resolve(
+            loadedReport(replayReport, Date.parse("2026-07-24T10:25:04Z")),
+          )
+        }
+      />,
+    );
+
+    expect((await screen.findAllByText("回放")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/距今 \d+ 小时/)).not.toBeInTheDocument();
+  });
+
+  it("renders the narrative navigation and footer links with real static-page hrefs", async () => {
+    render(<App loadReport={() => Promise.resolve(loadedReport(publishedReport))} />);
+
+    const navigation = await screen.findByRole("navigation", {
+      name: "五幕叙事",
+    });
+    expect(within(navigation).getByRole("link", { name: "现在贵不贵" })).toHaveAttribute(
+      "href",
+      "./index.html#vrp",
+    );
+    expect(within(navigation).getByRole("link", { name: "贵在哪里" })).toHaveAttribute(
+      "href",
+      "./index.html?view=series",
+    );
+    expect(within(navigation).getByRole("link", { name: "卖它值不值" })).toHaveAttribute(
+      "href",
+      "./index.html#framework",
+    );
+    expect(within(navigation).getByRole("link", { name: "排序灵不灵" })).toHaveAttribute(
+      "href",
+      "./index.html?view=signal",
+    );
+    expect(within(navigation).getByRole("link", { name: "凭什么信" })).toHaveAttribute(
+      "href",
+      "./index.html#limitations",
+    );
+
+    expect(screen.getByRole("link", { name: "方法论" })).toHaveAttribute(
+      "href",
+      "./methodology.html",
+    );
+    expect(screen.getByRole("link", { name: "免责声明" })).toHaveAttribute(
+      "href",
+      "./disclaimer.html",
+    );
+    expect(screen.getByRole("link", { name: "隐私政策" })).toHaveAttribute(
+      "href",
+      "./privacy.html",
+    );
+    expect(screen.getByRole("link", { name: "使用条款" })).toHaveAttribute(
+      "href",
+      "./terms.html",
+    );
+  });
+
+  it("hides account and portfolio execution evidence in published mode", async () => {
+    const publishedWithPublicBlockers: ResearchReport = {
+      ...publishedReport,
+      reason_codes: [
+        ...(publishedReport.reason_codes ?? []),
+        "SIMULATION_NOT_REQUESTED",
+        "NO_VALIDATED_PATH_RISK",
+      ],
+    };
+    render(
+      <App
+        loadReport={() =>
+          Promise.resolve(loadedReport(publishedWithPublicBlockers))
+        }
+      />,
+    );
+
+    await screen.findByRole("navigation", { name: "五幕叙事" });
+    const boundary = screen.getByRole("region", { name: "发布与能力边界" });
+    expect(boundary).toHaveTextContent("执行授权");
+    expect(boundary).toHaveTextContent("公开发布GO");
+    expect(boundary).not.toHaveTextContent("发布状态");
+    expect(boundary).not.toHaveTextContent("缺少独立发布复核");
+    expect(boundary).not.toHaveTextContent("缺少账户 API 快照");
+    expect(boundary).not.toHaveTextContent("保证金模拟尚未请求");
+    expect(boundary).not.toHaveTextContent("NO VALIDATED PATH RISK");
+    expect(boundary).toHaveTextContent("路径风险尚未验证");
+    expect(screen.queryByText("账户与保证金")).not.toBeInTheDocument();
+    expect(screen.queryByText("组合仲裁")).not.toBeInTheDocument();
+    expect(screen.queryByText("新增保证金上限")).not.toBeInTheDocument();
+    expect(screen.queryByText("实际张数")).not.toBeInTheDocument();
+    expect(screen.getByText("已发布快照")).toBeInTheDocument();
+    expect(screen.queryByText(/Regime、账户、路径风险/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Regime、路径风险和成本覆盖尚未同时通过/),
+    ).toBeInTheDocument();
+  });
+
+  it("preserves old query-view deep links for signal validation", async () => {
+    window.history.pushState(window.history.state, "", "/?view=signal");
+    render(<App loadReport={() => Promise.resolve(loadedReport(publishedReport))} />);
+
+    expect(
+      await screen.findByRole("heading", { name: "排序信号有没有预测力" }),
+    ).toBeInTheDocument();
   });
 
   it("preserves transport receipt time when calculating evidence age", async () => {
@@ -1117,7 +1526,9 @@ describe("EvidenceConsole", () => {
     render(<App loadReport={() => Promise.resolve(loadedReport(unsafeReport))} />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("研究数据不可用");
-    expect(screen.getByRole("alert")).toHaveTextContent("NO-GO · NO_TRADE");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "RESEARCH_ONLY · NO_TRADE",
+    );
     expect(screen.queryByText("LIVE")).not.toBeInTheDocument();
   });
 

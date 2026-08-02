@@ -69,6 +69,30 @@ HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标�
 > 同理，production 模式下 `/readyz` 会稳定返回 `503`：当前没有可提升的模型，
 > 就绪门禁按设计保持关闭。**这不代表进程异常**，`/livez` 才表示进程存活。
 
+## 静态公开版
+
+公开站不运行会访问 Deribit 或持有凭证的服务。日更任务先用
+[`tools/capture-daily.ps1`](tools/capture-daily.ps1) 固化市场快照、标的历史、DVOL 历史与研究产物，
+再把经过白名单裁剪的报告和前端一起发布成纯静态目录：
+
+```powershell
+crypto-options-report publish `
+  --snapshot artifacts/snapshots/btc-series/<capture>.json `
+  --underlying-history artifacts/history/btc-daily.json `
+  --dvol-history artifacts/history/btc-dvol.json `
+  --signal-artifact artifacts/reports/signal-preflight.json `
+  --series-artifact artifacts/reports/series-history.json `
+  --out dist/site --published-at <UTC-RFC3339> --git-sha <commit>
+```
+
+输出目录可直接交给任意静态托管/CDN。质量门禁失败、VRP 历史不足或含账户/仓位/订单字段时
+发布器会失败关闭；浏览器检测到数据截止时间已超过 48 小时后，整站进入“发布已停摆”态。
+完整接口与运维约定见
+[公开 API](docs/api-public.md) 和[静态发布手册](docs/operations/public-publishing.md)。
+
+`research_publication` 只回答“这份静态研究能否公开”；`execution_authorization` 只回答
+“系统能否用于交易执行”。两者互不提升，后者永久保持 `NO-GO`。
+
 ## 核心概念
 
 读其他文档前，建议先了解这几个词（完整定义见 [术语表](docs/glossary.md)）：
@@ -87,12 +111,13 @@ HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标�
 | 能力 | 状态 |
 | --- | --- |
 | 本地确定性 / 回放研究工具链 | **GO** |
+| 经过发布器校验的静态研究产物 | **GO** |
 | paper / manual 交易、自动下单、真实账户执行 | **NO-GO** |
 | 校准与模型提升（model promotion） | 未实现；规格已定稿、轴已事前登记（见 [model-promotion.md](docs/model-promotion.md)） |
-| 对外发布授权 | **NO-GO** |
+| 交易执行授权 | **NO-GO（永久）** |
 
-对外发布门禁要求 WebSocket gap/resync、24 小时 soak 与连续 7 天证据。这些系统观察
-条件未满足前，Evidence Console 与 Chrome 侧边栏会持续显示 `NO-GO`。
+WebSocket gap/resync、24 小时 soak 与连续 7 天证据仍属于内部运行/执行就绪度，
+不会阻止满足数据质量、可复算性和隐私边界的静态研究发布，也不会被静态发布反向放宽。
 
 ## 使用方式
 

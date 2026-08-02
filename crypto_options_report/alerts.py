@@ -380,7 +380,16 @@ def _collect_candidate_events(
     permission = report.get("permission_state") or {}
     portfolio = report.get("portfolio_risk") or {}
     account = report.get("account_status") or {}
-    readiness = (report.get("full_system_surface") or {}).get("release_readiness") or {}
+    surface = report.get("full_system_surface") or {}
+    readiness = surface.get("release_readiness") or {}
+    publication_gate = next(
+        (
+            gate
+            for gate in surface.get("release_gates") or []
+            if isinstance(gate, dict) and gate.get("name") == "research_publication"
+        ),
+        None,
+    )
 
     if data_status.get("status") == "blocked":
         events.append(
@@ -478,17 +487,26 @@ def _collect_candidate_events(
             )
         )
 
-    if readiness.get("status") == "NO-GO":
+    publication_nogo = (
+        publication_gate.get("status") == "NO-GO"
+        if publication_gate is not None
+        else readiness.get("status") == "NO-GO"
+    )
+    if publication_nogo:
         events.append(
             _event(
                 rule_id="release_readiness.nogo",
                 severity="info",
                 category="risk_degradation",
-                title="Release readiness remains NO-GO",
-                reason_codes=list(readiness.get("missing_prerequisites") or [])[:12],
+                title="Research publication remains NO-GO",
+                reason_codes=list(
+                    (publication_gate or {}).get("reason_codes")
+                    or readiness.get("missing_prerequisites")
+                    or []
+                )[:12],
                 context={
-                    "paper_mode_allowed": readiness.get("paper_mode_allowed"),
-                    "manual_execution_allowed": readiness.get("manual_execution_allowed"),
+                    "publication_status": (publication_gate or readiness).get("status"),
+                    "execution_boundary": "NO-GO",
                 },
                 generated_at=generated_at,
             )

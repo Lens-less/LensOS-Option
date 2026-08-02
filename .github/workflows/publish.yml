@@ -1,0 +1,184 @@
+name: Publish Public Evidence
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "10 8 * * *"
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  capture_and_publish:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install package
+        run: python -m pip install -e .
+
+      - name: Preflight explicit workflow config
+        shell: pwsh
+        env:
+          FAILURE_WEBHOOK_SECRET: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:FAILURE_WEBHOOK_SECRET)) {
+            throw "CAPTURE_FAILURE_WEBHOOK_URL secret is required; scheduled evidence loss must not fail silently."
+          }
+
+      - name: Capture evidence
+        id: capture
+        continue-on-error: true
+        shell: pwsh
+        env:
+          CAPTURE_DAILY_CAPTURE_DVOL: "true"
+          CAPTURE_DAILY_FAILURE_WEBHOOK_URL: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
+        run: ./tools/capture-daily.ps1 -RepoRoot $PWD
+
+      - name: Build dist/site or publish contract
+        id: publish_site
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          CAPTURE_OUTCOME: ${{ steps.capture.outcome }}
+        run: |
+          $siteDir = Join-Path $PWD 'dist/site'
+          New-Item -ItemType Directory -Force -Path $siteDir | Out-Null
+          $summaryPath = Join-Path $PWD 'artifacts/logs/capture-daily-btc.latest.summary.json'
+
+          if ($env:CAPTURE_OUTCOME -ne 'success') {
+            $failureContract = [ordered]@{
+              schema_version = 'publish_contract.v1'
+              status = 'blocked'
+              reason_code = 'CAPTURE_FAILED'
+              summary_path = $summaryPath
+              note = 'capture-daily.ps1 failed before the publish contract could be evaluated.'
+            }
+            $failureContract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $siteDir 'workflow-failure.json') -Encoding utf8
+            throw "Capture failed before publish. See artifacts/logs/capture-daily-btc.latest.summary.json and dist/site/workflow-failure.json."
+          }
+
+          if (-not (Test-Path -LiteralPath $summaryPath)) {
+            throw "Capture completed but artifacts/logs/capture-daily-btc.latest.summary.json is missing."
+          }
+
+          $summary = Get-Content -Raw -LiteralPath $summaryPath | ConvertFrom-Json -ErrorAction Stop
+          $publishedAt = (Get-Date).ToUniversalTime().ToString(
+            'yyyy-MM-ddTHH:mm:ssZ',
+            [Globalization.CultureInfo]::InvariantCulture
+          )
+          $signalArtifactPath = [string] $summary.outputs.signal_preflight
+          $requiredInputs = [ordered]@{
+            snapshot = [string] $summary.outputs.snapshot
+            underlying_history = [string] $summary.outputs.underlying_history
+            dvol_history = [string] $summary.outputs.dvol_history
+            signal_artifact = $signalArtifactPath
+            series_artifact = [string] $summary.outputs.series_history
+          }
+
+          $missingInputs = @()
+          foreach ($entry in $requiredInputs.GetEnumerator()) {
+            if (-not [string]::IsNullOrWhiteSpace($entry.Value) -and (Test-Path -LiteralPath $entry.Value)) {
+              continue
+            }
+            $missingInputs += $entry.Key
+          }
+
+          $publishHelp = python -m crypto_options_report.cli --help | Out-String
+          $publishAvailable = $publishHelp -match '(?m)^\s+publish\s'
+          $expectedArgs = @(
+            'python -m crypto_options_report.cli publish',
+            "--snapshot $($requiredInputs.snapshot)",
+            "--underlying-history $($requiredInputs.underlying_history)",
+            "--dvol-history $($requiredInputs.dvol_history)",
+            "--signal-artifact $signalArtifactPath",
+            "--series-artifact $($requiredInputs.series_artifact)",
+            '--out dist/site',
+            "--published-at $publishedAt",
+            "--git-sha $env:GITHUB_SHA"
+          )
+
+          if (-not $publishAvailable -or $missingInputs.Count -gt 0) {
+            $reasonCode = if (-not $publishAvailable) { 'PUBLISH_COMMAND_UNAVAILABLE' } else { 'PUBLISH_INPUTS_MISSING' }
+            $contract = [ordered]@{
+              schema_version = 'publish_contract.v1'
+              status = 'blocked'
+              reason_code = $reasonCode
+              expected_command = ($expectedArgs -join ' ')
+              available_inputs = $requiredInputs
+              missing_inputs = $missingInputs
+              status_history_contract = '30-day status history requires persisted evidence artifacts outside the per-run GitHub Actions workspace. Without that input, public status can only describe the current edition honestly.'
+              health_contract = 'External health monitors must compare the current time to publish_edition.stale_after. Do not rely on a static JSON artifact to mutate its own is_stale field over time.'
+            }
+            $contract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $siteDir 'publish-contract.json') -Encoding utf8
+            if (-not $publishAvailable) {
+              throw "Publish CLI is not available yet. See dist/site/publish-contract.json for the contract and missing prerequisites."
+            }
+            throw "Publish inputs are incomplete. See dist/site/publish-contract.json for the missing prerequisites."
+          }
+
+          $publishArgs = @(
+            '-m', 'crypto_options_report.cli', 'publish',
+            '--snapshot', $requiredInputs.snapshot,
+            '--underlying-history', $requiredInputs.underlying_history,
+            '--dvol-history', $requiredInputs.dvol_history,
+            '--signal-artifact', $signalArtifactPath,
+            '--series-artifact', $requiredInputs.series_artifact,
+            '--out', $siteDir,
+            '--published-at', $publishedAt,
+            '--git-sha', $env:GITHUB_SHA
+          )
+          & python @publishArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw "Publish command exited $LASTEXITCODE."
+          }
+
+          if (-not (Get-ChildItem -LiteralPath $siteDir -Force | Select-Object -First 1)) {
+            throw 'Publish command completed without producing dist/site content.'
+          }
+
+      - name: Upload dist/site artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-site
+          path: dist/site
+          if-no-files-found: error
+
+      - name: Upload captured evidence backup
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: captured-evidence
+          path: |
+            artifacts/snapshots
+            artifacts/history
+            artifacts/logs
+            artifacts/reports
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Fail closed when capture or publish was blocked
+        if: always()
+        shell: pwsh
+        env:
+          CAPTURE_OUTCOME: ${{ steps.capture.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.publish_site.outcome }}
+        run: |
+          if ($env:CAPTURE_OUTCOME -ne 'success') {
+            throw 'Capture failed. See artifacts/logs/capture-daily-btc.latest.summary.json and dist/site/workflow-failure.json.'
+          }
+          if ($env:PUBLISH_OUTCOME -ne 'success') {
+            throw 'Publish failed closed. See dist/site/publish-contract.json for the expected command and prerequisites.'
+          }

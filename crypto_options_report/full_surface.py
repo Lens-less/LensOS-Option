@@ -26,6 +26,7 @@ CLI_COMMANDS = [
     "recommend",
     "pull-snapshot",
     "alert-eval",
+    "publish",
     "dashboard",
 ]
 
@@ -54,6 +55,8 @@ API_ROUTES = [
     "GET /portfolio/risk",
     "GET /candidates",
     "GET /recommendation",
+    "GET /research/signal",
+    "GET /research/series",
     "POST /backtest/run",
     "GET /backtest/jobs/{id}",
     "GET /backtest/jobs/{id}/result",
@@ -73,7 +76,18 @@ DASHBOARD_VIEWS = [
 ]
 
 _EXTERNAL_RELEASE_GATE_NAME = "external_release_authorization"
+_RESEARCH_PUBLICATION_GATE_NAME = "research_publication"
+_EXECUTION_AUTHORIZATION_GATE_NAME = "execution_authorization"
 _EXTERNAL_RELEASE_REASON = "EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED"
+_RESEARCH_PUBLICATION_REASON = "RESEARCH_PUBLICATION_EVIDENCE_INCOMPLETE"
+_EXECUTION_BOUNDARY_REASON = "EXECUTION_DISABLED_BY_PRODUCT_DEFINITION"
+
+_PUBLICATION_EVIDENCE_REQUIREMENTS = {
+    "data_quality": {"trusted", "validated"},
+    "publish_manifest": {"verified"},
+    "methodology": {"present"},
+    "disclaimer": {"present"},
+}
 
 
 def build_full_system_surface_report(
@@ -133,6 +147,9 @@ def build_full_system_surface_report(
             "system_comparison", []
         ),
         "release_readiness": _release_readiness(),
+        # Append-only public-product projection. The legacy key above remains
+        # byte-for-byte compatible for existing local/extension consumers.
+        "release_gates": build_release_gates(),
     }
 
 
@@ -275,6 +292,7 @@ def validate_full_system_surface_report(report: Any) -> list[str]:
             errors.append("release readiness gate action must be a non-empty string")
         if item.get("root_cause") != _EXTERNAL_RELEASE_REASON:
             errors.append("external release authorization root cause is invalid")
+    _validate_release_gates(report.get("release_gates"), errors)
     return errors
 
 
@@ -355,3 +373,98 @@ def _release_readiness() -> dict[str, Any]:
         "missing_prerequisites": [_EXTERNAL_RELEASE_GATE_NAME],
         "blocking_prerequisites": [_EXTERNAL_RELEASE_GATE_NAME],
     }
+
+
+def build_release_gates(
+    *,
+    research_publication_ready: bool = False,
+    publication_evidence: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Separate a publishable research edition from executable authority.
+
+    Publication may become ready only from explicit, inspectable evidence.
+    Execution has no input because it is a product boundary, not a deploy-time
+    setting. Keeping that omission in the function signature makes attempts to
+    configure execution fail before any report can be produced.
+    """
+    evidence = dict(publication_evidence or {})
+    missing = [
+        name
+        for name, accepted in _PUBLICATION_EVIDENCE_REQUIREMENTS.items()
+        if evidence.get(name) not in accepted
+    ]
+    publication_ready = bool(research_publication_ready and not missing)
+    publication = {
+        "name": _RESEARCH_PUBLICATION_GATE_NAME,
+        "status": "GO" if publication_ready else "NO-GO",
+        "satisfied": publication_ready,
+        "evidence_state": "verified" if publication_ready else "incomplete",
+        "evidence_class": "published_research_manifest",
+        "reason_codes": [] if publication_ready else [_RESEARCH_PUBLICATION_REASON],
+        "missing_prerequisites": missing,
+        "publication_evidence": evidence,
+        "owner": "research_team",
+        "execution_allowed": False,
+    }
+    execution = {
+        "name": _EXECUTION_AUTHORIZATION_GATE_NAME,
+        "status": "NO-GO",
+        "satisfied": False,
+        "evidence_state": "product_boundary",
+        "evidence_class": "hard_coded_product_boundary",
+        "reason_codes": [_EXECUTION_BOUNDARY_REASON],
+        "owner": "system",
+        "configurable": False,
+        "execution_allowed": False,
+    }
+    return [publication, execution]
+
+
+def _validate_release_gates(value: Any, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        errors.append("full_system_surface.release_gates must be a list")
+        return
+    gates = {
+        gate.get("name"): gate
+        for gate in value
+        if isinstance(gate, dict) and isinstance(gate.get("name"), str)
+    }
+    if set(gates) != {
+        _RESEARCH_PUBLICATION_GATE_NAME,
+        _EXECUTION_AUTHORIZATION_GATE_NAME,
+    } or len(value) != 2:
+        errors.append("release_gates must contain publication and execution gates")
+        return
+    publication = gates[_RESEARCH_PUBLICATION_GATE_NAME]
+    publication_ready = publication.get("satisfied") is True
+    if publication.get("status") != ("GO" if publication_ready else "NO-GO"):
+        errors.append("research publication status must match its evidence state")
+    if publication.get("execution_allowed") is not False:
+        errors.append("research publication must not authorize execution")
+    publication_evidence = publication.get("publication_evidence")
+    if not isinstance(publication_evidence, dict):
+        publication_evidence = {}
+    missing_evidence = [
+        name
+        for name, accepted in _PUBLICATION_EVIDENCE_REQUIREMENTS.items()
+        if publication_evidence.get(name) not in accepted
+    ]
+    if set(publication.get("missing_prerequisites") or []) != set(missing_evidence):
+        errors.append("research publication missing prerequisites are inconsistent")
+    if publication_ready and missing_evidence:
+        errors.append("research publication GO requires complete evidence")
+    if publication_ready and (
+        publication.get("evidence_state") != "verified"
+        or publication.get("reason_codes") != []
+    ):
+        errors.append("research publication GO must declare verified evidence")
+
+    execution = gates[_EXECUTION_AUTHORIZATION_GATE_NAME]
+    if execution.get("status") != "NO-GO" or execution.get("satisfied") is not False:
+        errors.append("execution authorization must remain NO-GO")
+    if execution.get("execution_allowed") is not False:
+        errors.append("execution authorization must not allow execution")
+    if execution.get("configurable") is not False:
+        errors.append("execution authorization must be non-configurable")
+    if execution.get("reason_codes") != [_EXECUTION_BOUNDARY_REASON]:
+        errors.append("execution authorization reason is invalid")

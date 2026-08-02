@@ -28,6 +28,12 @@ const HISTORY_REMEDY = {
     "crypto-options-underlying-history --currency BTC --days 1200 --output artifacts/history/btc-daily.json",
 };
 
+const DVOL_HISTORY_REMEDY = {
+  label: "补齐 DVOL 历史（公开数据，无需凭证）",
+  command:
+    "crypto-options-dvol-history --currency BTC --days 1095 --output artifacts/history/btc-dvol.json",
+};
+
 const SNAPSHOT_REMEDY = {
   label: "抓取一份实时公开快照",
   command:
@@ -64,6 +70,23 @@ export const REASON_CODE_READINGS: Record<string, ReasonCodeReading> = {
     detail:
       "绝对预期价值需要标的的历史收益分布。没有它，相对价值排序仍会给出，但 EV 一栏会保持为空，而不是用排序分推断。",
     remedy: HISTORY_REMEDY,
+  },
+  MISSING_DVOL_HISTORY: {
+    title: "缺少 DVOL 历史",
+    detail:
+      "VRP 头条需要 Deribit BTC DVOL 的连续日线历史。缺了这条序列，前端不会把空值显示成 0。",
+    remedy: DVOL_HISTORY_REMEDY,
+  },
+  INSUFFICIENT_VRP_HISTORY: {
+    title: "VRP 样本不足",
+    detail:
+      "VRP 还没有累计到最少 1000 个有效读数。公开页保留不可用状态，不展示头条数字。",
+    remedy: DVOL_HISTORY_REMEDY,
+  },
+  PUBLISHED_EDITION_STALE: {
+    title: "公开版已超过发布时效上限",
+    detail:
+      "这份 published 报告已经超过对外展示阈值。页面会保留研究边界与方法说明，但撤下所有当前市场数字。",
   },
   NO_VALIDATED_PATH_RISK: {
     title: "该候选没有路径风险证据",

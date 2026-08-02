@@ -34,6 +34,7 @@ from crypto_options_report.full_surface import (
     CLI_COMMANDS,
     DASHBOARD_VIEWS,
     build_recommendation_projection,
+    build_release_gates,
     validate_full_system_surface_report,
 )
 
@@ -60,6 +61,10 @@ class FullSystemSurfaceTests(unittest.TestCase):
         self.assertFalse(surface["cli"]["paper_manual_actions_visible"])
         self.assertFalse(surface["dashboard"]["paper_manual_actions_visible"])
         self.assertEqual("NO-GO", surface["release_readiness"]["status"])
+        gates = {gate["name"]: gate for gate in surface["release_gates"]}
+        self.assertEqual("NO-GO", gates["research_publication"]["status"])
+        self.assertEqual("NO-GO", gates["execution_authorization"]["status"])
+        self.assertFalse(gates["execution_authorization"]["configurable"])
         route_status = {
             item["route"]: item["status"] for item in surface["api"]["routes"]
         }
@@ -91,6 +96,70 @@ class FullSystemSurfaceTests(unittest.TestCase):
             "full_system_surface.dashboard.views entries must be dicts",
             errors,
         )
+
+    def test_publication_can_go_without_ever_authorizing_execution(self):
+        gates = build_release_gates(
+            research_publication_ready=True,
+            publication_evidence={
+                "data_quality": "trusted",
+                "publish_manifest": "verified",
+                "methodology": "present",
+                "disclaimer": "present",
+            },
+        )
+        by_name = {gate["name"]: gate for gate in gates}
+
+        self.assertEqual("GO", by_name["research_publication"]["status"])
+        self.assertTrue(by_name["research_publication"]["satisfied"])
+        self.assertEqual("NO-GO", by_name["execution_authorization"]["status"])
+        self.assertFalse(by_name["execution_authorization"]["satisfied"])
+        self.assertFalse(by_name["execution_authorization"]["execution_allowed"])
+        with self.assertRaises(TypeError):
+            build_release_gates(
+                research_publication_ready=True,
+                publication_evidence={},
+                execution_authorization="GO",  # type: ignore[call-arg]
+            )
+
+    def test_surface_validator_rejects_a_forged_execution_authorization(self):
+        surface = generate_research_report(
+            generated_at="2026-07-07T00:01:30Z"
+        )["full_system_surface"]
+        execution = next(
+            gate
+            for gate in surface["release_gates"]
+            if gate["name"] == "execution_authorization"
+        )
+        execution["status"] = "GO"
+        execution["satisfied"] = True
+        execution["execution_allowed"] = True
+
+        errors = validate_full_system_surface_report(surface)
+
+        self.assertIn("execution authorization must remain NO-GO", errors)
+
+    def test_surface_validator_rejects_publication_go_without_evidence(self):
+        surface = generate_research_report(
+            generated_at="2026-07-07T00:01:30Z"
+        )["full_system_surface"]
+        publication = next(
+            gate
+            for gate in surface["release_gates"]
+            if gate["name"] == "research_publication"
+        )
+        publication.update(
+            {
+                "status": "GO",
+                "satisfied": True,
+                "evidence_state": "verified",
+                "reason_codes": [],
+                "missing_prerequisites": [],
+            }
+        )
+
+        errors = validate_full_system_surface_report(surface)
+
+        self.assertIn("research publication GO requires complete evidence", errors)
 
     def test_api_route_descriptors_match_runtime_routes(self):
         declared_routes = set(API_ROUTES)

@@ -75,6 +75,8 @@ EVIDENCE_PAGE_ALIASES = {EVIDENCE_PAGE_PATH, f"{EVIDENCE_PAGE_PATH}/"}
 EVIDENCE_ASSET_PREFIX = f"{EVIDENCE_PAGE_PATH}/assets/"
 GET_SURFACE_PATHS = {
     ANALYSIS_RESULT_PATH,
+    SIGNAL_PATH,
+    SERIES_PATH,
     "/market/chain",
     "/surface",
     "/regime",
@@ -107,7 +109,7 @@ _EVIDENCE_ASSET_NAME = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:css|js|png|svg|woff|woff2)$"
 )
 _EVIDENCE_BUNDLE_REFERENCE = re.compile(
-    r'(?:href|src)="/evidence/assets/([^"]+)"'
+    r'(?:href|src)="(?:/evidence/|\./)assets/([^"]+)"'
 )
 _RFC3339_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
@@ -220,6 +222,11 @@ class RuntimeConfig:
     # starts the process, and the surfaces render an unmissable banner naming
     # the pinned instant.
     replay: bool = False
+    # A published edition uses the same deterministic evaluation clock as a
+    # replay, but its reader-facing age remains wall-clock based. This flag is
+    # operator controlled; a browser cannot turn an arbitrary fixture into a
+    # published edition.
+    published: bool = False
     access_log: bool | None = None
     historical_fixture: str | None = None
     underlying_history_fixture: str | None = None
@@ -258,6 +265,12 @@ class RuntimeConfig:
             raise ValueError("signal_artifact not found")
         if self.series_artifact and not Path(self.series_artifact).expanduser().is_file():
             raise ValueError("series_artifact not found")
+        if self.published and self.replay:
+            raise ValueError("published and replay are mutually exclusive")
+        if self.published and not self.snapshot_fixture:
+            raise ValueError("published requires a snapshot fixture")
+        if self.published and self.allow_live_fetch:
+            raise ValueError("published and live fetch cannot both be enabled")
         if self.replay and not self.snapshot_fixture:
             raise ValueError("replay requires a snapshot fixture to replay")
         if self.replay and self.allow_live_fetch:
@@ -1600,10 +1613,10 @@ def _payload_for_path(
         # A replayed report is indistinguishable from a live one in its own
         # fields, because the clock was pinned and every freshness figure then
         # reads as current. The surfaces cannot infer it, so it is stated.
-        report["runtime_context"] = _runtime_context(
-            (runtime or RuntimeConfig()).validate(check_inputs=False)
+        return _decorate_report_runtime(
+            report,
+            (runtime or RuntimeConfig()).validate(check_inputs=False),
         )
-        return report
     if path == "/market/chain":
         return report["data_status"]
     if path == "/surface":
@@ -1666,10 +1679,44 @@ def _report_from_query(
         query,
         runtime=runtime,
     ).project_research_report_v1()
-    report["runtime_context"] = _runtime_context(
-        (runtime or RuntimeConfig()).validate(check_inputs=False)
+    return _decorate_report_runtime(
+        report,
+        (runtime or RuntimeConfig()).validate(check_inputs=False),
     )
+
+
+def _decorate_report_runtime(
+    report: dict[str, Any],
+    runtime: RuntimeConfig,
+) -> dict[str, Any]:
+    """Declare replay/published clocks without granting publication authority."""
+    context = _runtime_context(runtime)
+    report["runtime_context"] = context
+    if context["mode"] != "published":
+        return report
+
+    captured_at = str(context["evaluation_clock"] or "")
+    captured_dt = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+    published_dt = max(_analysis_cache_now().astimezone(UTC), captured_dt)
+    report["publish_edition"] = {
+        "captured_at": captured_at,
+        "published_at": _utc_rfc3339(published_dt),
+        "next_expected_at": _utc_rfc3339(captured_dt + timedelta(days=1)),
+        "cadence": "daily",
+        "stale_after": _utc_rfc3339(captured_dt + timedelta(days=2)),
+    }
     return report
+
+
+def _utc_rfc3339(value: datetime) -> str:
+    if value.tzinfo is None:
+        raise ValueError("publication clock must include a timezone")
+    return (
+        value.astimezone(UTC)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _runtime_context(runtime: RuntimeConfig) -> dict[str, Any]:
@@ -1681,18 +1728,26 @@ def _runtime_context(runtime: RuntimeConfig) -> dict[str, Any]:
     live is being shown stale data that looks fresh.
     """
     replay_clock = _replay_clock(runtime)
+    published_clock = _published_clock(runtime)
+    evaluation_clock = replay_clock or published_clock
+    mode = "published" if published_clock else ("replay" if replay_clock else "live")
     return {
         "profile": runtime.profile,
-        "mode": "replay" if replay_clock else "live",
+        "mode": mode,
         "replay": bool(replay_clock),
-        "evaluation_clock": replay_clock,
-        "snapshot_fixture": runtime.snapshot_fixture if replay_clock else None,
+        "evaluation_clock": evaluation_clock,
+        "snapshot_fixture": runtime.snapshot_fixture if evaluation_clock else None,
         "live_fetch_allowed": runtime.allow_live_fetch,
         "notice": (
             "Evaluation clock pinned to the snapshot's capture time. Freshness "
             "figures describe that instant, not now."
             if replay_clock
-            else None
+            else (
+                "Published edition evaluated at the capture time; wall-clock age "
+                "and publication-stall state are declared separately."
+                if published_clock
+                else None
+            )
         ),
     }
 
@@ -1800,12 +1855,32 @@ def _replay_clock(runtime: RuntimeConfig) -> str | None:
     """
     if not runtime.replay or not runtime.snapshot_fixture:
         return None
+    return _snapshot_capture_clock(runtime.snapshot_fixture)
+
+
+def _published_clock(runtime: RuntimeConfig) -> str | None:
+    """The capture-bound evaluation instant for a published edition."""
+    if not runtime.published:
+        return None
+    # Validation requires the fixture and keeps published mutually exclusive
+    # with replay, so reusing the same capture-bound reader cannot loosen any
+    # market-quality gate.
+    return _snapshot_capture_clock(runtime.snapshot_fixture)
+
+
+def _snapshot_capture_clock(path: str | None) -> str | None:
+    if not path:
+        return None
     try:
-        snapshot = load_snapshot_fixture(runtime.snapshot_fixture)
+        snapshot = load_snapshot_fixture(path)
     except (OSError, ValueError):
         return None
     captured_at = snapshot.get("captured_at")
     return str(captured_at) if captured_at else None
+
+
+def _evaluation_clock(runtime: RuntimeConfig) -> str | None:
+    return _replay_clock(runtime) or _published_clock(runtime)
 
 
 def _report_options_from_query(
@@ -1831,7 +1906,7 @@ def _report_options_from_query(
             "paper_ledger_path": runtime.paper_ledger_path,
             "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
             "underlying_history_fixture": runtime.underlying_history_fixture,
-            "generated_at": _replay_clock(runtime),
+            "generated_at": _evaluation_clock(runtime),
         }
 
     # HTTP always stays research_only for display/action consistency.
@@ -1861,7 +1936,7 @@ def _report_options_from_query(
     if params.get("deribit_base_url"):
         raise ValueError("deribit_base_url query override is not allowed over HTTP")
     account_scenario = params.get("account_scenario", [None])[0]
-    generated_at = params.get("generated_at", [_replay_clock(runtime)])[0]
+    generated_at = params.get("generated_at", [_evaluation_clock(runtime)])[0]
     instrument_limit = _parse_optional_int(
         params.get(
             "instrument_limit",
@@ -2046,6 +2121,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--published",
+        action="store_true",
+        default=_environment_flag("CRYPTO_OPTIONS_API_PUBLISHED"),
+        help=(
+            "operator preview of a published edition: evaluate at the snapshot "
+            "capture time while the surface reports wall-clock publication age"
+        ),
+    )
+    parser.add_argument(
         "--underlying-history-fixture",
         help=(
             "recorded underlying price history; enables absolute expected "
@@ -2101,6 +2185,7 @@ def main(argv: list[str] | None = None) -> int:
         account_snapshot_fixture=args.account_snapshot_fixture,
         allow_live_fetch=args.allow_live_fetch,
         replay=args.replay,
+        published=args.published,
         signal_artifact=args.signal_artifact,
         series_artifact=args.series_artifact,
         access_log=args.access_log,

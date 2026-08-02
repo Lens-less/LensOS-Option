@@ -136,6 +136,39 @@ function blockedReport(): ResearchReport {
   } as unknown as ResearchReport;
 }
 
+function publishedWorkbenchReport(): ResearchReport {
+  const report = validatedReport();
+  const scanner = report.ev_candidate_scanner as {
+    ranked_candidates?: Array<Record<string, unknown>>;
+  };
+  const rankedCandidates = scanner.ranked_candidates ?? [];
+  const first = rankedCandidates[0] ?? {};
+  rankedCandidates[0] = {
+    ...first,
+    absolute_ev: {
+      ...(first.absolute_ev as Record<string, unknown> | undefined),
+      execution_sensitivity: {
+        ev_after_cost_usdc: {
+          sell_at_bid: 42.1,
+          sell_at_mid: 55.5,
+          buy_at_mid: -12.2,
+          buy_at_ask: -20.4,
+        },
+      },
+    },
+    margin_snapshot: {
+      reference_margin_usdc: 1234.5,
+    },
+  };
+  return {
+    ...report,
+    runtime_context: {
+      mode: "published",
+      replay: false,
+    },
+  } as unknown as ResearchReport;
+}
+
 function selectRowByCreditText(creditText: string): void {
   const cell = screen.getByText(creditText);
   const rowElement = cell.closest("tr");
@@ -239,15 +272,14 @@ describe("ResearchWorkbench / candidate detail", () => {
 });
 
 describe("ResearchWorkbench / safety framing", () => {
-  it("states the release authorization and execution boundary on this surface", () => {
+  it("states the execution boundary on this surface without a release NO-GO banner", () => {
     // The workbench is where ranked candidates and expected values are read,
     // so the boundary must be visible here, not only on the evidence console.
     renderWorkbench(validatedReport());
 
-    expect(screen.getByText("外部发布授权")).toBeInTheDocument();
-    expect(screen.getByText("NO-GO")).toBeInTheDocument();
     expect(screen.getByText("执行边界")).toBeInTheDocument();
     expect(screen.getByText("RESEARCH_ONLY · NO_TRADE")).toBeInTheDocument();
+    expect(screen.queryByText("外部发布授权")).not.toBeInTheDocument();
   });
 
   it("labels the score as uncalibrated so a rank is not read as a verdict", () => {
@@ -276,6 +308,15 @@ describe("ResearchWorkbench / no trading semantics", () => {
     expect(within(main).queryByText(/\d+\s*张/)).not.toBeInTheDocument();
     expect(within(main).queryByText("手数")).not.toBeInTheDocument();
     expect(within(main).queryByText("数量")).not.toBeInTheDocument();
+  });
+
+  it("hides margin and execution detail when the workbench is reused in published mode", () => {
+    renderWorkbench(publishedWorkbenchReport());
+    selectRowByCreditText("$400");
+
+    expect(screen.queryByText("保证金参考")).not.toBeInTheDocument();
+    expect(screen.queryByText("卖出 @ 买价")).not.toBeInTheDocument();
+    expect(screen.queryByText("买入 @ 卖价")).not.toBeInTheDocument();
   });
 
   it("never lets a filter change promote the REJECT-tier candidate into a visible research tier", () => {

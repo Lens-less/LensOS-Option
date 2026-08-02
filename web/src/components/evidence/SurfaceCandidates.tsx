@@ -3,8 +3,8 @@ import type {
   SurfaceExpiry,
   SurfacePoint,
 } from "../../contracts";
-import { finiteNumber } from "./reportModel";
-import type { Tone } from "./reportModel";
+import { finiteNumber, marketDisplayState } from "./reportModel";
+import type { Freshness, Tone } from "./reportModel";
 import { formatDecimal, formatExpiry } from "./marketModel";
 import type { CandidateRow } from "./marketModel";
 
@@ -138,10 +138,13 @@ function SurfaceChart({
 
 export function SurfaceResearch({
   report,
+  freshness,
 }: {
   report: ResearchReport;
+  freshness?: Freshness;
 }): React.JSX.Element {
   const expiries = report.vol_surface_status?.expiries ?? [];
+  const displayState = freshness ? marketDisplayState(report, freshness) : "available";
   const chartAvailable = expiries.some(
     (expiry) => surfaceSeries(expiry).length >= 2,
   );
@@ -160,7 +163,12 @@ export function SurfaceResearch({
           拟合质量和无套利检查分开呈现；只有两者都通过，曲面才进入候选研究。
         </p>
       </header>
-      {chartAvailable ? (
+      {displayState === "stale" ? (
+        <div className="section-empty published-stop-state" role="status">
+          <strong>发布已停摆</strong>
+          <p>当前公开版已超过时效上限；曲面图和到期数字全部收起，直到下一版发布。</p>
+        </div>
+      ) : chartAvailable ? (
         <div className="surface-layout">
           <SurfaceChart expiries={expiries} />
           <div className="surface-expiries" aria-label="到期曲面质量">
@@ -283,11 +291,14 @@ function CandidateTable({
 export function CandidateResearchSection({
   candidates,
   report,
+  freshness,
 }: {
   candidates: CandidateRow[];
   report: ResearchReport;
+  freshness?: Freshness;
 }): React.JSX.Element {
   const summary = report.candidate_research?.summary;
+  const displayState = freshness ? marketDisplayState(report, freshness) : "available";
   return (
     <section
       id="candidates"
@@ -304,7 +315,12 @@ export function CandidateResearchSection({
           {summary?.eligible_call_credit_spreads ?? 0} 个价差通过当前过滤；这不是交易建议。
         </p>
       </header>
-      {candidates.length > 0 ? (
+      {displayState === "stale" ? (
+        <div className="section-empty published-stop-state" role="status">
+          <strong>发布已停摆</strong>
+          <p>候选排序依赖当前市场截面；在公开版过期后，这些数字不会继续对外展示。</p>
+        </div>
+      ) : candidates.length > 0 ? (
         <CandidateTable candidates={candidates} />
       ) : (
         <div className="section-empty" role="status">

@@ -8,6 +8,7 @@ export type Freshness = ReportFreshness;
 
 export type Queue = "operator" | "system";
 export type Tone = "danger" | "muted" | "safe" | "warning";
+export type MarketDisplayState = "available" | "quality_blocked" | "stale";
 
 const REASON_COPY: Record<
   string,
@@ -32,7 +33,7 @@ const REASON_COPY: Record<
     queue: "operator",
   },
   EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED: {
-    label: "缺少外部发布授权",
+    label: "缺少独立发布复核",
     action: "由独立责任人完成发布复核；本研究运行时不能自行授权。",
     ownerLabel: "需要外部复核",
     queue: "operator",
@@ -96,6 +97,12 @@ const REASON_COPY: Record<
     action: "配置获授权、可追溯的历史数据源。",
     ownerLabel: "需要你提供",
     queue: "operator",
+  },
+  NO_VALIDATED_PATH_RISK: {
+    label: "路径风险尚未验证",
+    action: "系统继续计算并验证路径风险；在此之前保持研究只读。",
+    ownerLabel: "系统负责",
+    queue: "system",
   },
   REGIME_MIN_OBSERVATIONS_NOT_MET: {
     label: "Regime 最少观察数未达到",
@@ -206,6 +213,49 @@ export const FRESHNESS_LABELS: Record<FreshnessPhase, string> = {
   unavailable: "不可用",
 };
 
+export function formatPublishedAge(ageSec: number | null | undefined): string {
+  if (ageSec === null || ageSec === undefined) {
+    return "距今时间不可验证";
+  }
+  const hours = Math.floor(ageSec / 3_600);
+  return `距今 ${hours.toLocaleString("zh-CN")} 小时`;
+}
+
+export function formatCutoffTime(value: string | null | undefined): string {
+  if (!value) {
+    return "截止时间未提供";
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Shanghai",
+  }).format(parsed);
+}
+
+export function marketDisplayState(
+  report: ResearchReport,
+  freshness: Freshness,
+): MarketDisplayState {
+  if (
+    freshness.mode === "published" &&
+    freshness.phase === "expired"
+  ) {
+    return "stale";
+  }
+  if (
+    report.data_status?.validated !== true ||
+    freshness.phase === "expired" ||
+    freshness.phase === "unavailable"
+  ) {
+    return "quality_blocked";
+  }
+  return "available";
+}
+
 export function humanize(value: string | null | undefined, fallback = "未提供"): string {
   if (!value) {
     return fallback;
@@ -239,6 +289,9 @@ export function friendlySource(value: string | null | undefined): string {
   }
   if (value.startsWith("deribit_live:")) {
     return "Deribit live";
+  }
+  if (value === "deribit_published_snapshot") {
+    return "Deribit 日更快照";
   }
   if (value.startsWith("fixture:")) {
     return "验证回放数据";
@@ -420,16 +473,34 @@ export function reportBlockers(report: ResearchReport): Blocker[] {
       byCode.set(code, blockerFromReason(code, report));
     }
   }
-  return [...byCode.values()];
+  const blockers = [...byCode.values()];
+  if (report.runtime_context?.mode !== "published") {
+    return blockers;
+  }
+
+  const publicationIsAuthorized =
+    report.full_system_surface?.release_gates?.find(
+      (gate) => gate.name === "research_publication",
+    )?.status === "GO";
+  return blockers.filter(
+    (blocker) =>
+      blocker.code !== "MISSING_ACCOUNT_API_SNAPSHOT" &&
+      blocker.code !== "SIMULATION_NOT_REQUESTED" &&
+      !(
+        publicationIsAuthorized &&
+        blocker.code === "EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED"
+      ),
+  );
 }
 
 export function evidenceItems(report: ResearchReport): EvidenceItem[] {
+  const isPublished = report.runtime_context?.mode === "published";
   const data = report.data_status;
   const account = report.account_status;
   const calibration = report.calibration_status;
   const backtest = report.backtest_status;
   const portfolio = report.portfolio_risk;
-  return [
+  const items: EvidenceItem[] = [
     {
       detail: displaySource(data?.source, data?.reason_code ?? "未配置来源"),
       label: "市场数据",
@@ -447,7 +518,9 @@ export function evidenceItems(report: ResearchReport): EvidenceItem[] {
     },
     {
       detail:
-        report.data_trust?.source_class === "missing"
+        isPublished
+          ? "已发布快照"
+          : report.data_trust?.source_class === "missing"
           ? "来源缺失"
           : humanize(report.data_trust?.source_class, "无可信来源"),
       label: "数据可信度",
@@ -491,4 +564,10 @@ export function evidenceItems(report: ResearchReport): EvidenceItem[] {
       tone: statusTone(portfolio?.final_action ?? report.risk_state),
     },
   ];
+  if (isPublished) {
+    return items.filter(
+      (item) => item.label !== "账户与保证金" && item.label !== "组合仲裁",
+    );
+  }
+  return items;
 }

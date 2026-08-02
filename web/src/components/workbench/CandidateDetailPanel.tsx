@@ -59,12 +59,14 @@ function formatCount(value: number | null): string {
 
 export function CandidateDetailPanel({
   headingRef,
+  hideExecutionDetails = false,
   onClose,
   report,
   row,
   spotUsdc,
 }: {
   headingRef?: React.Ref<HTMLHeadingElement>;
+  hideExecutionDetails?: boolean;
   onClose: () => void;
   report: ResearchReport;
   row: CandidateViewRow;
@@ -172,7 +174,7 @@ export function CandidateDetailPanel({
         />
       )}
 
-      {executionRows.length > 0 ? (
+      {!hideExecutionDetails && executionRows.length > 0 ? (
         <div className="candidate-detail-block">
           <h4>edge 在价差的哪一侧</h4>
           <p className="candidate-detail-note">
@@ -257,8 +259,11 @@ export function CandidateDetailPanel({
         )}
       </section>
 
-      <section aria-label="路径风险与保证金证据" className="path-risk-block">
-        <h4>路径风险 · 保证金 · 公允 IV</h4>
+      <section
+        aria-label={hideExecutionDetails ? "路径风险与公允 IV 证据" : "路径风险与保证金证据"}
+        className="path-risk-block"
+      >
+        <h4>{hideExecutionDetails ? "路径风险 · 公允 IV" : "路径风险 · 保证金 · 公允 IV"}</h4>
         <dl className="path-risk-grid">
           <div>
             <dt>路径风险状态</dt>
@@ -278,10 +283,12 @@ export function CandidateDetailPanel({
               {formatUsdc(finiteNumber(pathRisk?.cvar_99_usdc))}
             </dd>
           </div>
-          <div>
-            <dt>保证金参考</dt>
-            <dd>{formatUsdc(finiteNumber(marginSnapshot?.reference_margin_usdc))}</dd>
-          </div>
+          {!hideExecutionDetails ? (
+            <div>
+              <dt>保证金参考</dt>
+              <dd>{formatUsdc(finiteNumber(marginSnapshot?.reference_margin_usdc))}</dd>
+            </div>
+          ) : null}
           <div>
             <dt>公允 IV 残差</dt>
             <dd>

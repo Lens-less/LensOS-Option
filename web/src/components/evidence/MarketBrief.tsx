@@ -1,5 +1,9 @@
 import type { ResearchReport } from "../../contracts";
-import { FRESHNESS_LABELS, friendlySource } from "./reportModel";
+import {
+  FRESHNESS_LABELS,
+  friendlySource,
+  marketDisplayState,
+} from "./reportModel";
 import type { Freshness, Tone } from "./reportModel";
 import {
   formatDecimal,
@@ -101,15 +105,15 @@ export function MarketBrief({
   freshness: Freshness;
   report: ResearchReport;
 }): React.JSX.Element {
+  const displayState = marketDisplayState(report, freshness);
   const hasMarketEvidence =
-    report.data_status?.validated === true &&
-    facts.underlyingPrice !== null &&
-    freshness.phase !== "expired" &&
-    freshness.phase !== "unavailable";
+    displayState === "available" && facts.underlyingPrice !== null;
   const candidateTotal =
     (facts.nakedCandidates ?? 0) + (facts.spreadCandidates ?? 0);
-  const narrative = !hasMarketEvidence
-    ? "当前没有可验证的市场快照；价格、DVOL、曲面与候选不会被估算或补齐。"
+  const narrative = displayState === "stale"
+    ? "这版公开稿已超过发布时效上限；所有当前市场数字视图已统一收起，等待下一版发布。"
+    : !hasMarketEvidence
+      ? "当前没有可验证的市场快照；价格、DVOL、曲面与候选不会被估算或补齐。"
     : `${facts.validQuotes ?? "—"} 条报价通过质量门；${
         facts.eligibleExpiries ?? "—"
       } 个到期曲面可进入候选研究。`;
@@ -137,13 +141,25 @@ export function MarketBrief({
         </header>
         <div className="market-lockup">
           <p className="section-kicker">Market pulse / 市场脉搏</p>
-          <h1>BTC 市场脉搏</h1>
+          <h2>BTC 市场脉搏</h2>
+          {displayState === "quality_blocked" ? (
+            <strong className="market-state-title">市场数据当前不可发布</strong>
+          ) : null}
+          {displayState === "stale" ? (
+            <strong className="market-state-title">发布已停摆</strong>
+          ) : null}
           <div className="underlying-price" data-available={hasMarketEvidence}>
             {hasMarketEvidence ? formatUsd(facts.underlyingPrice) : "—"}
           </div>
           <div className="dvol-line">
             <span>BTC DVOL</span>
-            <strong>{hasMarketEvidence ? formatDvol(facts.dvol) : "不可用"}</strong>
+            <strong>
+              {displayState === "stale"
+                ? "已收起"
+                : hasMarketEvidence
+                  ? formatDvol(facts.dvol)
+                  : "不可用"}
+            </strong>
           </div>
           <p className="market-narrative">{narrative}</p>
         </div>

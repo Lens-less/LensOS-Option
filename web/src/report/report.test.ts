@@ -54,6 +54,71 @@ describe("validateResearchReport", () => {
       }),
     ).toThrow(/safety boundary/i);
   });
+
+  it("requires published editions to keep truthful clocks and a permanent execution NO-GO", () => {
+    const publishedReport: ResearchReport = {
+      ...safeResearchReport,
+      runtime_context: {
+        mode: "published",
+        replay: false,
+        evaluation_clock: "2026-08-02T08:00:00Z",
+      },
+      publish_edition: {
+        captured_at: "2026-08-02T08:00:00Z",
+        published_at: "2026-08-02T08:05:00Z",
+        next_expected_at: "2026-08-03T08:00:00Z",
+        stale_after: "2026-08-04T08:00:00Z",
+        cadence: "daily",
+      },
+      full_system_surface: {
+        ...safeResearchReport.full_system_surface,
+        release_gates: [
+          { name: "research_publication", status: "GO", satisfied: true },
+          { name: "execution_authorization", status: "NO-GO", satisfied: false },
+        ],
+      },
+    };
+
+    expect(() => validateResearchReport(publishedReport)).not.toThrow();
+    expect(() =>
+      validateResearchReport({
+        ...publishedReport,
+        full_system_surface: {
+          ...publishedReport.full_system_surface,
+          release_gates: [
+            {
+              name: "research_publication",
+              status: "NO-GO",
+              satisfied: false,
+            },
+            {
+              name: "execution_authorization",
+              status: "NO-GO",
+              satisfied: false,
+            },
+          ],
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateResearchReport({
+        ...publishedReport,
+        publish_edition: undefined,
+      }),
+    ).toThrow(/published edition/i);
+    expect(() =>
+      validateResearchReport({
+        ...publishedReport,
+        full_system_surface: {
+          ...publishedReport.full_system_surface,
+          release_gates: [
+            { name: "research_publication", status: "GO", satisfied: true },
+            { name: "execution_authorization", status: "GO", satisfied: true },
+          ],
+        },
+      }),
+    ).toThrow(/execution authorization/i);
+  });
 });
 
 describe("projectResearchReportForSidePanel", () => {

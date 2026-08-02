@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>方法论 · LensOS Option</title>
+    <link rel="stylesheet" href="./static-page.css" />
+  </head>
+  <body>
+    <main>
+      <div class="page-shell">
+        <header class="page-header">
+          <a href="./index.html">返回公开站</a>
+        </header>
+        <div class="page-title">
+          <p>Methodology / 口径公开</p>
+          <h1>方法论</h1>
+          <p>本页说明公开站的头条指标、数据来源、样本量口径与明确不能回答的问题。</p>
+        </div>
+        <section class="page-section">
+          <h2>VRP 定义</h2>
+          <p>
+            VRP = DVOL − RV30。DVOL 取 Deribit BTC DVOL 日线，RV30 取过去 30 个日历日
+            close-to-close 对数收益的 365 天年化标准差。公开站把当前 VRP 放回 1095 天滚动窗口，
+            给出经验百分位与刻度带。
+          </p>
+        </section>
+        <section class="page-section">
+          <h2>数据来源</h2>
+          <ul>
+            <li>Deribit public API：期权链快照、DVOL 日线、公开市场状态。</li>
+            <li>BTC 标的日线历史：用于 RV30 与路径风险相关口径。</li>
+            <li>公开站只消费已发布产物，不在浏览器里二次推导缺失市场值。</li>
+          </ul>
+        </section>
+        <section class="page-section">
+          <h2>样本量与置信度</h2>
+          <p>
+            本项目显式区分独立非重叠窗口与重叠窗口。验证置信度按独立 cohort 计，不把相邻日的重叠样本当成独立证据。
+          </p>
+        </section>
+        <section class="page-section">
+          <h2>诚实边界</h2>
+          <ul>
+            <li>VRP 为正不等于机会，它也可能反映即将到来的高波动。</li>
+            <li>Deribit 不发布历史期权链，部分验证只能向前累积，不能回补。</li>
+            <li>公开站永远不输出下单、仓位 sizing 或执行授权。</li>
+          </ul>
+        </section>
+        <footer class="page-footer">
+          <span>LensOS Option · research only</span>
+          <nav aria-label="页脚链接">
+            <a href="./methodology.html">方法论</a>
+            <a href="./disclaimer.html">免责声明</a>
+            <a href="./privacy.html">隐私政策</a>
+            <a href="./terms.html">使用条款</a>
+          </nav>
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>

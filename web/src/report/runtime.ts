@@ -39,6 +39,47 @@ function validateStrategySafety(strategy: StrategyResearch): void {
   }
 }
 
+function validatePublishedSafety(report: ResearchReport): void {
+  if (report.runtime_context?.mode !== "published") {
+    return;
+  }
+
+  const edition = report.publish_edition;
+  const capturedAt = Date.parse(edition?.captured_at ?? "");
+  const publishedAt = Date.parse(edition?.published_at ?? "");
+  const nextExpectedAt = Date.parse(edition?.next_expected_at ?? "");
+  const staleAfter = Date.parse(edition?.stale_after ?? "");
+  const hasTruthfulClock =
+    edition?.cadence === "daily" &&
+    report.runtime_context.replay === false &&
+    report.runtime_context.evaluation_clock === edition?.captured_at &&
+    [capturedAt, publishedAt, nextExpectedAt, staleAfter].every(Number.isFinite) &&
+    publishedAt >= capturedAt &&
+    nextExpectedAt > capturedAt &&
+    staleAfter > nextExpectedAt;
+  if (!hasTruthfulClock) {
+    fail("published edition is missing its truthful publication clock");
+  }
+
+  const gates = new Map(
+    (report.full_system_surface?.release_gates ?? []).map((gate) => [
+      gate.name,
+      gate,
+    ]),
+  );
+  const publicationGate = gates.get("research_publication");
+  const executionGate = gates.get("execution_authorization");
+  const publicationGateIsCoherent =
+    (publicationGate?.status === "GO" && publicationGate.satisfied === true) ||
+    (publicationGate?.status === "NO-GO" && publicationGate.satisfied === false);
+  if (!publicationGateIsCoherent) {
+    fail("published edition is missing publication authorization evidence");
+  }
+  if (executionGate?.status !== "NO-GO" || executionGate.satisfied !== false) {
+    fail("published edition attempted to weaken execution authorization");
+  }
+}
+
 export function validateResearchReport(payload: unknown): ResearchReport {
   if (!isRecord(payload)) {
     fail("research report payload must be an object");
@@ -72,6 +113,7 @@ export function validateResearchReport(payload: unknown): ResearchReport {
   if (report.strategy_research) {
     validateStrategySafety(report.strategy_research);
   }
+  validatePublishedSafety(report);
 
   return report;
 }

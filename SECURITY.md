@@ -13,6 +13,10 @@ Report vulnerabilities privately through the repository's GitHub Security Adviso
 - Never expose the container port directly to the public Internet.
 - Keep `CRYPTO_OPTIONS_API_ALLOW_LIVE_FETCH` disabled. Capture public data with the CLI and mount a reviewed snapshot instead.
 - Inject webhook HMAC secrets through environment or a secret manager, never command-line arguments or repository files.
+- `tools/capture-daily.ps1` performs local capture plus optional evidence-repo preflight only; it never pushes or overwrites an evidence repo automatically.
+- The scheduled workflow uploads public-market capture artifacts with 90-day retention as an off-device safety copy. This is not a substitute for the separately owned, versioned evidence repository, and it does not back up captures that exist only on the current laptop.
+- Any public health monitor must compare the current time to `publish_edition.stale_after`. Do not rely on a static JSON artifact to mutate its own `is_stale` field over time.
+- 30-day status history requires persisted evidence artifacts outside a single CI workspace. Without that external evidence input, status output can only describe the current published edition honestly.
 
 The service intentionally emits `research_only=true`, keeps every trading mode gate closed, and contains no live-order adapter.
 

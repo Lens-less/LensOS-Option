@@ -4,7 +4,9 @@ import {
   finiteNumber,
   friendlySource,
   humanize,
+  marketDisplayState,
 } from "./reportModel";
+import type { Freshness } from "./reportModel";
 import {
   formatDecimal,
   formatExpiry,
@@ -169,21 +171,36 @@ function formatConditionObserved(id: string, value: unknown): string {
 
 export function StrategyFrameworkSection({
   report,
+  freshness,
 }: {
   report: ResearchReport;
+  freshness?: Freshness;
 }): React.JSX.Element {
   const strategy = report.strategy_research;
+  const displayState = freshness ? marketDisplayState(report, freshness) : "available";
+  const isPublished = report.runtime_context?.mode === "published";
   const collection = strategy?.collection;
   const market = strategy?.analysis?.market;
   const volatility = strategy?.analysis?.volatility;
   const playbook = strategy?.playbook;
   const candidate = playbook?.candidate;
   const economics = playbook?.economics;
-  const conditions = playbook?.entry_contract?.conditions ?? [];
+  const conditions = (playbook?.entry_contract?.conditions ?? []).filter(
+    (condition) => !isPublished || condition.id !== "account_gate",
+  );
   const riskBudget = playbook?.risk_budget;
   const exitContract = playbook?.exit_contract;
   const coverage = collection?.coverage;
   const quality = collection?.quality;
+  const monitoring = (strategy?.monitoring ?? []).filter(
+    (watch) => !isPublished || watch.metric !== "account_age_sec",
+  );
+  const promotionConditions = (strategy?.review?.promotion_conditions ?? []).filter(
+    (condition) =>
+      !isPublished ||
+      condition !==
+        "Attach a fresh read-only account snapshot before any sizing study.",
+  );
   const pipeline =
     strategy?.pipeline ??
     Object.keys(STRATEGY_STAGE_LABELS).map((stage) => ({
@@ -220,7 +237,9 @@ export function StrategyFrameworkSection({
           </strong>
           <p>
             {playbook
-              ? "当前优先研究定义风险结构。市场与曲面已形成候选，但 Regime、账户、路径风险和成本覆盖尚未同时通过，因此不进场。"
+              ? isPublished
+                ? "当前优先研究定义风险结构。市场与曲面已形成候选，但 Regime、路径风险和成本覆盖尚未同时通过，因此不进场。"
+                : "当前优先研究定义风险结构。市场与曲面已形成候选，但 Regime、账户、路径风险和成本覆盖尚未同时通过，因此不进场。"
               : "当前没有足够的可验证市场证据，系统不会构造策略或估算缺失值。"}
           </p>
         </div>
@@ -251,7 +270,14 @@ export function StrategyFrameworkSection({
         ))}
       </ol>
 
-      {playbook ? (
+      {displayState === "stale" ? (
+        <div className="strategy-empty published-stop-state" role="status">
+          <strong>发布已停摆</strong>
+          <p>
+            当前公开版已超过时效上限；策略样本、经济值与候选比较全部暂停展示，直到下一版发布。
+          </p>
+        </div>
+      ) : playbook ? (
         <>
           <div className="strategy-analysis-grid">
             <article className="strategy-panel">
@@ -483,92 +509,100 @@ export function StrategyFrameworkSection({
               </div>
               <strong>模板级 · 尚未校准</strong>
             </header>
-            <div className="risk-budget-strip">
-              <div>
-                <span>单一价差损失预算</span>
-                <strong>
-                  {formatPercent(
-                    finiteNumber(riskBudget?.max_single_spread_loss_nav),
-                    2,
-                  )}{" "}
-                  NAV
-                </strong>
-              </div>
-              <div>
-                <span>新增保证金上限</span>
-                <strong>
-                  {formatPercent(
-                    finiteNumber(riskBudget?.max_new_margin_nav),
-                    1,
-                  )}{" "}
-                  NAV
-                </strong>
-              </div>
-              <div>
-                <span>市场深度占比</span>
-                <strong>
-                  {formatPercent(
-                    finiteNumber(riskBudget?.max_depth_fraction),
-                    1,
-                  )}
-                </strong>
-              </div>
-              <div>
-                <span>实际张数</span>
-                <strong>不生成</strong>
-                <small>缺账户快照；研究模式也禁止输出仓位</small>
-              </div>
-            </div>
-            <div className="exit-policy-grid">
-              <div>
-                <h4>止盈与时间管理</h4>
-                <ol className="profit-policy">
-                  {(exitContract?.profit_capture ?? []).map((rule) => (
-                    <li key={rule.trigger}>
-                      <strong>
-                        {(rule.trigger ?? "")
-                          .replace("premium_capture >= ", "")
-                          .replace(
-                            "remaining_premium < 3_to_5x_expected_close_cost",
-                            "剩余权利金 < 3–5× 平仓成本",
-                          )
-                          .replace(
-                            "short_call_delta < 0.03",
-                            "卖出腿 Delta < 0.03",
-                          )}
-                      </strong>
-                      <span>
-                        {PROFIT_RESPONSE_LABELS[rule.response ?? ""] ??
-                          humanize(rule.response)}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-                <p>
-                  DTE ≤ {exitContract?.time_management?.review_below_dte_days ?? 7}{" "}
-                  天必须复核；只在 NORMAL / CAUTION 状态允许主动滚动，且必须同时改善
-                  EV、P_Touch 与总压力损失。
-                </p>
-              </div>
-              <div>
-                <h4>仓位状态阶梯</h4>
-                <ol className="position-ladder">
-                  {(exitContract?.position_states ?? []).map((state) => (
-                    <li key={state.state} data-state={state.state}>
-                      <strong>{state.state}</strong>
-                      <div>
-                        <span>{state.delta_condition}</span>
-                        <span>{state.loss_condition}</span>
-                      </div>
-                      <small>
-                        {POSITION_RESPONSE_LABELS[state.response ?? ""] ??
-                          humanize(state.response)}
-                      </small>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            </div>
+            {isPublished ? (
+              <p className="strategy-note">
+                公开版不展示账户、保证金、仓位上限或模拟执行细节；这一幕只保留研究边界与证据链。
+              </p>
+            ) : (
+              <>
+                <div className="risk-budget-strip">
+                  <div>
+                    <span>单一价差损失预算</span>
+                    <strong>
+                      {formatPercent(
+                        finiteNumber(riskBudget?.max_single_spread_loss_nav),
+                        2,
+                      )}{" "}
+                      NAV
+                    </strong>
+                  </div>
+                  <div>
+                    <span>新增保证金上限</span>
+                    <strong>
+                      {formatPercent(
+                        finiteNumber(riskBudget?.max_new_margin_nav),
+                        1,
+                      )}{" "}
+                      NAV
+                    </strong>
+                  </div>
+                  <div>
+                    <span>市场深度占比</span>
+                    <strong>
+                      {formatPercent(
+                        finiteNumber(riskBudget?.max_depth_fraction),
+                        1,
+                      )}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>实际张数</span>
+                    <strong>不生成</strong>
+                    <small>缺账户快照；研究模式也禁止输出仓位</small>
+                  </div>
+                </div>
+                <div className="exit-policy-grid">
+                  <div>
+                    <h4>止盈与时间管理</h4>
+                    <ol className="profit-policy">
+                      {(exitContract?.profit_capture ?? []).map((rule) => (
+                        <li key={rule.trigger}>
+                          <strong>
+                            {(rule.trigger ?? "")
+                              .replace("premium_capture >= ", "")
+                              .replace(
+                                "remaining_premium < 3_to_5x_expected_close_cost",
+                                "剩余权利金 < 3–5× 平仓成本",
+                              )
+                              .replace(
+                                "short_call_delta < 0.03",
+                                "卖出腿 Delta < 0.03",
+                              )}
+                          </strong>
+                          <span>
+                            {PROFIT_RESPONSE_LABELS[rule.response ?? ""] ??
+                              humanize(rule.response)}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                    <p>
+                      DTE ≤ {exitContract?.time_management?.review_below_dte_days ?? 7}{" "}
+                      天必须复核；只在 NORMAL / CAUTION 状态允许主动滚动，且必须同时改善
+                      EV、P_Touch 与总压力损失。
+                    </p>
+                  </div>
+                  <div>
+                    <h4>仓位状态阶梯</h4>
+                    <ol className="position-ladder">
+                      {(exitContract?.position_states ?? []).map((state) => (
+                        <li key={state.state} data-state={state.state}>
+                          <strong>{state.state}</strong>
+                          <div>
+                            <span>{state.delta_condition}</span>
+                            <span>{state.loss_condition}</span>
+                          </div>
+                          <small>
+                            {POSITION_RESPONSE_LABELS[state.response ?? ""] ??
+                              humanize(state.response)}
+                          </small>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                </div>
+              </>
+            )}
           </section>
 
           <section className="monitor-review" aria-label="监控与复盘规则">
@@ -580,7 +614,7 @@ export function StrategyFrameworkSection({
                 </div>
               </header>
               <ul className="monitor-list">
-                {(strategy?.monitoring ?? []).slice(0, 8).map((watch) => (
+                {monitoring.slice(0, 8).map((watch) => (
                   <li key={watch.metric}>
                     <span>
                       {MONITOR_METRIC_LABELS[watch.metric ?? ""] ??
@@ -603,7 +637,7 @@ export function StrategyFrameworkSection({
                 </div>
               </header>
               <ol className="review-list">
-                {(strategy?.review?.promotion_conditions ?? []).map(
+                {promotionConditions.map(
                   (condition, index) => (
                     <li key={condition}>
                       <span>{String(index + 1).padStart(2, "0")}</span>

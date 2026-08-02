@@ -118,7 +118,7 @@ export function marketFacts(report: ResearchReport): MarketFacts {
   return {
     dvol: finiteNumber(
       report.data_status?.public_response_contract?.endpoints?.vol_index
-        ?.volatility,
+        ?.volatility ?? report.vrp_status?.current_dvol_percent,
     ),
     coverageRatio: finiteNumber(collectionScope?.coverage_ratio),
     eligibleExpiries: finiteNumber(

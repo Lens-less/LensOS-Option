@@ -27,8 +27,10 @@ from pathlib import Path
 from crypto_options_report.api import (
     RuntimeConfig,
     _replay_clock,
+    _report_from_query,
     _report_options_from_query,
     _runtime_context,
+    build_parser,
 )
 from crypto_options_report.market_data import load_snapshot_fixture
 
@@ -149,6 +151,63 @@ class ReplayIsDeclaredTests(unittest.TestCase):
         self.assertEqual(
             json.loads(json.dumps(context, allow_nan=False))["mode"], "replay"
         )
+
+
+class PublishedEditionRuntimeTests(unittest.TestCase):
+    def test_published_edition_pins_evaluation_but_is_not_called_replay(self) -> None:
+        expected = load_snapshot_fixture(str(FIXTURE))["captured_at"]
+
+        options = _report_options_from_query("", runtime=_runtime(published=True))
+        context = _runtime_context(_runtime(published=True).validate())
+
+        self.assertEqual(expected, options["generated_at"])
+        self.assertEqual("research_only", options["mode"])
+        self.assertEqual("published", context["mode"])
+        self.assertIs(context["replay"], False)
+        self.assertEqual(expected, context["evaluation_clock"])
+        self.assertIn("wall-clock age", context["notice"])
+
+    def test_published_report_declares_wall_clock_edition_without_self_authorizing(self) -> None:
+        captured_at = load_snapshot_fixture(str(FIXTURE))["captured_at"]
+
+        report = _report_from_query("", runtime=_runtime(published=True))
+        gates = {
+            gate["name"]: gate
+            for gate in report["full_system_surface"]["release_gates"]
+        }
+
+        self.assertEqual("published", report["runtime_context"]["mode"])
+        self.assertEqual(captured_at, report["publish_edition"]["captured_at"])
+        self.assertGreaterEqual(report["publish_edition"]["published_at"], captured_at)
+        self.assertEqual("daily", report["publish_edition"]["cadence"])
+        self.assertEqual("NO-GO", gates["research_publication"]["status"])
+        self.assertEqual("NO-GO", gates["execution_authorization"]["status"])
+
+    def test_published_edition_is_operator_controlled_and_requires_a_snapshot(self) -> None:
+        with self.assertRaisesRegex(ValueError, "published requires a snapshot"):
+            RuntimeConfig(profile="development", published=True).validate(
+                check_inputs=False
+            )
+
+        parsed = build_parser().parse_args(
+            ["--snapshot-fixture", str(FIXTURE), "--published"]
+        )
+        self.assertIs(parsed.published, True)
+
+    def test_published_edition_cannot_mix_with_replay_or_live_fetch(self) -> None:
+        for overrides in (
+            {"replay": True},
+            {"allow_live_fetch": True},
+        ):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                _runtime(published=True, **overrides).validate(check_inputs=False)
+
+    def test_browser_query_cannot_turn_a_live_runtime_into_published(self) -> None:
+        options = _report_options_from_query("mode=published", runtime=_runtime())
+        context = _runtime_context(_runtime().validate())
+
+        self.assertIsNone(options["generated_at"])
+        self.assertEqual("live", context["mode"])
 
 
 class ProductionIsUnchangedTests(unittest.TestCase):

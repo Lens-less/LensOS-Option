@@ -48,6 +48,7 @@ crypto-options-report = "crypto_options_report.cli:main"
 crypto-options-report-api = "crypto_options_report.api:main"
 crypto-options-snapshot-sidecar = "crypto_options_report.snapshot_sidecar:main"
 crypto-options-account-snapshot-sidecar = "crypto_options_report.account_snapshot_sidecar:main"
+crypto-options-dvol-history = "crypto_options_report.dvol_history_tool:main"
 crypto-options-underlying-history = "crypto_options_report.underlying_history_tool:main"
 
 [tool.setuptools.packages.find]

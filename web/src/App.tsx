@@ -79,8 +79,8 @@ function ErrorState({ onRetry }: { onRetry: () => void }): React.JSX.Element {
           <h1>研究数据不可用</h1>
           <p>报告无法验证，BTC 价格、DVOL、曲面与候选均不展示。</p>
           <div className="error-boundary">
-            <span>外部发布授权</span>
-            <strong>NO-GO · NO_TRADE</strong>
+            <span>执行边界</span>
+            <strong>RESEARCH_ONLY · NO_TRADE</strong>
           </div>
           <button className="refresh-button" type="button" onClick={onRetry}>
             重新读取
@@ -110,21 +110,6 @@ export function App({
   const signalArtifact = useSignalArtifact();
   const seriesArtifact = useSeriesArtifact();
   const requestSequence = useRef(0);
-
-  const switchView = useCallback((nextView: AppView) => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      if (nextView === "evidence") {
-        params.delete("view");
-      } else {
-        params.set("view", nextView);
-      }
-      const query = params.toString();
-      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
-      window.history.pushState(window.history.state, "", nextUrl);
-    }
-    setView(nextView);
-  }, []);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -214,7 +199,6 @@ export function App({
     <AppShell
       freshness={reportFreshness(report, state.loaded.receivedAtMs, nowMs)}
       onRefresh={() => void refresh()}
-      onViewChange={switchView}
       refreshing={state.refreshing}
       report={report}
       source={friendlySource(report.data_status?.source)}

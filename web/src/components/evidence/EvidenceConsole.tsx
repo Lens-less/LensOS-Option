@@ -9,6 +9,8 @@ import {
 import { StrategyFrameworkSection } from "./StrategyFramework";
 import { marketFacts, researchCandidates } from "./marketModel";
 import { reportBlockers, reportFreshness } from "./reportModel";
+import { VrpOverview } from "./VrpOverview";
+import { SiteFooter } from "../shell/SiteFooter";
 
 export { Masthead } from "./Shell";
 export { friendlySource, reportFreshness } from "./reportModel";
@@ -53,15 +55,20 @@ export function EvidenceConsole({
         className="console"
         id={embedded ? "surface-main" : "evidence-main"}
       >
+        <VrpOverview freshness={freshness} report={report} />
         <MarketBrief
           candidates={candidates}
           facts={facts}
           freshness={freshness}
           report={report}
         />
-        <StrategyFrameworkSection report={report} />
-        <SurfaceResearch report={report} />
-        <CandidateResearchSection candidates={candidates} report={report} />
+        <StrategyFrameworkSection freshness={freshness} report={report} />
+        <SurfaceResearch freshness={freshness} report={report} />
+        <CandidateResearchSection
+          candidates={candidates}
+          freshness={freshness}
+          report={report}
+        />
         <ReleaseBoundary
           freshness={freshness}
           operatorBlockers={operatorBlockers}
@@ -89,10 +96,7 @@ export function EvidenceConsole({
         source={facts.source}
       />
       {body}
-      <footer className="page-footer">
-        <span>LensOS Option · research only</span>
-        <p>真实市场数据用于研究阅读；页面不连接下单与自动执行。</p>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

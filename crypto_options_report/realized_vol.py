@@ -109,7 +109,7 @@ def build_realized_return_distribution(
         "independent_window_count": len(independent_returns),
         "minimum_independent_windows": MIN_INDEPENDENT_WINDOWS,
         "sample_size_basis": "independent_non_overlapping_windows",
-        "realized_volatility_annualized": _annualized_volatility(daily_log_returns),
+        "realized_volatility_annualized": annualized_volatility(daily_log_returns),
         "horizon_return_quantiles": _quantiles(overlapping_returns),
         "independent_horizon_return_quantiles": _quantiles(independent_returns),
         "mean_horizon_return": _mean(overlapping_returns),
@@ -183,7 +183,8 @@ def _blocked(reason_code: str) -> dict[str, Any]:
     }
 
 
-def _annualized_volatility(log_returns: list[float]) -> float | None:
+def annualized_volatility(log_returns: list[float]) -> float | None:
+    """Return sample standard deviation annualized on crypto calendar days."""
     if len(log_returns) < 2:
         return None
     mean = sum(log_returns) / len(log_returns)
