@@ -3,31 +3,49 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>隐私政策 · LensOS Option</title>
+    <title>隐私政策 | LensOS Option</title>
     <link rel="stylesheet" href="./static-page.css" />
   </head>
   <body>
     <main>
       <div class="page-shell">
         <header class="page-header">
-          <a href="./index.html">返回公开站</a>
+          <a href="./index.html">返回公开首页</a>
+          <nav aria-label="语言切换">
+            <a href="./en/privacy.html">English</a>
+          </nav>
         </header>
         <div class="page-title">
-          <p>Privacy / 公开站行为</p>
+          <p>Privacy / 公共静态页</p>
           <h1>隐私政策</h1>
-          <p>当前公开站按静态站点交付，不设置账户系统，也不接入第三方分析脚本。</p>
+          <p>公开站以静态方式交付，不设置账户，不放第三方追踪脚本，也不收集用户资料。</p>
         </div>
         <section class="page-section">
+          <h2>我们不收集什么</h2>
           <ul>
-            <li>本站不设置 cookie，不要求登录，不收集个人身份信息。</li>
-            <li>页面不向第三方分析、广告或追踪服务发送请求。</li>
-            <li>服务端仅暴露研究产物与只读健康状态，不包含用户侧凭证。</li>
+            <li>不设置 cookie，不要求登录，不建立用户账户。</li>
+            <li>不接入第三方分析、广告或追踪脚本。</li>
+            <li>不主动加载第三方字体、图片或嵌入资源。</li>
           </ul>
         </section>
+        <section class="page-section">
+          <h2>托管层日志</h2>
+          <p>
+            静态主机仍可能按自身政策记录常规 HTTP 元数据，例如 IP 地址、用户代理、请求路径和时间戳。
+            这些日志由托管商控制，不由公开站前端主动收集。
+          </p>
+        </section>
+        <section class="page-section">
+          <h2>本地伴侣</h2>
+          <p>
+            本页只描述公开静态站。若启用本地 Chrome 伴侣，它只在本机 loopback 上工作，不属于公开站的
+            追踪边界。
+          </p>
+        </section>
         <footer class="page-footer">
-          <span>LensOS Option · research only</span>
+          <span>LensOS Option / research only</span>
           <nav aria-label="页脚链接">
-            <a href="./methodology.html">方法论</a>
+            <a href="./methodology.html">方法页</a>
             <a href="./disclaimer.html">免责声明</a>
             <a href="./privacy.html">隐私政策</a>
             <a href="./terms.html">使用条款</a>

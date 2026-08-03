@@ -1,6 +1,8 @@
 # LensOS Option · 对外产品化 Spec
 
-> 状态：已接受，实施中 · 起草日 2026-08-02 · 对标 kimpremium.com / capexcycle.com
+> 状态：已接受，已由
+> [2026-08-03 发布硬化规格](2026-08-03-public-release-hardening-spec.md)修订 ·
+> 起草日 2026-08-02 · 对标 kimpremium.com / capexcycle.com
 >
 > 本文档回答一个问题：**从今天的仓库状态出发，还要做什么，才能把它变成一个可以
 > 公开挂出去、别人愿意每天来看的产品。** 它不改变项目的安全边界（研究只读、不下单）。
@@ -19,9 +21,10 @@
   `stale_after`。这是静态架构下唯一不会产生虚假健康状态的契约。
 - `research_publication` 可由可核验清单放行；`execution_authorization` 是不可配置、永久
   `NO-GO` 的产品边界。
-- 域名、托管商和外部心跳服务保持可插拔；未配置外部目标时自动化必须 fail closed。
-- 在所有者选择许可证前，代码与数据继续保留所有权利；本轮不擅自添加 Apache-2.0、
-  CC BY 4.0 或署名/再分发承诺。
+- 托管契约固定为 Cloudflare Pages；最终 HTTPS origin、失败通知、dead-man ping 与独立
+  `stale_after` 监控未配置时，自动化必须 fail closed。
+- 代码采用 Apache License 2.0；公开数据与文字内容采用 CC BY 4.0。
+- 头条只使用已经收盘的日数据，默认滞后一日；公开 bundle 与内部 dashboard 分开构建。
 
 ---
 
@@ -226,7 +229,7 @@ LensOS 现在是 **"按需运行的函数"**。这两者之间的距离，就是
 
 **现状**：看页面必须本地起服务并手动传三个 fixture 路径。
 
-**目标**：一条命令产出一个可直接扔进任意静态托管的目录。
+**目标**：一条命令产出一个符合 Cloudflare Pages 安全响应头契约的静态目录。
 
 **改动**：
 1. 新增 CLI 子命令 `crypto-options-report publish`：
@@ -237,6 +240,10 @@ LensOS 现在是 **"按需运行的函数"**。这两者之间的距离，就是
      --dvol-history artifacts/history/btc-dvol.json \
      --signal-artifact artifacts/reports/signal-preflight.json \
      --series-artifact artifacts/reports/series-history.json \
+     --publication-history artifacts/reports/publication-history.json \
+     --web-build web/dist-public \
+     --site-origin "$LENSOS_PUBLIC_SITE_ORIGIN" \
+     --published-at <UTC-RFC3339> \
      --out dist/site
    ```
 2. 产出目录结构（路径与现有 SPA 的 fetch 路径一一对应，SPA 无需改 transport）：
@@ -363,13 +370,13 @@ VRP(t) = DVOL(t) − RV_30(t)
 
   DVOL(t)  : Deribit BTC DVOL 指数收盘值（public/get_volatility_index_data，1D 分辨率）
   RV_30(t) : 过去 30 个日历日的对数收益年化标准差（close-to-close，365 天年化）
-  刻度     : VRP(t) 在过去 1095 天（3 年）滚动窗口中的经验百分位
+  刻度     : VRP(t) 在已发布 window_days 窗口中的 leave-current-out 经验百分位
 
   刻度带（与 kimpremium 的 >40/>45 同构，阈值随首发一并登记）：
-    ≥ P90  极贵   卖方溢价处于三年内最高 10%
+    ≥ P90  极贵   卖方溢价处于该窗口最高 10%
     ≥ P70  偏贵
     P30–P70 中性
-    ≤ P30  偏薄   卖方溢价处于三年内最低 30%
+    ≤ P30  偏薄   卖方溢价处于该窗口最低 30%
     ≤ P10  极薄
 ```
 
@@ -377,8 +384,8 @@ VRP(t) = DVOL(t) − RV_30(t)
 1. **它是单一测量量，不是加权合成。** DESIGN.md §14.2 拒绝把不可通约的分量加权成
    一个"总分"——那条约束针对候选排序。VRP 是一个直接可测的差值配一个经验分布，
    与 kimpremium 的"10 年滚动百分位"同构，不违反该原则。
-2. **它可回补。** DVOL 有多年历史，标的日线已有 1200 天。**今天就能算出三年时序**，
-   不用等 cohort。
+2. **它可回补。** DVOL 与标的日线都能覆盖配置窗口，并公开有效样本数、缺日与
+   `window_days`；不用等 cohort。
 3. **它是这个项目全部下游结论的前提。** 卖方溢价薄的时候，下面四幕都不重要。
 
 **必须同时印在图上方的诚实声明**（沿用 README 的做法）：
@@ -397,7 +404,7 @@ VRP(t) = DVOL(t) − RV_30(t)
    与 `viz/` 现有做法一致）+ 表格 fallback。
 
 **验收**：
-- 三年时序图有 ≥ 1000 个有效交易日读数，缺日显式列出；
+- 完整时序有 ≥ 1000 个有效日读数，窗口与缺日显式列出；
 - 人为删掉 dvol 历史 → 头条显示"不可用 + 补齐命令"，不显示 0，不显示占位数字；
 - 百分位计算有单元测试对拍已知分布。
 

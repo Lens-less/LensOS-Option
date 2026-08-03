@@ -9,10 +9,12 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit --pretty false && vite build",
+    "build:public": "tsc --noEmit --pretty false && vite build --config vite.public.config.ts",
     "build:extension": "tsc -p tsconfig.extension.json --noEmit --pretty false && vite build --config vite.extension.config.ts",
     "build:all": "npm run build && npm run build:extension",
     "lint": "tsc --noEmit --pretty false --noUnusedLocals --noUnusedParameters",
     "test": "vitest run",
+    "test:public-bundle": "node ./scripts/assert-public-bundle-boundary.mjs",
     "typecheck": "tsc --noEmit --pretty false"
   },
   "dependencies": {

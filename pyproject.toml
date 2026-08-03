@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "Fail-closed, evidence-first crypto options research console"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "LICENSE-DATA"]
 # Zero runtime dependencies: the CLI, HTTP API, and sidecars are stdlib-only by design.
 dependencies = []
 keywords = [
@@ -28,10 +30,6 @@ classifiers = [
     "Topic :: Office/Business :: Financial :: Investment",
     "Typing :: Typed",
 ]
-
-# TODO(release): choose a license before any public release. Add a LICENSE file,
-# `license = "<SPDX-ID>"`, and the matching OSI classifier. Until then this
-# project is "all rights reserved" by default and is not redistributable.
 
 [project.urls]
 Homepage = "https://github.com/Lens-less/LensOS-Option"
@@ -58,6 +56,7 @@ include = ["crypto_options_report*"]
 crypto_options_report = [
     "static/*.html",
     "static/evidence/*.html",
+    "static/evidence/en/*.html",
     "static/evidence/assets/*.css",
     "static/evidence/assets/*.js",
     "static/evidence/assets/*.png",
@@ -65,6 +64,7 @@ crypto_options_report = [
     "static/evidence/assets/*.woff",
     "static/evidence/assets/*.woff2",
     "resources/*.md",
+    "resources/*.json",
     "py.typed",
 ]
 

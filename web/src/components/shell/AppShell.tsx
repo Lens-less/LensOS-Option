@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
 import type { ResearchReport } from "../../contracts";
-import { APP_INDEX_HREF, NARRATIVE_LINKS, RAW_REPORT_HREF } from "../../publicPaths";
+import { APP_INDEX_HREF, RAW_REPORT_HREF, VIEW_LINKS } from "../../publicPaths";
+import { SectionNavigation } from "../evidence/Shell";
 import type { Freshness } from "../evidence/reportModel";
 import { formatCutoffTime } from "../evidence/reportModel";
 import { PublishedEditionBar } from "./PublishedEditionBar";
@@ -10,21 +11,8 @@ import { SiteFooter } from "./SiteFooter";
 
 export type AppView = "evidence" | "workbench" | "series" | "signal";
 
-function currentNarrativeId(view: AppView): string {
-  if (view === "series") {
-    return "series";
-  }
-  if (view === "signal" || view === "workbench") {
-    return "signal";
-  }
-  if (typeof window === "undefined") {
-    return "vrp";
-  }
-  const hash = window.location.hash.replace(/^#/, "");
-  if (hash === "framework" || hash === "limitations" || hash === "vrp") {
-    return hash;
-  }
-  return "vrp";
+function currentViewId(view: AppView): AppView {
+  return view;
 }
 
 export function AppShell({
@@ -44,17 +32,15 @@ export function AppShell({
   source?: string;
   view: AppView;
 }): React.JSX.Element {
-  const [activeNarrative, setActiveNarrative] = useState(() => currentNarrativeId(view));
+  const [activeView, setActiveView] = useState<AppView>(() => currentViewId(view));
 
   useEffect(() => {
     const sync = () => {
-      setActiveNarrative(currentNarrativeId(view));
+      setActiveView(currentViewId(view));
     };
     sync();
-    window.addEventListener("hashchange", sync);
     window.addEventListener("popstate", sync);
     return () => {
-      window.removeEventListener("hashchange", sync);
       window.removeEventListener("popstate", sync);
     };
   }, [view]);
@@ -68,6 +54,8 @@ export function AppShell({
   const cutoff = report.publish_edition?.captured_at ?? report.generated_at ?? null;
   const publishedStale =
     report.runtime_context?.mode === "published" && freshness?.phase === "expired";
+  const refreshLabel =
+    report.runtime_context?.mode === "published" ? "重新载入本版" : "刷新";
 
   return (
     <div className="app-shell app-shell-spine">
@@ -86,10 +74,10 @@ export function AppShell({
           </span>
         </a>
 
-        <nav aria-label="五幕叙事" className="spine-views">
-          {NARRATIVE_LINKS.map((item) => (
+        <nav aria-label="全视图导航" className="spine-views">
+          {VIEW_LINKS.map((item) => (
             <a
-              aria-current={activeNarrative === item.id ? "page" : undefined}
+              aria-current={activeView === item.id ? "page" : undefined}
               href={item.href}
               key={item.id}
             >
@@ -126,7 +114,7 @@ export function AppShell({
               onClick={onRefresh}
               type="button"
             >
-              {refreshing ? "刷新中…" : "刷新"}
+              {refreshing ? `${refreshLabel}中…` : refreshLabel}
             </button>
           ) : null}
         </div>
@@ -147,6 +135,7 @@ export function AppShell({
           </div>
         </dl>
       </div>
+      {view === "evidence" ? <SectionNavigation /> : null}
 
       {publishedStale ? (
         <main className="published-stop-main" id="surface-main">
@@ -165,7 +154,7 @@ export function AppShell({
                 onClick={onRefresh}
                 type="button"
               >
-                {refreshing ? "正在重读" : "重新读取"}
+                {refreshing ? "重新载入本版中…" : "重新载入本版"}
               </button>
             ) : null}
           </section>

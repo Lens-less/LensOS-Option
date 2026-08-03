@@ -1,4 +1,8 @@
 import type { EvCandidateScanner } from "../../contracts";
+import {
+  RESEARCH_RANKING_VALUE_LABEL,
+  researchRankingValueLabel,
+} from "./candidateModel";
 
 const METHOD_LABELS: Record<string, string> = {
   dominance_frontier: "帕累托占优前沿",
@@ -14,9 +18,12 @@ export function ScoreProvenance({
   return (
     <section className="score-provenance" aria-label="排序依据与评分口径">
       <div>
-        <span>评分口径</span>
-        <strong>{scanner?.score_status ?? "UNCALIBRATED_RESEARCH_ONLY"}</strong>
-        <p>排序分数尚未通过校准复核；仅用于研究内部相对比较，不是收益预测。</p>
+        <span>最小可用排序口径</span>
+        <strong>{researchRankingValueLabel(scanner?.score_status)}</strong>
+        <p>
+          这不是混合总分。当前先看前沿位置与是否被占优，再按支配轴顺序细排；
+          {RESEARCH_RANKING_VALUE_LABEL} 仅用于研究内部比较，不是收益预测。
+        </p>
       </div>
       <div>
         <span>排序方法</span>

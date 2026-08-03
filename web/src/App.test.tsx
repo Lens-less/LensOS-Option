@@ -740,10 +740,13 @@ describe("EvidenceConsole", () => {
 
   it("keeps source, trust and the research loop visible at compact widths", () => {
     for (const selector of [
+      ".spine-views",
+      ".section-navigation",
       ".source-indicator",
       ".freshness-source",
       ".read-only-indicator",
       ".strategy-workflow",
+      ".page-footer",
     ]) {
       const escapedSelector = selector.replace(".", "\\.");
       expect(evidenceStyles).not.toMatch(
@@ -1215,6 +1218,7 @@ describe("EvidenceConsole", () => {
     render(
       <AppShell
         freshness={reportFreshness(publishedReport, receivedAtMs, nowMs)}
+        onRefresh={() => {}}
         refreshing={false}
         report={publishedReport}
         source={friendlySource(publishedReport.data_status?.source)}
@@ -1224,8 +1228,18 @@ describe("EvidenceConsole", () => {
       </AppShell>,
     );
 
+    const publishedBar = screen
+      .getByText(/距采集 25.0 小时/)
+      .closest(".published-edition-bar");
+    expect(publishedBar).not.toBeNull();
     expect(screen.getAllByText(/数据截止/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/距今 25 小时/)).toBeInTheDocument();
+    expect(publishedBar).toHaveTextContent(/采集 .* 发布 .* 评估 /);
+    expect(
+      within(publishedBar as HTMLElement).getByText(/距采集 25.0 小时/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "重新载入本版" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("回放")).not.toBeInTheDocument();
     expect(screen.queryByText("外部发布授权")).not.toBeInTheDocument();
   });
@@ -1361,6 +1375,39 @@ describe("EvidenceConsole", () => {
     expect(within(vrpSection).queryByText("12.4 pt")).not.toBeInTheDocument();
   });
 
+  it("derives the VRP window label from payload and leaves a null percentile blank", async () => {
+    const noPercentileReport: ResearchReport = {
+      ...liveResearchReport,
+      vrp_status: {
+        ...vrpStatusFixture,
+        series: [...vrpStatusFixture.series],
+        missing_dates: [...vrpStatusFixture.missing_dates],
+        percentile: null,
+        band: null,
+      },
+    };
+
+    render(
+      <App
+        loadReport={() =>
+          Promise.resolve(
+            loadedReport(noPercentileReport, Date.parse("2026-08-02T09:00:00Z")),
+          )
+        }
+      />,
+    );
+
+    const vrpSection = await screen.findByRole("region", {
+      name: "现在贵不贵",
+    });
+    expect(within(vrpSection).getByText("约 3.0 年（1,095 天）窗口经验百分位")).toBeInTheDocument();
+    expect(within(vrpSection).getByText(/forward-implied volatility/i)).toBeInTheDocument();
+    const percentileValue = vrpSection.querySelector(".vrp-scale-copy strong");
+    expect(percentileValue).not.toBeNull();
+    expect(percentileValue).toHaveAttribute("aria-label", "百分位不可用");
+    expect(percentileValue).toHaveTextContent(/^$/);
+  });
+
   it("keeps replay compatibility for legacy replay reports", async () => {
     render(
       <App
@@ -1373,36 +1420,47 @@ describe("EvidenceConsole", () => {
     );
 
     expect((await screen.findAllByText("回放")).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/距今 \d+ 小时/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/距采集 \d+(\.\d)? 小时/)).not.toBeInTheDocument();
   });
 
-  it("renders the narrative navigation and footer links with real static-page hrefs", async () => {
+  it("renders the global view navigation, evidence section rail, and footer links with real static-page hrefs", async () => {
     render(<App loadReport={() => Promise.resolve(loadedReport(publishedReport))} />);
 
     const navigation = await screen.findByRole("navigation", {
-      name: "五幕叙事",
+      name: "全视图导航",
     });
-    expect(within(navigation).getByRole("link", { name: "现在贵不贵" })).toHaveAttribute(
+    expect(within(navigation).getByRole("link", { name: "① 研究简报" })).toHaveAttribute(
       "href",
-      "./index.html#vrp",
+      "./index.html",
     );
-    expect(within(navigation).getByRole("link", { name: "贵在哪里" })).toHaveAttribute(
+    expect(within(navigation).getByRole("link", { name: "② 波动时序" })).toHaveAttribute(
       "href",
       "./index.html?view=series",
     );
-    expect(within(navigation).getByRole("link", { name: "卖它值不值" })).toHaveAttribute(
+    expect(within(navigation).getByRole("link", { name: "③ 候选工作台" })).toHaveAttribute(
       "href",
-      "./index.html#framework",
+      "./index.html?view=workbench",
     );
     expect(
-      within(navigation).getByRole("link", { name: "这套排序灵不灵" }),
+      within(navigation).getByRole("link", { name: "④ 排序验证" }),
     ).toHaveAttribute(
       "href",
       "./index.html?view=signal",
     );
-    expect(within(navigation).getByRole("link", { name: "凭什么信" })).toHaveAttribute(
+    expect(
+      within(navigation).getByRole("link", { name: "① 研究简报" }),
+    ).toHaveAttribute("aria-current", "page");
+
+    const sectionNavigation = screen.getByRole("navigation", {
+      name: "页面章节",
+    });
+    expect(within(sectionNavigation).getByRole("link", { name: "贵在哪里" })).toHaveAttribute(
       "href",
-      "./index.html#limitations",
+      "#brief",
+    );
+    expect(within(sectionNavigation).getByRole("link", { name: "卖它值不值" })).toHaveAttribute(
+      "href",
+      "#framework",
     );
 
     expect(screen.getByRole("link", { name: "方法论" })).toHaveAttribute(
@@ -1421,6 +1479,22 @@ describe("EvidenceConsole", () => {
       "href",
       "./terms.html",
     );
+    expect(screen.getByRole("link", { name: "发布状态" })).toHaveAttribute(
+      "href",
+      "./status.html",
+    );
+  });
+
+  it("highlights the explicit third global view when workbench is selected", async () => {
+    window.history.pushState(window.history.state, "", "/?view=workbench");
+    render(<App loadReport={() => Promise.resolve(loadedReport(publishedReport))} />);
+
+    const navigation = await screen.findByRole("navigation", {
+      name: "全视图导航",
+    });
+    expect(
+      within(navigation).getByRole("link", { name: "③ 候选工作台" }),
+    ).toHaveAttribute("aria-current", "page");
     expect(
       screen.queryByRole("navigation", { name: "页面章节" }),
     ).not.toBeInTheDocument();
@@ -1443,7 +1517,7 @@ describe("EvidenceConsole", () => {
       />,
     );
 
-    await screen.findByRole("navigation", { name: "五幕叙事" });
+    await screen.findByRole("navigation", { name: "全视图导航" });
     const boundary = screen.getByRole("region", {
       name: "研究边界与证据缺口",
     });
@@ -1468,7 +1542,8 @@ describe("EvidenceConsole", () => {
     const publishedFreshnessGate = screen
       .getByText("发布计算时数据新鲜度")
       .closest("article");
-    expect(publishedFreshnessGate).toHaveTextContent(/当次评估：\d+ 秒/);
+    expect(publishedFreshnessGate).toHaveTextContent(/采集 .* · 发布 .* · 评估 /);
+    expect(publishedFreshnessGate).toHaveTextContent(/距采集 \d+\.\d 小时/);
     expect(publishedFreshnessGate).not.toHaveTextContent(/当前：\d+ 秒/);
     expect(screen.queryByText(/Regime、账户、路径风险/)).not.toBeInTheDocument();
     expect(

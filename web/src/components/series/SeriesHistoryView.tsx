@@ -262,11 +262,11 @@ function InstrumentDetail({
 }
 
 /** Loads the series artifact the engine serves. */
-export function useSeriesArtifact(): SeriesArtifact | null {
+export function useSeriesArtifact(url = "/research/series"): SeriesArtifact | null {
   const [artifact, setArtifact] = useState<SeriesArtifact | null>(null);
   useEffect(() => {
     let cancelled = false;
-    void fetch("/research/series")
+    void fetch(url)
       .then((response) => (response.ok ? response.json() : null))
       .then((payload) => {
         if (!cancelled) {
@@ -281,6 +281,6 @@ export function useSeriesArtifact(): SeriesArtifact | null {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [url]);
   return artifact;
 }

@@ -4151,6 +4151,30 @@ p {
   padding: 24px var(--page-gutter) 48px;
 }
 
+.signal-view-embedded {
+  max-width: none;
+  margin-top: 48px;
+  padding: 0 32px 32px;
+  scroll-margin-top: 128px;
+}
+
+.signal-view-embedded > .research-section-heading {
+  margin-right: -32px;
+  margin-left: -32px;
+}
+
+@media (max-width: 860px) {
+  .signal-view-embedded {
+    margin-top: 32px;
+    padding: 0 20px 24px;
+  }
+
+  .signal-view-embedded > .research-section-heading {
+    margin-right: -20px;
+    margin-left: -20px;
+  }
+}
+
 .signal-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

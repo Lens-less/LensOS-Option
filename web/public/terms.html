@@ -3,32 +3,50 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>使用条款 · LensOS Option</title>
+    <title>使用条款 | LensOS Option</title>
     <link rel="stylesheet" href="./static-page.css" />
   </head>
   <body>
     <main>
       <div class="page-shell">
         <header class="page-header">
-          <a href="./index.html">返回公开站</a>
+          <a href="./index.html">返回公开首页</a>
+          <nav aria-label="语言切换">
+            <a href="./en/terms.html">English</a>
+          </nav>
         </header>
         <div class="page-title">
           <p>Terms / 使用边界</p>
           <h1>使用条款</h1>
-          <p>公开站提供研究展示与静态数据产物，不提供 SLA、执行能力或交易承诺。</p>
+          <p>公开站提供研究发布物与静态数据产物；代码、数据和生成物各自受对应许可证约束。</p>
         </div>
         <section class="page-section">
+          <h2>许可证</h2>
           <ul>
-            <li>可阅读、引用与研究公开内容，但不得将其表述为交易建议。</li>
-            <li>如引用公开数据，请保留来源说明与研究边界说明。</li>
-            <li>站点与静态 API 不承诺实时性、连续可用性或特定更新节奏。</li>
-            <li>不得将本公开站解释为与 Deribit 官方存在任何背书或关联。</li>
+            <li>源代码按 <code>Apache-2.0</code> 发布，见 <a href="./LICENSE">LICENSE</a>。</li>
+            <li>公开数据产物、JSON 输出和生成的公共研究内容按 <code>CC BY 4.0</code> 发布，见 <a href="./LICENSE-DATA">LICENSE-DATA</a>。</li>
+            <li>第三方市场数据和上游接口内容仍受其各自条款约束，不因本仓库而重新授权。</li>
+          </ul>
+        </section>
+        <section class="page-section">
+          <h2>使用边界</h2>
+          <ul>
+            <li>可阅读、引用和再利用公开内容，但不得把它写成投资建议、交易指令或执行服务。</li>
+            <li>引用公开 JSON 或静态研究页时，请保留来源链接、页面标题和发布时间或版本标识。</li>
+            <li>公开站不代表 Deribit 官方，不形成任何背书、关联或代理关系。</li>
+          </ul>
+        </section>
+        <section class="page-section">
+          <h2>无保证</h2>
+          <ul>
+            <li>站点和静态 API 以现状提供，不承诺 SLA、可用性、连续更新或适配某个浏览器/托管平台。</li>
+            <li>如果页面、许可证文件与上游文档出现差异，以许可证文件和发布器输出为准。</li>
           </ul>
         </section>
         <footer class="page-footer">
-          <span>LensOS Option · research only</span>
+          <span>LensOS Option / research only</span>
           <nav aria-label="页脚链接">
-            <a href="./methodology.html">方法论</a>
+            <a href="./methodology.html">方法页</a>
             <a href="./disclaimer.html">免责声明</a>
             <a href="./privacy.html">隐私政策</a>
             <a href="./terms.html">使用条款</a>

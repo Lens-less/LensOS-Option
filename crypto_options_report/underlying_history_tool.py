@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--days",
         type=int,
-        default=1095,
+        default=1200,
         help=f"calendar days of history (1..{MAX_UNDERLYING_HISTORY_DAYS})",
     )
     parser.add_argument(

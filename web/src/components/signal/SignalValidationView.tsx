@@ -35,41 +35,50 @@ function num(value: unknown): number | null {
  */
 export function SignalValidationView({
   artifact,
+  embedded = false,
 }: {
   artifact: SignalArtifact | null;
+  embedded?: boolean;
 }): React.JSX.Element {
+  const Root = embedded ? "section" : "main";
+  const Heading = embedded ? "h2" : "h1";
+  const rootClassName = embedded
+    ? "research-section signal-view signal-view-embedded"
+    : "signal-view";
+  const rootId = embedded ? "signal" : "surface-main";
+
   if (!artifact) {
     return (
-      <main className="signal-view" id="surface-main">
+      <Root className={rootClassName} id={rootId}>
         <p className="signal-loading" role="status">
           正在读取信号验证产物…
         </p>
-      </main>
+      </Root>
     );
   }
 
   if (artifact.status === "not_configured") {
     return (
-      <main className="signal-view" id="surface-main">
+      <Root className={rootClassName} id={rootId}>
         <header className="research-section-heading">
           <div>
             <p className="section-kicker">Signal validation / 信号验证</p>
-            <h1>排序信号有没有预测力</h1>
+            <Heading>排序信号有没有预测力</Heading>
           </div>
         </header>
         <p className="signal-empty">
           {artifact.detail || "验证产物尚未接入；这不改变研究边界，只是当前无法展示统计结论。"}
         </p>
-      </main>
+      </Root>
     );
   }
 
   return (
-    <main className="signal-view" id="surface-main">
+    <Root className={rootClassName} id={rootId}>
       <header className="research-section-heading">
         <div>
           <p className="section-kicker">Signal validation / 信号验证</p>
-          <h1>排序信号有没有预测力</h1>
+          <Heading>排序信号有没有预测力</Heading>
         </div>
         <p>
           排序主轴本身也在被度量之列，结论可能是「没有可检出的 edge」。
@@ -86,7 +95,7 @@ export function SignalValidationView({
       {artifact.status === "blocked" ? (
         <BlockedSection artifact={artifact} />
       ) : null}
-    </main>
+    </Root>
   );
 }
 
@@ -413,11 +422,11 @@ function MeasuredSections({
 }
 
 /** Loads the artifact the engine serves, keeping the previous render on refetch. */
-export function useSignalArtifact(): SignalArtifact | null {
+export function useSignalArtifact(url = "/research/signal"): SignalArtifact | null {
   const [artifact, setArtifact] = useState<SignalArtifact | null>(null);
   useEffect(() => {
     let cancelled = false;
-    void fetch("/research/signal")
+    void fetch(url)
       .then((response) => (response.ok ? response.json() : null))
       .then((payload) => {
         if (!cancelled) {
@@ -432,7 +441,7 @@ export function useSignalArtifact(): SignalArtifact | null {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [url]);
   return artifact;
 }
 

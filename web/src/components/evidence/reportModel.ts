@@ -215,10 +215,13 @@ export const FRESHNESS_LABELS: Record<FreshnessPhase, string> = {
 
 export function formatPublishedAge(ageSec: number | null | undefined): string {
   if (ageSec === null || ageSec === undefined) {
-    return "距今时间不可验证";
+    return "距采集时间不可验证";
   }
-  const hours = Math.floor(ageSec / 3_600);
-  return `距今 ${hours.toLocaleString("zh-CN")} 小时`;
+  const hours = ageSec / 3_600;
+  return `距采集 ${hours.toLocaleString("zh-CN", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })} 小时`;
 }
 
 export function formatCutoffTime(value: string | null | undefined): string {

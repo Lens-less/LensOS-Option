@@ -14,6 +14,7 @@ import {
   candidateById,
   candidateRows,
   evCandidateScannerOf,
+  researchRankingValueLabel,
   scannerStatus,
   sortCandidateRows,
   structureTypeOptions,
@@ -212,7 +213,7 @@ export function ResearchWorkbench({
           <h1>候选筛选</h1>
         </div>
         <p className="workbench-bar-note">
-          分层由服务端判定；筛选只缩小范围，不改变分层。
+          分层由服务端判定；筛选只缩小范围，不改变分层。排序先看前沿位置，再按支配轴细排。
         </p>
       </div>
 
@@ -295,7 +296,7 @@ export function ResearchWorkbench({
           <details className="workbench-provenance">
             <summary>
               排序口径与打分状态
-              <span>{scanner?.score_status ?? "UNAVAILABLE"}</span>
+              <span>{researchRankingValueLabel(scanner?.score_status)}</span>
             </summary>
             <ScoreProvenance scanner={scanner} />
           </details>
@@ -330,8 +331,8 @@ export function ResearchWorkbench({
             <dd>RESEARCH_ONLY · NO_TRADE</dd>
           </div>
           <div data-tone="warning">
-            <dt>打分状态</dt>
-            <dd>{scanner?.score_status ?? "UNAVAILABLE"}</dd>
+            <dt>排序口径</dt>
+            <dd>{researchRankingValueLabel(scanner?.score_status)}</dd>
           </div>
         </dl>
       </section>

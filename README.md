@@ -2,8 +2,8 @@
 
 [English](README.en.md) · 中文
 
-一个**期权入场前的研究工具**：它读取 Deribit 的公开行情，判断「现在有没有一个
-值得考虑的卖方机会」，并把结论所依赖的每一份证据都摊开给你看。
+一个**期权入场前的研究工具**：它读取 Deribit 的公开行情，判断“现在有没有一个
+值得考虑的卖方机会”，并把结论所依赖的每一份证据都摊开给你看。
 
 它面向的是**自己做决策的期权卖方**——你想要一份可复核、可回放的入场前分析，而
 不是一个替你下单的黑盒。
@@ -14,18 +14,21 @@
 它的两个核心特性：
 
 - **evidence-first**：每个结论都能追溯到具体证据。没有证据支撑的数字不会被编造出来，
-  而是显式标记为「缺失」。
-- **fail-closed**：证据缺失、过期或校验失败时，一律降级为「阻断」。**没有信号 ≠ 放行。**
+  而是显式标记为“缺失”。
+- **fail-closed**：证据缺失、过期或校验失败时，一律降级为“阻断”。**没有信号 ≠ 放行。**
 
 ## 两种使用形态
 
 | 形态 | 用途 |
 | --- | --- |
-| **Web 研究工作台** | 筛选、排序、并排对比候选，逐个查看打分依据与收益曲线。挖掘与理解的主场。 |
-| **Chrome 研究伴侣** | 在 Deribit 页面上就地回答"我正在看的这张合约有没有 edge、同链有没有更好的"。 |
+| **Web research workbench** | 筛选、排序、并排对比候选，逐个查看打分依据与收益曲线。挖掘与理解的主场。 |
+| **Chrome research companion** | 在 Deribit 页面上就地回答“我正在看的这张合约有没有 edge、同链有没有更好的”。 |
 
 CLI 与 HTTP API 是驱动这两个界面的**本地引擎接口**，供集成、调度与自动化使用，
 不作为独立产品维护。
+
+公开静态 bundle 只包含证据站与法务页，不包含 workbench 或 Chrome companion；这两个
+界面属于内部 / 本地形态。
 
 ---
 
@@ -58,12 +61,12 @@ python -m crypto_options_report.api --host 127.0.0.1 --port 8000 --replay `
 
 `--replay` 把评估时钟固定到快照自己的采集时刻。没有它，任何超过 60 秒的录制文件都会
 被新鲜度门禁挡掉——这是 CLI 一直在做的事（`--generated-at` 默认取 `captured_at`），
-HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标读起来都像"当前"**，所以它是
+HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标读起来都像“当前”**，所以它是
 启动参数而不是浏览器参数，并且每个界面都会显示一条无法关闭的回放横幅标出被固定的时刻。
 
 不带 `--replay` 时服务按实时模式运行，快照过期就如实阻断。
 
-> **没有配置市场数据源时会看到大量「不可用 / 缺失」，这是正常的。** 产品按设计拒绝
+> **没有配置市场数据源时会看到大量“不可用 / 缺失”，这是正常的。** 产品按设计拒绝
 > 编造任何数值。空状态会列出缺什么、以及补齐它的确切命令。
 >
 > 同理，production 模式下 `/readyz` 会稳定返回 `503`：当前没有可提升的模型，
@@ -76,19 +79,35 @@ HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标�
 再把经过白名单裁剪的报告和前端一起发布成纯静态目录：
 
 ```powershell
+$siteOrigin = $env:LENSOS_PUBLIC_SITE_ORIGIN
+if ([string]::IsNullOrWhiteSpace($siteOrigin)) {
+  throw '请先把 LENSOS_PUBLIC_SITE_ORIGIN 设为最终自有 HTTPS 域名。'
+}
+
 crypto-options-report publish `
   --snapshot artifacts/snapshots/btc-series/<capture>.json `
   --underlying-history artifacts/history/btc-daily.json `
   --dvol-history artifacts/history/btc-dvol.json `
   --signal-artifact artifacts/reports/signal-preflight.json `
   --series-artifact artifacts/reports/series-history.json `
+  --publication-history artifacts/reports/publication-history.json `
+  --web-build web/dist-public `
+  --site-origin $siteOrigin `
   --out dist/site --published-at <UTC-RFC3339> --git-sha <commit>
 ```
 
-输出目录可直接交给任意静态托管/CDN。质量门禁失败、VRP 历史不足或含账户/仓位/订单字段时
+`--site-origin` 必须是最终自有的 HTTPS 纯域名（不能带路径、查询、凭证或非默认端口）；
+它会进入 canonical 分享元数据、`robots.txt` 与 `sitemap.xml`。发布器会拒绝
+`example.*`、`.invalid`、`.alt`、localhost、单标签域名和 IP 字面量；正式工作流还会拒绝
+解析到 IANA 特殊用途/非公网地址的主机。未确定正式域名时只构建并测试 `web/dist-public`，
+不要生成带虚假 canonical 的发布树。
+
+输出目录按 Cloudflare Pages 的 `_headers` 契约构建。质量门禁失败、VRP 历史不足或含账户/仓位/订单字段时
 发布器会失败关闭；浏览器检测到数据截止时间已超过 48 小时后，整站进入“发布已停摆”态。
 完整接口与运维约定见
 [公开 API](docs/api-public.md) 和[静态发布手册](docs/operations/public-publishing.md)。
+
+公开 bundle 只包含公开观测站所需的静态页面与 JSON，不包含 workbench 或 Chrome companion。
 
 `research_publication` 只回答“这份静态研究能否公开”；`execution_authorization` 只回答
 “系统能否用于交易执行”。两者互不提升，后者永久保持 `NO-GO`。
@@ -102,7 +121,7 @@ crypto-options-report publish `
 | `research_only` | 输出的固定模式：仅供研究，不构成下单指令。不会被任何配置改变。 |
 | mode gate（模式门禁） | 拦截一切越界输出的检查点。交易建议、推荐手数、下单指令都被它挡住。 |
 | `AnalysisRecord` | 一次分析的**不可变**完整记录，可信输出的载体。 |
-| `EntryAdmissionDecision` | 可信输出的**上限**：「能不能进场考虑」，恒有 `execution_allowed=false`。 |
+| `EntryAdmissionDecision` | 可信输出的**上限**：“能不能进场考虑”，恒有 `execution_allowed=false`。 |
 | evidence class | 证据可信度：`trusted` / `degraded` / `untrusted` / `missing`。 |
 | replay（可回放） | 同一份快照 + 同一个显式时钟 ⇒ 输出逐字节一致，结论可被独立复核。 |
 
@@ -123,7 +142,7 @@ WebSocket gap/resync、24 小时 soak 与连续 7 天证据仍属于内部运行
 
 ### 找出有 edge 的候选
 
-产品的核心问题是"现在这条链上，哪个卖点最划算"。它分两层回答，**不要混淆**：
+产品的核心问题是“现在这条链上，哪个卖点最划算”。它分两层回答，**不要混淆**：
 
 - **相对价值** — 该行权价相对自身微笑曲线是贵还是便宜。只需当前链条，随时可得。
 - **绝对预期价值** — 收信用 − 预期赔付 − 手续费。需要标的的历史收益分布。
@@ -145,7 +164,7 @@ crypto-options-report scan `
 ```
 
 排名用 **Pareto 前沿 + 已发布的字典序**，不做加权求和——给不同量纲的分量配权重，
-等于声明一个未经证实的相对重要性。被支配的候选会附带"输给了谁、输在哪几个维度"。
+等于声明一个未经证实的相对重要性。被支配的候选会附带“输给了谁、输在哪几个维度”。
 当前沿吞掉几乎全部候选（6 个维度下很常见），`frontier_occupancy` 会如实报告排序实际上
 已经退化成第一个维度的字典序。
 
@@ -172,8 +191,8 @@ crypto-options-report scan `
 
 - **跨到期日不给联合最大亏损**，只给明确标注的上界（各成员最坏情况之和）；只有全部腿
   同一到期日时才算真正的联合 payoff。两个方向相反的价差合起来的最坏情况远小于两者之和。
-- 净 vega 与**按到期日拆分的 vega** 并列——净值隐含"波动率平行移动"这个假设。
-- 边际贡献按"把它移出组合"来算，而不是它自己的最坏情况。
+- 净 vega 与**按到期日拆分的 vega** 并列——净值隐含“波动率平行移动”这个假设。
+- 边际贡献按“把它移出组合”来算，而不是它自己的最坏情况。
 
 ### 这个行权价昨天也这么贵吗
 
@@ -185,14 +204,14 @@ crypto-options-report series-history `
 ```
 
 `tools/capture-daily.ps1` 每次采集后会自动重建这份产物；把它交给引擎（`--series-artifact`）
-就能在「序列历史」页里看到**合约 × 采集日**的标准化残差热力图。
+就能在“序列历史”页里看到**合约 × 采集日**的标准化残差热力图。
 
 三个刻意的设计：
 
 - **用标准化残差而不是原始 IV。** 合约每天都在临近到期，IV、delta、权利金都会因此移动，
   与错价无关；只有按各到期日自身残差尺度标准化后的值才跨日可比。
 - **缺采集不是零。** 采集器从几百个挂牌合约里选约一百个、且随现价漂移，所以缺席很常见。
-  空心格是「没采」，实心格才是读数，两者从不互相冒充。
+  空心格是“没采”，实心格才是读数，两者从不互相冒充。
 - **排序按向零收缩的均值。** 否则只出现三天的合约会靠三个读数排到最前面——这正是这个
   项目到处在防的样本量错误。收缩常数是发布的。
 
@@ -219,18 +238,24 @@ crypto-options-report pull-snapshot --currency BTC --instrument-limit 64 `
 
 ```powershell
 $repo = "C:\path\to\Option"
+$evidenceRepo = "C:\path\to\LensOS-Option-Evidence"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$repo\tools\capture-daily.ps1`"" `
+  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$repo\tools\capture-daily.ps1`" -RepoRoot `"$repo`" -EnableEvidenceRepoSync -EvidenceRepoRoot `"$evidenceRepo`" -EvidenceRepoRemote origin -HistoryDays 1200 -DvolHistoryDays 1095" `
   -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 17:00
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
-  -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+  -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
 Register-ScheduledTask -TaskName "LensOS-Option-DailyCapture" `
   -Action $action -Trigger $trigger -Settings $settings -Force
 ```
 
+失败通知和成功 dead-man ping 分别从 `CAPTURE_DAILY_FAILURE_WEBHOOK_URL` 与
+`CAPTURE_DAILY_SUCCESS_HEARTBEAT_URL` 读取。不要把 webhook URL 直接写进可被其他本机用户
+读取的计划任务参数；应通过运行该任务的专用账户注入。外部监控还必须独立拉取公开
+`health.json` 并比较 `stale_after`，成功 ping 不能替代这条正向检查。
+
 采集日志在 `artifacts/logs/capture-daily.log`。同一天跑多次是安全的：验证器按
-「日期 × 合约」去重并报告丢弃了多少条，不会让重复行把当日横截面的相关性拉紧。
+“日期 × 合约”去重并报告丢弃了多少条，不会让重复行把当日横截面的相关性拉紧。
 
 **攒够 8 个 cohort 需要约 2 个月，不是几周。** 7–35 天窗口内同时只挂着 3 个到期日，新的
 周度到期日每周才进来一个。Deribit 确实有 1–5 天的日到期合约（看起来能把速度提高八倍），
@@ -249,7 +274,7 @@ crypto-options-report validate-signal --preflight `
 
 它按到期日列出已结算 / 待结算的 cohort、每个能贡献多少观测、以及被什么挡住了。
 
-把产物交给引擎，就能在界面的「信号验证」页里读，不必反复跑命令看 JSON：
+把产物交给引擎，就能在界面的“信号验证”页里读，不必反复跑命令看 JSON：
 
 ```powershell
 python -m crypto_options_report.api --replay `
@@ -269,7 +294,7 @@ crypto-options-report validate-signal `
 
 它一次度量 10 个候选信号（微笑残差的三种量纲、IV 减历史波动率、IV 减 DVOL、期限溢价、
 局部偏斜、持仓量占比、深度失衡、报价宽度），并附一份**共线性报告**：数信号不等于数信息。
-任何形如「IV 减去一个当日常数」的信号在当日内秩完全相同——拿 DVOL 减和拿历史波动率减
+任何形如“IV 减去一个当日常数”的信号在当日内秩完全相同——拿 DVOL 减和拿历史波动率减
 是同一个排序穿了两件衣服。`distinct_signal_estimate` 给出实际有几个不同的排序。
 
 ### EV 是负的，到底是哪一种负
@@ -295,8 +320,8 @@ crypto-options-report ev-robustness `
 两个设计决定了它是否值得信：
 
 - **样本量按到期日 cohort 计**，不按观测数。相邻两天的快照是同一批合约、同一个结算价。
-- **相关性先做 moneyness 中性化**。原始相关系数被虚值程度主导——一个等价于"按行权价
-  排序"的信号在毫无错价信息的对照组里也能拿到 0.95 的 IC。原始值仍并列展示，好让你
+- **相关性先做 moneyness 中性化**。原始相关系数被虚值程度主导——一个等价于“按行权价
+  排序”的信号在毫无错价信息的对照组里也能拿到 0.95 的 IC。原始值仍并列展示，好让你
   看见这个混淆有多大。
 
 排序主轴自身也在被度量之列，结果可能是 `no_detectable_edge`。**这正是它存在的意义。**
@@ -304,7 +329,7 @@ crypto-options-report ev-robustness `
 **只有一个轴可以从这份样本被提升。** 2026-07-27（当时 0/8 个 cohort 已结算）事前登记了
 `smile_residual_z`，阈值 `|t| ≥ 2.0`。其余九个信号是探索性的——即使某个得分更高，也只能
 用于设计下一次登记，不能从这份样本提升。理由是多重比较：约 7 个不同排序下，在同一份样本上
-挑最高分再提升，常规阈值有相当概率从噪声里挑出「赢家」。登记内容随验证产物一起发布
+挑最高分再提升，常规阈值有相当概率从噪声里挑出“赢家”。登记内容随验证产物一起发布
 （`pre_registration`），界面上也会标出登记轴与本样本得分最高者的区别。
 
 ### CLI（内部管道）
@@ -347,7 +372,7 @@ npm ci
 npm run build:extension
 ```
 
-在 `chrome://extensions` 打开「开发者模式」→「加载已解压的扩展程序」→ 选择
+在 `chrome://extensions` 打开“开发者模式”→“加载已解压的扩展程序”→ 选择
 `web/dist/chrome-extension/`，然后在 Deribit 页面点击工具栏图标。
 
 侧边栏只读取 `http://127.0.0.1:<port>/research/report`，只识别当前 Deribit 合约并
@@ -399,10 +424,10 @@ npm ci && npm test && npm run lint && npm run build
 ## 安全边界
 
 本项目**刻意不包含实盘下单适配器**。可信输出上限是 `execution_allowed=false` 的
-`EntryAdmissionDecision`，其中不含可执行张数或下单指令。裸卖 call 只作为「已拒绝的
-无界损失对照」出现在可信记录中。
+`EntryAdmissionDecision`，其中不含可执行张数或下单指令。裸卖 call 只作为“已拒绝的
+无界损失对照”出现在可信记录中。
 
-不要以「清理研究控制台」的名义加入订单模板、下单路径、paper/manual 候选控件或
+不要以“清理研究控制台”的名义加入订单模板、下单路径、paper/manual 候选控件或
 sizing 输出。
 
 漏洞请通过 GitHub Security Advisory 私下报告，详见 [SECURITY.md](SECURITY.md)。
@@ -413,4 +438,5 @@ Deribit 接入以官方 [public market-data API](https://docs.deribit.com/api-re
 
 ## 许可
 
-尚未选定许可证。在选定并加入 `LICENSE` 之前，本仓库默认保留所有权利，不可再分发。
+代码按 [Apache-2.0](LICENSE) 发布；公开数据产物和生成的公共研究内容按
+[CC BY 4.0](LICENSE-DATA) 发布。

@@ -2915,7 +2915,7 @@ _UNDERLYING_RESOLUTIONS = {"1D": 86400, "12H": 43200, "1H": 3600}
 def fetch_deribit_underlying_history(
     *,
     currency: str = "BTC",
-    days: int = 1095,
+    days: int = 1200,
     resolution: str = "1D",
     base_url: str = DEFAULT_DERIBIT_BASE_URL,
     timeout: int = 15,
@@ -2973,21 +2973,43 @@ def fetch_deribit_underlying_history(
 
     observations: list[dict[str, Any]] = []
     previous_ms: int | None = None
+    observed_dates: set[str] = set()
+    resolution_ms = _UNDERLYING_RESOLUTIONS[resolution] * 1000
     for raw_ts, raw_close in zip(ticks, closes, strict=True):
-        timestamp_ms = _coerce_vol_index_timestamp_ms(raw_ts)
+        candle_open_ms = _coerce_vol_index_timestamp_ms(raw_ts)
+        timestamp_ms = candle_open_ms + resolution_ms
+        # Deribit includes the currently forming candle.  A trailing realized
+        # volatility series must compare like with like, so only candles whose
+        # entire interval ended before capture are eligible.  The normalized
+        # observation timestamp is the close/availability time, not the API's
+        # candle-open tick; this keeps the 08:00Z daily settlement honest.
+        if timestamp_ms > end_ms:
+            continue
         close = _to_number(raw_close)
         if close is None or close <= 0:
             raise ValueError("underlying history close must be a positive number")
         if previous_ms is not None and timestamp_ms <= previous_ms:
             raise ValueError("underlying history must be strictly increasing in time")
         previous_ms = timestamp_ms
+        observed_at = _timestamp_from_ms(timestamp_ms)
+        if resolution == "1D":
+            observed_date = observed_at[:10]
+            if observed_date in observed_dates:
+                raise ValueError(
+                    "underlying history must contain one observation per UTC day"
+                )
+            observed_dates.add(observed_date)
         observations.append(
             {
                 "timestamp_ms": timestamp_ms,
-                "observed_at": _timestamp_from_ms(timestamp_ms),
+                "observed_at": observed_at,
+                "candle_open_at": _timestamp_from_ms(candle_open_ms),
                 "close": close,
             }
         )
+
+    if not observations:
+        raise ValueError("underlying history returned no closed candles")
 
     return {
         "schema_version": UNDERLYING_HISTORY_SCHEMA_VERSION,
@@ -2997,6 +3019,7 @@ def fetch_deribit_underlying_history(
         "currency": base_currency,
         "resolution": resolution,
         "resolution_seconds": _UNDERLYING_RESOLUTIONS[resolution],
+        "closed_candles_only": True,
         "requested_days": days,
         "observation_count": len(observations),
         "first_observed_at": observations[0]["observed_at"],
@@ -3033,6 +3056,8 @@ def load_underlying_history_fixture(
     if not isinstance(observations, list) or len(observations) < 2:
         raise ValueError("underlying history fixture must contain observations")
     previous_ms: int | None = None
+    observed_dates: set[str] = set()
+    daily_resolution = payload.get("resolution_seconds") == 86400
     for row in observations:
         if not isinstance(row, dict):
             raise ValueError("underlying history observations must be objects")
@@ -3045,4 +3070,23 @@ def load_underlying_history_fixture(
         if previous_ms is not None and timestamp_ms <= previous_ms:
             raise ValueError("underlying history must be strictly increasing in time")
         previous_ms = timestamp_ms
+        observed_at = row.get("observed_at")
+        if observed_at != _timestamp_from_ms(timestamp_ms):
+            raise ValueError("underlying history observed_at must match timestamp_ms")
+        candle_open_at = row.get("candle_open_at")
+        if candle_open_at is not None:
+            expected_open_at = _timestamp_from_ms(
+                timestamp_ms - int(payload.get("resolution_seconds") or 0) * 1000
+            )
+            if candle_open_at != expected_open_at:
+                raise ValueError(
+                    "underlying history candle_open_at must match the candle interval"
+                )
+        if daily_resolution:
+            observed_date = str(observed_at)[:10]
+            if observed_date in observed_dates:
+                raise ValueError(
+                    "underlying history must contain one observation per UTC day"
+                )
+            observed_dates.add(observed_date)
     return payload

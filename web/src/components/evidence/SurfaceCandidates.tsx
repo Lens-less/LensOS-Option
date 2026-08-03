@@ -187,7 +187,7 @@ export function SurfaceResearch({
                   <div>
                     <span>{formatExpiry(expiry.expiry_date ?? null)}</span>
                     <strong>
-                      {finiteNumber(expiry.dte_days)?.toFixed(1) ?? "—"} DTE
+                      {finiteNumber(expiry.dte_days)?.toFixed(1) ?? "不可用"} DTE
                     </strong>
                   </div>
                   <dl>

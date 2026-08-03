@@ -4,17 +4,26 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape as xml_escape
 
 from ._canonical import canonical_json_text, canonical_sha256
 from .analysis_run import CODE_VERSION, build_analysis_record
 from .contract import validate_report_contract
+from .empirical_rank import vrp_band_for_percentile
 from .full_surface import build_release_gates, validate_full_system_surface_report
 from .market_data import load_snapshot_fixture, load_underlying_history_fixture
+from .og_card import render_og_card, validate_og_card_png
+from .public_api_contract import build_public_openapi
+from .public_bundle_policy import forbidden_bundle_tokens
+from .public_origin import validate_public_site_origin
+from .public_status_page import render_public_status_html
+from .publication_history import build_publication_history
 from .storage import read_json_object_from_regular_file
 from .vrp import build_vrp_status, load_dvol_history_fixture
 
@@ -24,9 +33,11 @@ PUBLICATION_CANDIDATES_SCHEMA = "public_candidates.v1"
 PUBLICATION_SIGNAL_SCHEMA = "public_signal.v1"
 PUBLICATION_HEALTH_SCHEMA = "public_health.v1"
 PUBLICATION_STATUS_SCHEMA = "public_status.v1"
+PUBLICATION_THERMO_SCHEMA = "public_thermo.v1"
 PUBLISH_CADENCE = "daily"
 PUBLISH_INTERVAL = timedelta(days=1)
 MIN_VALIDATED_VRP_SAMPLE_COUNT = 1000
+RECENT_THERMO_WINDOW_DAYS = 90
 PUBLIC_SITE_TITLE = "\u0042\u0054\u0043\u0020\u671f\u6743\u5356\u65b9\u6ea2\u4ef7\u6301\u7eed\u89c2\u5bdf\u53f0"
 PUBLIC_SITE_DESCRIPTION = (
     "\u0042\u0054\u0043\u0020\u671f\u6743\u5356\u65b9\u6ea2\u4ef7\u6301\u7eed\u89c2\u5bdf\u53f0\uff1a"
@@ -38,6 +49,7 @@ _MANIFEST_PATHS = {
     ".well-known/publish-manifest.json",
     "api/v1/manifest.json",
 }
+_PUBLIC_LICENSE_FILES = {"LICENSE", "LICENSE-DATA"}
 _FORBIDDEN_PUBLICATION_KEYS = {
     "api_key",
     "access_token",
@@ -74,13 +86,186 @@ _FORBIDDEN_PUBLICATION_KEYS = {
     "trade_instruction",
     "trade_instructions",
 }
-_ABSOLUTE_LOCAL_PATH_RE = re.compile(
-    r"(?:file://|(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\[^\\]"
-    r"|/(?:Users|home|root|tmp|var(?:/tmp)?|Volumes|private/(?:tmp|var)"
-    r"|workspace|workspaces|github/workspace|mnt|opt)(?:[\\/]|$)"
-    r"|(?:^|\s)~[\\/])",
+_WINDOWS_DRIVE_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|[A-Za-z]:\\\\)",
     re.IGNORECASE,
 )
+_UNC_PATH_RE = re.compile(
+    r"\\\\[A-Za-z0-9._$-]+[\\/][^\\/\s]+",
+    re.IGNORECASE,
+)
+_UNIX_ABSOLUTE_PATH_RE = re.compile(
+    r"/(?:Users|home|root|tmp|var/tmp|Volumes|private/tmp|private/var|workspace|workspaces|github/workspace|mnt|opt)/[^\s]+",
+    re.IGNORECASE,
+)
+_GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+
+_SIGNAL_CONFIG_FIELDS = {
+    "bucket_count",
+    "max_dte_days",
+    "min_dte_days",
+    "min_independent_cohorts",
+    "min_observations",
+    "min_observations_per_date",
+    "trailing_vol_window_days",
+}
+_SERIES_CONFIG_FIELDS = {
+    "max_instruments",
+    "min_capture_dates",
+}
+_SIGNAL_SAMPLE_FIELDS = {
+    "duplicate_observations_dropped",
+    "excluded_snapshot_count",
+    "excluded_snapshots",
+    "expiry_cohorts",
+    "independent_expiry_cohorts",
+    "observation_count",
+    "sample_size_basis",
+    "settlement_basis",
+    "settlement_note",
+    "snapshot_count",
+    "snapshot_date_count",
+    "validated_snapshot_count",
+}
+_SIGNAL_SUMMARY_FIELDS = {
+    "best_exploratory_signal",
+    "pre_registered_axis",
+    "pre_registered_axis_verdict",
+    "promotion_eligible",
+    "promotion_eligibility_basis",
+    "signals_measured",
+    "signals_with_detectable_ic",
+}
+_SIGNAL_INFORMATION_COEFFICIENT_FIELDS = {
+    "mean",
+    "method",
+    "neutralization",
+    "stdev_across_dates",
+    "t_stat",
+}
+_SIGNAL_RAW_IC_FIELDS = {
+    "mean",
+    "measured_date_count",
+    "method",
+    "warning",
+}
+_SIGNAL_BUCKET_FIELDS = {
+    "bucket",
+    "expired_itm_rate",
+    "independent_expiry_cohorts",
+    "mean_pnl_per_vega_iv_points",
+    "mean_pnl_usd",
+    "median_pnl_per_vega_iv_points",
+    "observation_count",
+    "signal_max",
+    "signal_min",
+    "win_rate",
+}
+_SIGNAL_PER_DATE_FIELDS = {
+    "information_coefficient",
+    "observation_count",
+    "raw_information_coefficient",
+    "snapshot_date",
+}
+_SIGNAL_MEASUREMENT_FIELDS = {
+    "buckets",
+    "definition",
+    "effective_sample_basis",
+    "effective_sample_size",
+    "evidence_verdict",
+    "independent_expiry_cohorts",
+    "information_coefficient",
+    "measured_date_count",
+    "observation_count",
+    "per_date",
+    "raw_information_coefficient",
+    "reason_code",
+    "status",
+}
+_SIGNAL_BAND_FIELDS = {
+    "cohorts_required",
+    "cohorts_seen",
+    "cohorts_short_by",
+    "next_pending_expiry",
+    "pending_cohorts",
+    "pending_observation_count",
+    "settled_cohorts",
+    "settled_observation_count",
+    "would_be_ready_after_expiry",
+}
+_SIGNAL_COHORT_FIELDS = {
+    "band",
+    "blocking_reasons",
+    "capture_date_count",
+    "dte_days_max",
+    "dte_days_min",
+    "expiry_date",
+    "first_capture_date",
+    "fitted_capture_count",
+    "last_capture_date",
+    "name",
+    "observation_count",
+    "prospective_observation_count",
+    "registered_at",
+    "settlement_close_available",
+    "status",
+}
+_SIGNAL_EXCLUDED_SNAPSHOT_FIELDS = {"captured_at", "reason_code"}
+_SIGNAL_PRE_REGISTRATION_FIELDS = {
+    "axis",
+    "document",
+    "note",
+    "registered_at",
+    "threshold",
+}
+_SERIES_INSTRUMENT_FIELDS = {
+    "capture_date_count",
+    "expiry_date",
+    "instrument_name",
+    "latest",
+    "missing_date_count",
+    "option_type",
+    "persistence",
+    "points",
+    "residual_z",
+    "strike_price",
+}
+_SERIES_LATEST_FIELDS = {
+    "bid_usdc",
+    "date",
+    "dte_days",
+    "model_delta",
+    "residual_z",
+}
+_SERIES_PERSISTENCE_FIELDS = {
+    "basis",
+    "coverage",
+    "not_a_significance_test",
+    "prior_observations",
+    "raw_mean",
+    "shrinkage_weight",
+    "shrunk_mean",
+}
+_SERIES_SUMMARY_FIELDS = {
+    "max",
+    "mean",
+    "min",
+    "observation_count",
+    "positive_share",
+}
+_SERIES_POINT_FIELDS = {
+    "bid_usdc",
+    "date",
+    "dte_days",
+    "mark_iv",
+    "model_delta",
+    "open_interest",
+    "present",
+    "residual_iv_points",
+    "residual_z",
+    "underlying_price",
+}
+_SERIES_EXCLUDED_CAPTURE_FIELDS = {"captured_at", "reason_code"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +290,769 @@ class PublicationResult:
         }
 
 
+def _validate_git_sha(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if _GIT_SHA_RE.fullmatch(text) is None:
+        raise ValueError("git_sha must be a plain SHA")
+    return text.lower()
+
+
+def _build_git_provenance(git_sha: str | None) -> dict[str, Any]:
+    if git_sha is None:
+        return {
+            "status": "unknown",
+            "git_sha": None,
+            "verification_status": "not_declared",
+        }
+    return {
+        "status": "declared",
+        "git_sha": git_sha,
+        "verification_status": "declared_unverified",
+    }
+
+
+def _build_publication_inputs(
+    *,
+    snapshot_payload: dict[str, Any],
+    underlying_payload: dict[str, Any],
+    dvol_payload: dict[str, Any],
+    signal_payload: dict[str, Any],
+    series_payload: dict[str, Any],
+    publication_history_payload: dict[str, Any],
+    published_dt: datetime,
+    git_provenance: dict[str, Any],
+    site_origin: str,
+) -> dict[str, Any]:
+    return {
+        "snapshot": canonical_sha256(snapshot_payload),
+        "underlying_history": canonical_sha256(underlying_payload),
+        "dvol_history": canonical_sha256(dvol_payload),
+        "signal_artifact": canonical_sha256(signal_payload),
+        "series_artifact": canonical_sha256(series_payload),
+        "publication_history": canonical_sha256(publication_history_payload),
+        "site_origin": site_origin,
+        "published_at": _timestamp(published_dt),
+        "git_sha": git_provenance.get("git_sha"),
+        "git_provenance": git_provenance,
+        "engine_version": CODE_VERSION,
+    }
+
+
+def _build_release_gates_from_disk(
+    *,
+    report: dict[str, Any],
+    out_path: Path,
+    manifest_verification: dict[str, Any],
+) -> list[dict[str, Any]]:
+    data_status = str((report.get("data_status") or {}).get("status") or "missing")
+    publication_evidence = {
+        "data_quality": data_status,
+        "publish_manifest": manifest_verification["status"],
+        "methodology": "present" if (out_path / "methodology.html").is_file() else "missing",
+        "disclaimer": "present" if (out_path / "disclaimer.html").is_file() else "missing",
+    }
+    research_publication_ready = (
+        publication_evidence["publish_manifest"] == "verified"
+        and publication_evidence["methodology"] == "present"
+        and publication_evidence["disclaimer"] == "present"
+        and publication_evidence["data_quality"] in {"trusted", "validated"}
+    )
+    return build_release_gates(
+        research_publication_ready=research_publication_ready,
+        publication_evidence=publication_evidence,
+    )
+
+
+def _load_manifest_verification(out_path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    errors: list[str] = []
+    for entry in manifest.get("artifacts") or []:
+        if not isinstance(entry, dict):
+            errors.append("manifest artifact entry must be an object")
+            continue
+        relative_path = entry.get("path")
+        if not isinstance(relative_path, str) or not relative_path:
+            errors.append("manifest artifact path must be a non-empty string")
+            continue
+        path = out_path / relative_path
+        if not path.is_file():
+            errors.append(f"missing artifact {relative_path}")
+            continue
+        expected = str(entry.get("sha256") or "")
+        actual = sha256(path.read_bytes()).hexdigest()
+        if expected != actual:
+            errors.append(f"hash mismatch for {relative_path}")
+    mirror_path = out_path / ".well-known" / "publish-manifest.json"
+    api_path = out_path / "api" / "v1" / "manifest.json"
+    if not mirror_path.is_file():
+        errors.append("missing .well-known publish manifest")
+    if not api_path.is_file():
+        errors.append("missing api publish manifest")
+    if mirror_path.is_file() and api_path.is_file():
+        if mirror_path.read_text(encoding="utf-8") != api_path.read_text(encoding="utf-8"):
+            errors.append("manifest mirrors must be byte-identical")
+    return {
+        "status": "verified" if not errors else "invalid",
+        "artifact_count": len(manifest.get("artifacts") or []),
+        "errors": errors,
+    }
+
+
+def _infer_numeric_unit(field_name: str) -> str | None:
+    if field_name.endswith("_percent") or field_name.endswith("_rate"):
+        return "percent"
+    if field_name.endswith("_days"):
+        return "days"
+    if field_name.endswith("_count") or field_name.endswith("_cohorts"):
+        return "count"
+    if field_name.endswith("_usdc") or field_name.endswith("_usd"):
+        return "currency"
+    if field_name in {"percentile", "coverage", "coverage_ratio", "win_rate", "positive_share"}:
+        return "fraction_0_1"
+    if field_name == "threshold":
+        return "scalar"
+    return None
+
+
+def _annotate_numeric_field_evidence(value: Any, *, evidence_class: str) -> Any:
+    if isinstance(value, list):
+        return [
+            _annotate_numeric_field_evidence(item, evidence_class=evidence_class)
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+    annotated: dict[str, Any] = {}
+    field_evidence: dict[str, Any] = {}
+    for key, nested in value.items():
+        annotated_value = _annotate_numeric_field_evidence(
+            nested,
+            evidence_class=evidence_class,
+        )
+        annotated[key] = annotated_value
+        if isinstance(nested, (int, float)) and not isinstance(nested, bool):
+            field_evidence[key] = {
+                "evidence_class": evidence_class,
+                "unit": _infer_numeric_unit(key),
+            }
+    if field_evidence:
+        annotated["field_evidence"] = field_evidence
+    return annotated
+
+
+def _project_signal_artifact(value: dict[str, Any]) -> dict[str, Any]:
+    projected: dict[str, Any] = {}
+    for field in (
+        "schema_version",
+        "captured_at",
+        "generated_at",
+        "research_only",
+        "status",
+        "headline",
+        "note",
+        "snapshot_count",
+        "t_stat_threshold",
+    ):
+        if field in value:
+            projected[field] = value.get(field)
+    if "reason_codes" in value:
+        projected["reason_codes"] = list(value.get("reason_codes") or [])
+    if "config" in value:
+        config = dict(value.get("config") or {})
+        unexpected = sorted(set(config) - _SIGNAL_CONFIG_FIELDS)
+        if unexpected:
+            raise ValueError(
+                f"publication blocked: unapproved public field config.{unexpected[0]}"
+            )
+        projected["config"] = {key: config.get(key) for key in sorted(config)}
+    if "summary" in value:
+        summary = dict(value.get("summary") or {})
+        unexpected = sorted(set(summary) - _SIGNAL_SUMMARY_FIELDS)
+        if unexpected:
+            raise ValueError(
+                f"publication blocked: unapproved public field summary.{unexpected[0]}"
+            )
+        projected["summary"] = _annotate_numeric_field_evidence(
+            {key: summary.get(key) for key in sorted(summary)},
+            evidence_class="research_signal_artifact",
+        )
+    if "pre_registration" in value:
+        pre_registration = dict(value.get("pre_registration") or {})
+        unexpected = sorted(set(pre_registration) - _SIGNAL_PRE_REGISTRATION_FIELDS)
+        if unexpected:
+            raise ValueError(
+                "publication blocked: unapproved public field "
+                f"pre_registration.{unexpected[0]}"
+            )
+        projected["pre_registration"] = {
+            key: pre_registration.get(key) for key in sorted(pre_registration)
+        }
+    if "signal_definitions" in value:
+        definitions = dict(value.get("signal_definitions") or {})
+        projected["signal_definitions"] = {
+            str(key): str(definitions[key]) for key in sorted(definitions)
+        }
+    if "excluded_snapshots" in value:
+        excluded_snapshots = []
+        for item in value.get("excluded_snapshots") or []:
+            row = dict(item or {})
+            unexpected = sorted(set(row) - _SIGNAL_EXCLUDED_SNAPSHOT_FIELDS)
+            if unexpected:
+                raise ValueError(
+                    "publication blocked: unapproved public field "
+                    f"excluded_snapshots.{unexpected[0]}"
+                )
+            excluded_snapshots.append(
+                {key: row.get(key) for key in sorted(row)}
+            )
+        projected["excluded_snapshots"] = excluded_snapshots
+    if "sample" in value:
+        sample = dict(value.get("sample") or {})
+        unexpected = sorted(set(sample) - _SIGNAL_SAMPLE_FIELDS)
+        if unexpected:
+            raise ValueError(
+                f"publication blocked: unapproved public field sample.{unexpected[0]}"
+            )
+        projected["sample"] = _annotate_numeric_field_evidence(
+            {
+                "duplicate_observations_dropped": sample.get("duplicate_observations_dropped"),
+                "excluded_snapshot_count": sample.get("excluded_snapshot_count"),
+                "excluded_snapshots": projected.get("excluded_snapshots", []),
+                "expiry_cohorts": list(sample.get("expiry_cohorts") or []),
+                "independent_expiry_cohorts": sample.get("independent_expiry_cohorts"),
+                "observation_count": sample.get("observation_count"),
+                "sample_size_basis": sample.get("sample_size_basis"),
+                "settlement_basis": sample.get("settlement_basis"),
+                "settlement_note": sample.get("settlement_note"),
+                "snapshot_count": sample.get("snapshot_count"),
+                "snapshot_date_count": sample.get("snapshot_date_count"),
+                "validated_snapshot_count": sample.get("validated_snapshot_count"),
+            },
+            evidence_class="research_signal_artifact",
+        )
+    if "bands" in value:
+        projected_bands: dict[str, Any] = {}
+        for band_name, band in sorted((value.get("bands") or {}).items()):
+            band_row = dict(band or {})
+            unexpected = sorted(set(band_row) - _SIGNAL_BAND_FIELDS)
+            if unexpected:
+                raise ValueError(
+                    f"publication blocked: unapproved public field bands.{band_name}.{unexpected[0]}"
+                )
+            projected_bands[str(band_name)] = _annotate_numeric_field_evidence(
+                {key: band_row.get(key) for key in sorted(band_row)},
+                evidence_class="research_signal_artifact",
+            )
+        projected["bands"] = projected_bands
+    if "cohorts" in value:
+        cohorts = []
+        for item in value.get("cohorts") or []:
+            row = dict(item or {})
+            unexpected = sorted(set(row) - _SIGNAL_COHORT_FIELDS)
+            if unexpected:
+                raise ValueError(
+                    f"publication blocked: unapproved public field cohorts.{unexpected[0]}"
+                )
+            cohorts.append(
+                _annotate_numeric_field_evidence(
+                    {
+                        key: row.get(key)
+                        for key in sorted(row)
+                    },
+                    evidence_class="research_signal_artifact",
+                )
+            )
+        projected["cohorts"] = cohorts
+    if "signals" in value:
+        signals: dict[str, Any] = {}
+        for signal_name, measurement in sorted((value.get("signals") or {}).items()):
+            row = dict(measurement or {})
+            unexpected = sorted(set(row) - _SIGNAL_MEASUREMENT_FIELDS)
+            if unexpected:
+                raise ValueError(
+                    f"publication blocked: unapproved public field signals.{signal_name}.{unexpected[0]}"
+                )
+            projected_row: dict[str, Any] = {
+                "status": row.get("status"),
+                "reason_code": row.get("reason_code"),
+                "definition": row.get("definition"),
+                "observation_count": row.get("observation_count"),
+                "independent_expiry_cohorts": row.get("independent_expiry_cohorts"),
+                "measured_date_count": row.get("measured_date_count"),
+                "effective_sample_size": row.get("effective_sample_size"),
+                "effective_sample_basis": row.get("effective_sample_basis"),
+                "evidence_verdict": row.get("evidence_verdict"),
+            }
+            if "information_coefficient" in row and isinstance(
+                row.get("information_coefficient"), dict
+            ):
+                ic = dict(row.get("information_coefficient") or {})
+                unexpected_ic = sorted(set(ic) - _SIGNAL_INFORMATION_COEFFICIENT_FIELDS)
+                if unexpected_ic:
+                    raise ValueError(
+                        "publication blocked: unapproved public field "
+                        f"signals.{signal_name}.information_coefficient.{unexpected_ic[0]}"
+                    )
+                projected_row["information_coefficient"] = _annotate_numeric_field_evidence(
+                    {key: ic.get(key) for key in sorted(ic)},
+                    evidence_class="research_signal_artifact",
+                )
+            if "raw_information_coefficient" in row and isinstance(
+                row.get("raw_information_coefficient"), dict
+            ):
+                raw_ic = dict(row.get("raw_information_coefficient") or {})
+                unexpected_raw_ic = sorted(set(raw_ic) - _SIGNAL_RAW_IC_FIELDS)
+                if unexpected_raw_ic:
+                    raise ValueError(
+                        "publication blocked: unapproved public field "
+                        f"signals.{signal_name}.raw_information_coefficient.{unexpected_raw_ic[0]}"
+                    )
+                projected_row["raw_information_coefficient"] = _annotate_numeric_field_evidence(
+                    {key: raw_ic.get(key) for key in sorted(raw_ic)},
+                    evidence_class="research_signal_artifact",
+                )
+            if "per_date" in row:
+                per_date_rows = []
+                for per_date in row.get("per_date") or []:
+                    per_date_row = dict(per_date or {})
+                    unexpected_per_date = sorted(set(per_date_row) - _SIGNAL_PER_DATE_FIELDS)
+                    if unexpected_per_date:
+                        raise ValueError(
+                            "publication blocked: unapproved public field "
+                            f"signals.{signal_name}.per_date.{unexpected_per_date[0]}"
+                        )
+                    per_date_rows.append(
+                        _annotate_numeric_field_evidence(
+                            {key: per_date_row.get(key) for key in sorted(per_date_row)},
+                            evidence_class="research_signal_artifact",
+                        )
+                    )
+                projected_row["per_date"] = per_date_rows
+            if "buckets" in row:
+                buckets = []
+                for bucket in row.get("buckets") or []:
+                    bucket_row = dict(bucket or {})
+                    unexpected_bucket = sorted(set(bucket_row) - _SIGNAL_BUCKET_FIELDS)
+                    if unexpected_bucket:
+                        raise ValueError(
+                            "publication blocked: unapproved public field "
+                            f"signals.{signal_name}.buckets.{unexpected_bucket[0]}"
+                        )
+                    buckets.append(
+                        _annotate_numeric_field_evidence(
+                            {key: bucket_row.get(key) for key in sorted(bucket_row)},
+                            evidence_class="research_signal_artifact",
+                        )
+                    )
+                projected_row["buckets"] = buckets
+            signals[str(signal_name)] = projected_row
+        projected["signals"] = signals
+    unexpected_root = sorted(
+        set(value)
+        - {
+            "schema_version",
+            "captured_at",
+            "generated_at",
+            "research_only",
+            "status",
+            "headline",
+            "summary",
+            "bands",
+            "cohorts",
+            "reason_codes",
+            "config",
+            "sample",
+            "signals",
+            "note",
+            "excluded_snapshots",
+            "snapshot_count",
+            "pre_registration",
+            "signal_definitions",
+            "t_stat_threshold",
+        }
+    )
+    if unexpected_root:
+        raise ValueError(
+            f"publication blocked: unapproved public field {unexpected_root[0]}"
+        )
+    return projected
+
+
+def _project_series_artifact(value: dict[str, Any]) -> dict[str, Any]:
+    projected: dict[str, Any] = {}
+    for field in (
+        "schema_version",
+        "captured_at",
+        "generated_at",
+        "research_only",
+        "status",
+        "primary_series",
+        "primary_series_reason",
+        "instrument_count",
+        "capture_count",
+        "truncated_instruments",
+    ):
+        if field in value:
+            projected[field] = value.get(field)
+    if "reason_codes" in value:
+        projected["reason_codes"] = list(value.get("reason_codes") or [])
+    if "capture_dates" in value:
+        projected["capture_dates"] = list(value.get("capture_dates") or [])
+    if "cannot_tell" in value:
+        projected["cannot_tell"] = list(value.get("cannot_tell") or [])
+    if "config" in value:
+        config = dict(value.get("config") or {})
+        unexpected = sorted(set(config) - _SERIES_CONFIG_FIELDS)
+        if unexpected:
+            raise ValueError(
+                f"publication blocked: unapproved public field config.{unexpected[0]}"
+            )
+        projected["config"] = {key: config.get(key) for key in sorted(config)}
+    if "excluded_captures" in value:
+        excluded = []
+        for item in value.get("excluded_captures") or []:
+            row = dict(item or {})
+            unexpected = sorted(set(row) - _SERIES_EXCLUDED_CAPTURE_FIELDS)
+            if unexpected:
+                raise ValueError(
+                    "publication blocked: unapproved public field "
+                    f"excluded_captures.{unexpected[0]}"
+                )
+            excluded.append({key: row.get(key) for key in sorted(row)})
+        projected["excluded_captures"] = excluded
+    if "instruments" in value:
+        instruments = []
+        for item in value.get("instruments") or []:
+            row = dict(item or {})
+            unexpected = sorted(set(row) - _SERIES_INSTRUMENT_FIELDS)
+            if unexpected:
+                raise ValueError(
+                    f"publication blocked: unapproved public field instruments.{unexpected[0]}"
+                )
+            instrument = {
+                "instrument_name": row.get("instrument_name"),
+                "expiry_date": row.get("expiry_date"),
+                "option_type": row.get("option_type"),
+                "strike_price": row.get("strike_price"),
+                "capture_date_count": row.get("capture_date_count"),
+                "missing_date_count": row.get("missing_date_count"),
+            }
+            latest = dict(row.get("latest") or {})
+            unexpected_latest = sorted(set(latest) - _SERIES_LATEST_FIELDS)
+            if unexpected_latest:
+                raise ValueError(
+                    "publication blocked: unapproved public field "
+                    f"instruments.latest.{unexpected_latest[0]}"
+                )
+            instrument["latest"] = _annotate_numeric_field_evidence(
+                {key: latest.get(key) for key in sorted(latest)},
+                evidence_class="research_series_artifact",
+            )
+            residual = dict(row.get("residual_z") or {})
+            unexpected_residual = sorted(set(residual) - _SERIES_SUMMARY_FIELDS)
+            if unexpected_residual:
+                raise ValueError(
+                    "publication blocked: unapproved public field "
+                    f"instruments.residual_z.{unexpected_residual[0]}"
+                )
+            instrument["residual_z"] = _annotate_numeric_field_evidence(
+                {key: residual.get(key) for key in sorted(residual)},
+                evidence_class="research_series_artifact",
+            )
+            persistence = dict(row.get("persistence") or {})
+            unexpected_persistence = sorted(set(persistence) - _SERIES_PERSISTENCE_FIELDS)
+            if unexpected_persistence:
+                raise ValueError(
+                    "publication blocked: unapproved public field "
+                    f"instruments.persistence.{unexpected_persistence[0]}"
+                )
+            instrument["persistence"] = _annotate_numeric_field_evidence(
+                {key: persistence.get(key) for key in sorted(persistence)},
+                evidence_class="research_series_artifact",
+            )
+            points = []
+            for point in row.get("points") or []:
+                point_row = dict(point or {})
+                unexpected_point = sorted(set(point_row) - _SERIES_POINT_FIELDS)
+                if unexpected_point:
+                    raise ValueError(
+                        "publication blocked: unapproved public field "
+                        f"instruments.points.{unexpected_point[0]}"
+                    )
+                points.append(
+                    _annotate_numeric_field_evidence(
+                        {key: point_row.get(key) for key in sorted(point_row)},
+                        evidence_class="research_series_artifact",
+                    )
+                )
+            instrument["points"] = points
+            instruments.append(_annotate_numeric_field_evidence(instrument, evidence_class="research_series_artifact"))
+        projected["instruments"] = instruments
+    if "points" in value:
+        points = []
+        for item in value.get("points") or []:
+            row = dict(item or {})
+            unexpected = sorted(set(row) - {"observed_at", "smile_residual_z", "model_delta"})
+            if unexpected:
+                raise ValueError(
+                    f"publication blocked: unapproved public field points.{unexpected[0]}"
+                )
+            points.append(
+                _annotate_numeric_field_evidence(
+                    {key: row.get(key) for key in sorted(row)},
+                    evidence_class="research_series_artifact",
+                )
+            )
+        projected["points"] = points
+    unexpected_root = sorted(
+        set(value)
+        - {
+            "schema_version",
+            "captured_at",
+            "generated_at",
+            "research_only",
+            "status",
+            "primary_series",
+            "primary_series_reason",
+            "instrument_count",
+            "capture_count",
+            "truncated_instruments",
+            "reason_codes",
+            "capture_dates",
+            "cannot_tell",
+            "config",
+            "excluded_captures",
+            "instruments",
+            "points",
+        }
+    )
+    if unexpected_root:
+        raise ValueError(
+            f"publication blocked: unapproved public field {unexpected_root[0]}"
+        )
+    return projected
+
+
+def _build_change_payload(vrp_status: dict[str, Any]) -> dict[str, Any]:
+    series = list(vrp_status.get("series") or [])
+    if len(series) < 2:
+        return {
+            "status": "unavailable",
+            "prior_observed_at": None,
+            "current_observed_at": series[-1].get("observed_at") if series else None,
+            "vrp_percent_points_delta": None,
+            "dvol_percent_delta": None,
+            "rv30_percent_delta": None,
+            "percentile_delta": None,
+            "band_changed": None,
+        }
+    previous = dict(series[-2] or {})
+    current = dict(series[-1] or {})
+    return {
+        "status": "available",
+        "prior_observed_at": previous.get("observed_at"),
+        "current_observed_at": current.get("observed_at"),
+        "vrp_percent_points_delta": _difference(
+            current.get("vrp_percent_points"),
+            previous.get("vrp_percent_points"),
+        ),
+        "dvol_percent_delta": _difference(
+            current.get("dvol_percent"),
+            previous.get("dvol_percent"),
+        ),
+        "rv30_percent_delta": _difference(
+            current.get("rv30_percent"),
+            previous.get("rv30_percent"),
+        ),
+        "percentile_delta": _difference(
+            current.get("percentile"),
+            previous.get("percentile"),
+        ),
+        "band_changed": current.get("band") != previous.get("band"),
+    }
+
+
+def _difference(current: Any, previous: Any) -> float | None:
+    if not isinstance(current, (int, float)) or isinstance(current, bool):
+        return None
+    if not isinstance(previous, (int, float)) or isinstance(previous, bool):
+        return None
+    return round(float(current) - float(previous), 6)
+
+
+def _build_alert_payload(*, band: Any, is_stale_at_publish: bool) -> dict[str, Any]:
+    if is_stale_at_publish:
+        return {
+            "level": "warning",
+            "code": "PUBLISHED_EDITION_STALE",
+            "message": "Published edition was already stale at publish time.",
+        }
+    if band in {"P90+", "P10-"}:
+        return {
+            "level": "notice",
+            "code": str(band),
+            "message": f"VRP headline reached the {band} public band.",
+        }
+    return {
+        "level": "info",
+        "code": "NO_CHANGE_ALERT",
+        "message": "No exceptional public alert condition is active.",
+    }
+
+
+def _split_thermo_series(
+    thermo: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    series = list(thermo.get("series") or [])
+    recent = dict(thermo)
+    recent["series"] = series[-RECENT_THERMO_WINDOW_DAYS:]
+    recent["series_window_days"] = RECENT_THERMO_WINDOW_DAYS
+    by_year: dict[str, dict[str, Any]] = {}
+    for point in series:
+        observed_at = str((point or {}).get("observed_at") or "")
+        year = observed_at[:4]
+        if len(year) != 4 or not year.isdigit():
+            continue
+        shard = by_year.setdefault(
+            year,
+            {
+                **dict(thermo),
+                "series": [],
+                "series_window": "calendar_year",
+                "series_year": year,
+            },
+        )
+        shard["series"].append(point)
+    return recent, by_year
+
+
+def _thermo_year_shard_paths(series: list[dict[str, Any]]) -> list[str]:
+    years = sorted(
+        {
+            str((point or {}).get("observed_at") or "")[:4]
+            for point in series
+            if str((point or {}).get("observed_at") or "")[:4].isdigit()
+        }
+    )
+    return [f"/api/v1/thermo/by-year/{year}.json" for year in years]
+
+
+def _build_robots_txt(*, site_origin: str) -> str:
+    return f"User-agent: *\nAllow: /\nSitemap: {site_origin}/sitemap.xml\n"
+
+
+def _build_sitemap_xml(*, site_origin: str, edition_slug: str) -> str:
+    root_url = xml_escape(f"{site_origin}/")
+    edition_url = xml_escape(f"{site_origin}/editions/{edition_slug}/")
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"  <url><loc>{root_url}</loc></url>\n"
+        f"  <url><loc>{edition_url}</loc></url>\n"
+        "</urlset>\n"
+    )
+
+
+def _write_publication_outputs(
+    *,
+    out_path: Path,
+    build_root: Path,
+    public_report: dict[str, Any],
+    public_signal_artifact: dict[str, Any],
+    public_series_artifact: dict[str, Any],
+    summary: dict[str, Any],
+    thermo: dict[str, Any],
+    candidates: dict[str, Any],
+    signal: dict[str, Any],
+    health: dict[str, Any],
+    status_payload: dict[str, Any],
+    site_origin: str,
+    edition_slug: str,
+    copy_bundle: bool,
+) -> None:
+    if copy_bundle:
+        _copy_web_bundle(
+            build_root,
+            out_path,
+            summary=summary,
+            site_origin=site_origin,
+        )
+    _write_json(out_path / "research" / "report", public_report)
+    _write_json(out_path / "research" / "signal", public_signal_artifact)
+    _write_json(out_path / "research" / "series", public_series_artifact)
+    _write_json(out_path / "api" / "v1" / "summary.json", summary)
+    _write_json(out_path / "api" / "v1" / "thermo.json", thermo)
+    recent_thermo, yearly_thermo = _split_thermo_series(thermo)
+    _write_json(out_path / "api" / "v1" / "thermo" / "recent.json", recent_thermo)
+    for year, payload in yearly_thermo.items():
+        _write_json(out_path / "api" / "v1" / "thermo" / "by-year" / f"{year}.json", payload)
+    _write_json(out_path / "api" / "v1" / "candidates.json", candidates)
+    _write_json(out_path / "api" / "v1" / "signal.json", signal)
+    _write_json(out_path / "api" / "v1" / "health.json", health)
+    _write_json(
+        out_path / "api" / "openapi.json",
+        build_public_openapi(
+            summary=summary,
+            thermo=thermo,
+            thermo_recent=recent_thermo,
+            thermo_years=list(yearly_thermo.values())
+            or [
+                {
+                    **thermo,
+                    "series": [],
+                    "series_window": "calendar_year",
+                    "series_year": edition_slug[:4],
+                }
+            ],
+            candidates=candidates,
+            signal=signal,
+            health=health,
+            research_report=public_report,
+            research_signal=public_signal_artifact,
+            research_series=public_series_artifact,
+        ),
+    )
+    _write_text(out_path / "_headers", _headers_text())
+    _write_text(out_path / "robots.txt", _build_robots_txt(site_origin=site_origin))
+    _write_text(
+        out_path / "sitemap.xml",
+        _build_sitemap_xml(site_origin=site_origin, edition_slug=edition_slug),
+    )
+    _write_status_pages(out_path, status_payload)
+
+
+def _write_edition_archive(
+    out_path: Path,
+    *,
+    edition_slug: str,
+    site_origin: str,
+    summary: dict[str, Any],
+) -> None:
+    edition_root = out_path / "editions" / edition_slug
+    if edition_root.exists():
+        raise ValueError("publication blocked: edition archive already exists")
+    for relative_path in _relative_file_paths(out_path):
+        if relative_path.startswith("editions/"):
+            continue
+        source = out_path / relative_path
+        target = edition_root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    edition_index = edition_root / "index.html"
+    _write_html(
+        edition_index,
+        _rewrite_index_html(
+            edition_index.read_text(encoding="utf-8"),
+            summary=summary,
+            page_url=f"{site_origin}/editions/{edition_slug}/",
+            image_url=f"{site_origin}/editions/{edition_slug}/og-card.png",
+        ),
+    )
+
+
 def publish_site(
     *,
     snapshot: str,
@@ -112,19 +1060,26 @@ def publish_site(
     dvol_history: str,
     signal_artifact: str,
     series_artifact: str,
+    publication_history: str,
     out: str,
     published_at: str,
+    site_origin: str,
     git_sha: str | None = None,
     web_build: str | None = None,
 ) -> dict[str, Any]:
     """Build one deterministic static publication tree."""
+    site_origin_value = validate_public_site_origin(site_origin)
     snapshot_path = _require_file(snapshot, label="snapshot input")
     underlying_path = _require_file(underlying_history, label="underlying history input")
     dvol_path = _require_file(dvol_history, label="DVOL history input")
     signal_path = _require_file(signal_artifact, label="signal artifact input")
     series_path = _require_file(series_artifact, label="series artifact input")
-    out_path = _prepare_output_directory(out)
+    publication_history_path = _require_file(
+        publication_history,
+        label="publication history input",
+    )
     build_root = _resolve_web_build(web_build)
+    out_path = _prepare_output_directory(out)
 
     snapshot_payload = load_snapshot_fixture(snapshot_path)
     underlying_payload = load_underlying_history_fixture(underlying_path)
@@ -139,17 +1094,26 @@ def publish_site(
         max_bytes=64 * 1024 * 1024,
         description="series artifact",
     )
+    publication_history_payload = read_json_object_from_regular_file(
+        publication_history_path,
+        max_bytes=4 * 1024 * 1024,
+        description="publication history",
+    )
     _validate_publication_payload(signal_payload, description="signal artifact")
     _validate_publication_payload(series_payload, description="series artifact")
+    public_signal_artifact = _project_signal_artifact(signal_payload)
+    public_series_artifact = _project_series_artifact(series_payload)
+    git_sha_value = _validate_git_sha(git_sha)
+    git_provenance = _build_git_provenance(git_sha_value)
 
     captured_at = str(snapshot_payload.get("captured_at") or "")
     captured_dt = _parse_timestamp(captured_at, field="snapshot.captured_at")
-    underlying_payload = _trim_history_to_capture_date(
+    underlying_payload = _trim_history_to_capture_clock(
         underlying_payload,
         captured_dt=captured_dt,
         label="underlying history",
     )
-    dvol_payload = _trim_history_to_capture_date(
+    dvol_payload = _trim_history_to_capture_clock(
         dvol_payload,
         captured_dt=captured_dt,
         label="DVOL history",
@@ -157,9 +1121,14 @@ def publish_site(
     published_dt = _parse_timestamp(published_at, field="published_at")
     if published_dt < captured_dt:
         raise ValueError("published_at must not be earlier than snapshot.captured_at")
+    edition_slug = _timestamp(published_dt)[:10]
     next_expected_dt = captured_dt + PUBLISH_INTERVAL
     stale_after_dt = captured_dt + (PUBLISH_INTERVAL * 2)
     is_stale_at_publish = published_dt >= stale_after_dt
+    public_publication_history = build_publication_history(
+        publication_history_payload,
+        published_at=_timestamp(published_dt),
+    )
 
     record = build_analysis_record(
         mode="research_only",
@@ -183,16 +1152,9 @@ def publish_site(
             f"{raw_vrp.get('status') or 'unavailable'}"
         )
     vrp_status = _project_vrp_status(raw_vrp)
-
-    publication_evidence = {
-        "data_quality": data_status,
-        "publish_manifest": "verified",
-        "methodology": "present",
-        "disclaimer": "present",
-    }
     release_gates = build_release_gates(
-        research_publication_ready=True,
-        publication_evidence=publication_evidence,
+        research_publication_ready=False,
+        publication_evidence={"data_quality": data_status},
     )
     report["runtime_context"] = {
         "profile": "published",
@@ -222,44 +1184,51 @@ def publish_site(
         raise ValueError("; ".join(surface_errors))
 
     public_report = _build_public_report(report)
-    summary = _build_summary(report=public_report, vrp_status=vrp_status)
+    summary = _build_summary(
+        report=public_report,
+        vrp_status=vrp_status,
+        is_stale_at_publish=is_stale_at_publish,
+        publication_history=public_publication_history,
+    )
     thermo = _build_thermo(vrp_status=vrp_status, report=public_report)
     candidates = _build_candidates(report=public_report)
-    signal = _build_signal(signal_payload=signal_payload, report=public_report)
+    signal = _build_signal(signal_payload=public_signal_artifact, report=public_report)
     health = _build_health(
         report=public_report,
         is_stale_at_publish=is_stale_at_publish,
+        manifest_verification={"status": "invalid", "artifact_count": 0, "errors": []},
+        publication_history=public_publication_history,
     )
     status_payload = _build_status(report=public_report, health=health)
 
-    publication_inputs = {
-        "snapshot": canonical_sha256(snapshot_payload),
-        "underlying_history": canonical_sha256(underlying_payload),
-        "dvol_history": canonical_sha256(dvol_payload),
-        "signal_artifact": canonical_sha256(signal_payload),
-        "series_artifact": canonical_sha256(series_payload),
-        "published_at": _timestamp(published_dt),
-        "git_sha": git_sha,
-        "engine_version": CODE_VERSION,
-    }
+    publication_inputs = _build_publication_inputs(
+        snapshot_payload=snapshot_payload,
+        underlying_payload=underlying_payload,
+        dvol_payload=dvol_payload,
+        signal_payload=signal_payload,
+        series_payload=series_payload,
+        publication_history_payload=publication_history_payload,
+        published_dt=published_dt,
+        git_provenance=git_provenance,
+        site_origin=site_origin_value,
+    )
 
-    _copy_web_bundle(build_root, out_path)
-    _write_json(out_path / "research" / "report", public_report)
-    _write_json(out_path / "research" / "signal", signal_payload)
-    _write_json(out_path / "research" / "series", series_payload)
-    _write_json(out_path / "api" / "v1" / "summary.json", summary)
-    _write_json(out_path / "api" / "v1" / "thermo.json", thermo)
-    _write_json(out_path / "api" / "v1" / "candidates.json", candidates)
-    _write_json(out_path / "api" / "v1" / "signal.json", signal)
-    _write_json(out_path / "api" / "v1" / "health.json", health)
-    _write_text(out_path / "_headers", _headers_text())
-    _write_html(out_path / "methodology.html", _methodology_html(report))
-    _write_html(out_path / "disclaimer.html", _disclaimer_html(report))
-    _write_html(out_path / "privacy.html", _privacy_html(report))
-    _write_html(out_path / "terms.html", _terms_html(report))
-    _write_html(out_path / "status.html", _status_html(status_payload))
-
-    _ensure_publication_privacy(out_path)
+    _write_publication_outputs(
+        out_path=out_path,
+        build_root=build_root,
+        public_report=public_report,
+        public_signal_artifact=public_signal_artifact,
+        public_series_artifact=public_series_artifact,
+        summary=summary,
+        thermo=thermo,
+        candidates=candidates,
+        signal=signal,
+        health=health,
+        status_payload=status_payload,
+        site_origin=site_origin_value,
+        edition_slug=edition_slug,
+        copy_bundle=True,
+    )
     manifest = _build_manifest(
         out_path=out_path,
         record=record,
@@ -267,10 +1236,108 @@ def publish_site(
         publication_inputs=publication_inputs,
         build_root=build_root,
     )
-    manifest_text = canonical_json_text(manifest)
-    manifest_sha = sha256(manifest_text.encode("utf-8")).hexdigest()
     _write_json(out_path / ".well-known" / "publish-manifest.json", manifest)
     _write_json(out_path / "api" / "v1" / "manifest.json", manifest)
+    _ensure_publication_privacy(out_path)
+    manifest_verification = _load_manifest_verification(out_path, manifest)
+
+    release_gates = _build_release_gates_from_disk(
+        report=report,
+        out_path=out_path,
+        manifest_verification=manifest_verification,
+    )
+    full_surface["release_gates"] = release_gates
+    report["full_system_surface"] = full_surface
+    public_report = _build_public_report(report)
+    summary = _build_summary(
+        report=public_report,
+        vrp_status=vrp_status,
+        is_stale_at_publish=is_stale_at_publish,
+        publication_history=public_publication_history,
+    )
+    thermo = _build_thermo(vrp_status=vrp_status, report=public_report)
+    candidates = _build_candidates(report=public_report)
+    signal = _build_signal(signal_payload=public_signal_artifact, report=public_report)
+    health = _build_health(
+        report=public_report,
+        is_stale_at_publish=is_stale_at_publish,
+        manifest_verification=manifest_verification,
+        publication_history=public_publication_history,
+    )
+    status_payload = _build_status(report=public_report, health=health)
+    _write_publication_outputs(
+        out_path=out_path,
+        build_root=build_root,
+        public_report=public_report,
+        public_signal_artifact=public_signal_artifact,
+        public_series_artifact=public_series_artifact,
+        summary=summary,
+        thermo=thermo,
+        candidates=candidates,
+        signal=signal,
+        health=health,
+        status_payload=status_payload,
+        site_origin=site_origin_value,
+        edition_slug=edition_slug,
+        copy_bundle=False,
+    )
+    manifest = _build_manifest(
+        out_path=out_path,
+        record=record,
+        report=public_report,
+        publication_inputs=publication_inputs,
+        build_root=build_root,
+    )
+    _write_json(out_path / ".well-known" / "publish-manifest.json", manifest)
+    _write_json(out_path / "api" / "v1" / "manifest.json", manifest)
+    _ensure_publication_privacy(out_path)
+    manifest_verification = _load_manifest_verification(out_path, manifest)
+    if manifest_verification["status"] != "verified":
+        raise ValueError(
+            "publication blocked: publish manifest could not be verified"
+        )
+    health = _build_health(
+        report=public_report,
+        is_stale_at_publish=is_stale_at_publish,
+        manifest_verification=manifest_verification,
+        publication_history=public_publication_history,
+    )
+    status_payload = _build_status(report=public_report, health=health)
+    _write_json(out_path / "api" / "v1" / "health.json", health)
+    _write_status_pages(out_path, status_payload)
+    manifest = _build_manifest(
+        out_path=out_path,
+        record=record,
+        report=public_report,
+        publication_inputs=publication_inputs,
+        build_root=build_root,
+    )
+    _write_json(out_path / ".well-known" / "publish-manifest.json", manifest)
+    _write_json(out_path / "api" / "v1" / "manifest.json", manifest)
+    _ensure_publication_privacy(out_path)
+    _write_edition_archive(
+        out_path,
+        edition_slug=edition_slug,
+        site_origin=site_origin_value,
+        summary=summary,
+    )
+    manifest = _build_manifest(
+        out_path=out_path,
+        record=record,
+        report=public_report,
+        publication_inputs=publication_inputs,
+        build_root=build_root,
+    )
+    _write_json(out_path / ".well-known" / "publish-manifest.json", manifest)
+    _write_json(out_path / "api" / "v1" / "manifest.json", manifest)
+    _ensure_publication_privacy(out_path)
+    manifest_verification = _load_manifest_verification(out_path, manifest)
+    if manifest_verification["status"] != "verified":
+        raise ValueError(
+            "publication blocked: publish manifest could not be verified"
+        )
+    manifest_text = canonical_json_text(manifest)
+    manifest_sha = sha256(manifest_text.encode("utf-8")).hexdigest()
 
     research_gate = next(
         gate for gate in release_gates if gate["name"] == "research_publication"
@@ -290,6 +1357,9 @@ def publish_site(
 
 
 def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
+    evaluation_clock = str(
+        ((report.get("runtime_context") or {}).get("evaluation_clock")) or ""
+    )
     return {
         "schema_version": report.get("schema_version"),
         "generated_at": report.get("generated_at"),
@@ -307,13 +1377,18 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
         "calibration_status": _project_status_pair(report.get("calibration_status")),
         "backtest_status": _project_status_pair(report.get("backtest_status")),
         "vol_surface_status": _project_vol_surface_status(report.get("vol_surface_status")),
-        "candidate_research": _project_candidate_research(report.get("candidate_research")),
+        "candidate_research": _project_candidate_research(
+            report.get("candidate_research"),
+            evaluation_clock=evaluation_clock,
+        ),
         "strategy_research": _project_strategy_research(
             report.get("strategy_research"),
             published=bool((report.get("runtime_context") or {}).get("mode") == "published"),
+            evaluation_clock=evaluation_clock,
         ),
         "ev_candidate_scanner": _project_ev_candidate_scanner(
-            report.get("ev_candidate_scanner")
+            report.get("ev_candidate_scanner"),
+            evaluation_clock=evaluation_clock,
         ),
         "mode_gate": _project_mode_gate(report.get("mode_gate")),
         "full_system_surface": _project_full_system_surface(
@@ -495,7 +1570,38 @@ def _project_surface_quality(value: Any) -> dict[str, Any] | None:
     }
 
 
-def _project_call_credit_candidate(value: Any) -> dict[str, Any]:
+def _project_public_candidate_dte_days(
+    candidate: dict[str, Any],
+    *,
+    evaluation_clock: str,
+) -> float | None:
+    explicit_value = candidate.get("dte_days")
+    explicit = (
+        round(float(explicit_value), 6)
+        if isinstance(explicit_value, (int, float)) and not isinstance(explicit_value, bool)
+        else None
+    )
+    expiry_date = candidate.get("expiry_date")
+    if not isinstance(expiry_date, str) or not expiry_date:
+        return explicit
+    try:
+        expiry_dt = datetime.fromisoformat(expiry_date)
+        evaluation_dt = _parse_timestamp(evaluation_clock, field="evaluation_clock")
+    except ValueError:
+        return explicit
+    derived = float(max((expiry_dt.date() - evaluation_dt.date()).days, 0))
+    if explicit is None:
+        return derived
+    if abs(explicit - derived) > 1.0:
+        return derived
+    return explicit
+
+
+def _project_call_credit_candidate(
+    value: Any,
+    *,
+    evaluation_clock: str,
+) -> dict[str, Any]:
     candidate = dict(value or {})
     return {
         "candidate_id": candidate.get("candidate_id"),
@@ -506,7 +1612,10 @@ def _project_call_credit_candidate(value: Any) -> dict[str, Any]:
         "sell_leg_strike_price": candidate.get("sell_leg_strike_price"),
         "buy_leg_strike_price": candidate.get("buy_leg_strike_price"),
         "expiry_date": candidate.get("expiry_date"),
-        "dte_days": candidate.get("dte_days"),
+        "dte_days": _project_public_candidate_dte_days(
+            candidate,
+            evaluation_clock=evaluation_clock,
+        ),
         "model_delta": candidate.get("model_delta"),
         "net_credit": candidate.get("net_credit"),
         "spread_width": candidate.get("spread_width"),
@@ -516,7 +1625,11 @@ def _project_call_credit_candidate(value: Any) -> dict[str, Any]:
     }
 
 
-def _project_naked_candidate(value: Any) -> dict[str, Any]:
+def _project_naked_candidate(
+    value: Any,
+    *,
+    evaluation_clock: str,
+) -> dict[str, Any]:
     candidate = dict(value or {})
     return {
         "candidate_id": candidate.get("candidate_id"),
@@ -524,7 +1637,10 @@ def _project_naked_candidate(value: Any) -> dict[str, Any]:
         "structure_type": candidate.get("structure_type"),
         "instrument_name": candidate.get("instrument_name"),
         "expiry_date": candidate.get("expiry_date"),
-        "dte_days": candidate.get("dte_days"),
+        "dte_days": _project_public_candidate_dte_days(
+            candidate,
+            evaluation_clock=evaluation_clock,
+        ),
         "model_delta": candidate.get("model_delta"),
         "market_mid": candidate.get("market_mid"),
         "premium_currency": candidate.get("premium_currency"),
@@ -537,18 +1653,32 @@ def _project_candidate_bucket(
     value: Any,
     *,
     row_projector: Any,
+    evaluation_clock: str,
 ) -> dict[str, Any] | None:
     bucket = dict(value or {})
     if not bucket:
         return None
     return {
-        "eligible": [row_projector(item) for item in bucket.get("eligible") or []],
-        "review": [row_projector(item) for item in bucket.get("review") or []],
-        "rejected": [row_projector(item) for item in bucket.get("rejected") or []],
+        "eligible": [
+            row_projector(item, evaluation_clock=evaluation_clock)
+            for item in bucket.get("eligible") or []
+        ],
+        "review": [
+            row_projector(item, evaluation_clock=evaluation_clock)
+            for item in bucket.get("review") or []
+        ],
+        "rejected": [
+            row_projector(item, evaluation_clock=evaluation_clock)
+            for item in bucket.get("rejected") or []
+        ],
     }
 
 
-def _project_candidate_research(value: Any) -> dict[str, Any]:
+def _project_candidate_research(
+    value: Any,
+    *,
+    evaluation_clock: str,
+) -> dict[str, Any]:
     research = dict(value or {})
     summary = dict(research.get("summary") or {})
     return {
@@ -567,10 +1697,12 @@ def _project_candidate_research(value: Any) -> dict[str, Any]:
         "naked_short_calls": _project_candidate_bucket(
             research.get("naked_short_calls"),
             row_projector=_project_naked_candidate,
+            evaluation_clock=evaluation_clock,
         ),
         "call_credit_spreads": _project_candidate_bucket(
             research.get("call_credit_spreads"),
             row_projector=_project_call_credit_candidate,
+            evaluation_clock=evaluation_clock,
         ),
     }
 
@@ -592,6 +1724,7 @@ def _project_strategy_research(
     value: Any,
     *,
     published: bool = False,
+    evaluation_clock: str,
 ) -> dict[str, Any] | None:
     strategy = dict(value or {})
     if not strategy:
@@ -693,7 +1826,10 @@ def _project_strategy_research(
                 ),
                 "front_expiry": {
                     "expiry_date": front_expiry.get("expiry_date"),
-                    "dte_days": front_expiry.get("dte_days"),
+                    "dte_days": _project_public_candidate_dte_days(
+                        front_expiry,
+                        evaluation_clock=evaluation_clock,
+                    ),
                     "atm_fitted_iv_percent": front_expiry.get("atm_fitted_iv_percent"),
                     "fit_quality_score": front_expiry.get("fit_quality_score"),
                     "no_arbitrage_pass": front_expiry.get("no_arbitrage_pass"),
@@ -701,7 +1837,10 @@ def _project_strategy_research(
                 },
                 "next_expiry": {
                     "expiry_date": next_expiry.get("expiry_date"),
-                    "dte_days": next_expiry.get("dte_days"),
+                    "dte_days": _project_public_candidate_dte_days(
+                        next_expiry,
+                        evaluation_clock=evaluation_clock,
+                    ),
                     "atm_fitted_iv_percent": next_expiry.get("atm_fitted_iv_percent"),
                     "fit_quality_score": next_expiry.get("fit_quality_score"),
                     "no_arbitrage_pass": next_expiry.get("no_arbitrage_pass"),
@@ -716,7 +1855,11 @@ def _project_strategy_research(
             "ranked_candidate_ids": list(selection.get("ranked_candidate_ids") or []),
             "ranking_dimensions": list(selection.get("ranking_dimensions") or []),
         },
-        "playbook": _project_playbook(strategy.get("playbook"), published=published),
+        "playbook": _project_playbook(
+            strategy.get("playbook"),
+            published=published,
+            evaluation_clock=evaluation_clock,
+        ),
         "monitoring": monitoring,
         "review": {
             "status": review.get("status"),
@@ -731,7 +1874,12 @@ def _project_strategy_research(
     }
 
 
-def _project_playbook(value: Any, *, published: bool = False) -> dict[str, Any] | None:
+def _project_playbook(
+    value: Any,
+    *,
+    published: bool = False,
+    evaluation_clock: str,
+) -> dict[str, Any] | None:
     if value is None:
         return None
     playbook = dict(value or {})
@@ -754,7 +1902,10 @@ def _project_playbook(value: Any, *, published: bool = False) -> dict[str, Any] 
         "candidate": {
             "candidate_id": candidate.get("candidate_id"),
             "expiry_date": candidate.get("expiry_date"),
-            "dte_days": candidate.get("dte_days"),
+            "dte_days": _project_public_candidate_dte_days(
+                candidate,
+                evaluation_clock=evaluation_clock,
+            ),
             "sell_leg": candidate.get("sell_leg"),
             "buy_leg": candidate.get("buy_leg"),
             "sell_strike_usd": candidate.get("sell_strike_usd"),
@@ -821,7 +1972,11 @@ def _project_playbook(value: Any, *, published: bool = False) -> dict[str, Any] 
     }
 
 
-def _project_ev_candidate_scanner(value: Any) -> dict[str, Any] | None:
+def _project_ev_candidate_scanner(
+    value: Any,
+    *,
+    evaluation_clock: str,
+) -> dict[str, Any] | None:
     scanner = dict(value or {})
     if not scanner:
         return None
@@ -840,6 +1995,11 @@ def _project_ev_candidate_scanner(value: Any) -> dict[str, Any] | None:
                 "candidate_id": item.get("candidate_id"),
                 "structure_type": item.get("structure_type"),
                 "action": action,
+                "expiry_date": item.get("expiry_date"),
+                "dte_days": _project_public_candidate_dte_days(
+                    item,
+                    evaluation_clock=evaluation_clock,
+                ),
                 "ranking_score": item.get("ranking_score"),
                 "ev_after_cost_usdc": item.get("ev_after_cost_usdc"),
                 "executable_credit_usdc": item.get("executable_credit_usdc"),
@@ -904,14 +2064,24 @@ def _project_full_system_surface(value: Any) -> dict[str, Any]:
     }
 
 
-def _build_summary(*, report: dict[str, Any], vrp_status: dict[str, Any]) -> dict[str, Any]:
+def _build_summary(
+    *,
+    report: dict[str, Any],
+    vrp_status: dict[str, Any],
+    is_stale_at_publish: bool,
+    publication_history: dict[str, Any],
+) -> dict[str, Any]:
     vrp_evidence_class = vrp_status.get("evidence_class")
+    change = _build_change_payload(vrp_status)
     current = {
         "vrp_percent_points": vrp_status.get("current_vrp_percent_points"),
         "dvol_percent": vrp_status.get("current_dvol_percent"),
         "rv30_percent": vrp_status.get("current_rv30_percent"),
         "percentile": vrp_status.get("percentile"),
         "band": vrp_status.get("band"),
+        "evaluation_at": vrp_status.get("evaluation_at"),
+        "dvol_observed_at": vrp_status.get("dvol_observed_at"),
+        "underlying_observed_at": vrp_status.get("underlying_observed_at"),
         "evidence_class": vrp_evidence_class,
         "field_evidence": {
             "vrp_percent_points": {
@@ -941,17 +2111,23 @@ def _build_summary(*, report: dict[str, Any], vrp_status: dict[str, Any]) -> dic
         "cadence": report["publish_edition"]["cadence"],
         "stale_after": report["publish_edition"]["stale_after"],
         "vrp": current,
+        "change": change,
+        "alert": _build_alert_payload(
+            band=vrp_status.get("band"),
+            is_stale_at_publish=is_stale_at_publish,
+        ),
         "data_status": {
             "status": (report.get("data_status") or {}).get("status"),
             "evidence_class": (report.get("data_trust") or {}).get("verdict"),
         },
+        "publication_history": publication_history,
         "release_gates": (report.get("full_system_surface") or {}).get("release_gates"),
     }
 
 
 def _build_thermo(*, vrp_status: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
     return {
-        "schema_version": vrp_status.get("schema_version"),
+        "schema_version": PUBLICATION_THERMO_SCHEMA,
         "captured_at": report["publish_edition"]["captured_at"],
         "published_at": report["publish_edition"]["published_at"],
         "disclaimer_url": "/disclaimer.html",
@@ -968,11 +2144,20 @@ def _build_thermo(*, vrp_status: dict[str, Any], report: dict[str, Any]) -> dict
         "sample_count": vrp_status.get("sample_count"),
         "minimum_series_sample_count": vrp_status.get("minimum_series_sample_count"),
         "window_days": vrp_status.get("window_days"),
+        "recent_series_path": "/api/v1/thermo/recent.json",
+        "year_shards": _thermo_year_shard_paths(vrp_status.get("series") or []),
     }
 
 
 def _build_candidates(*, report: dict[str, Any]) -> dict[str, Any]:
     scanner = dict(report.get("ev_candidate_scanner") or {})
+    ranked_candidates = [
+        _annotate_numeric_field_evidence(
+            dict(candidate or {}),
+            evidence_class="uncalibrated_research_screen",
+        )
+        for candidate in (scanner.get("ranked_candidates") or [])
+    ]
     return {
         "schema_version": PUBLICATION_CANDIDATES_SCHEMA,
         "captured_at": report["publish_edition"]["captured_at"],
@@ -983,7 +2168,8 @@ def _build_candidates(*, report: dict[str, Any]) -> dict[str, Any]:
         "reason_code": scanner.get("reason_code"),
         "score_status": scanner.get("score_status"),
         "summary": scanner.get("summary"),
-        "ranked_candidates": scanner.get("ranked_candidates") or [],
+        "evidence_class": "uncalibrated_research_screen",
+        "ranked_candidates": ranked_candidates,
     }
 
 
@@ -994,11 +2180,21 @@ def _build_signal(*, signal_payload: dict[str, Any], report: dict[str, Any]) -> 
         "published_at": report["publish_edition"]["published_at"],
         "disclaimer_url": "/disclaimer.html",
         "methodology_url": "/methodology.html",
-        "artifact": signal_payload,
+        "evidence_class": "research_signal_artifact",
+        "artifact": _annotate_numeric_field_evidence(
+            signal_payload,
+            evidence_class="research_signal_artifact",
+        ),
     }
 
 
-def _build_health(*, report: dict[str, Any], is_stale_at_publish: bool) -> dict[str, Any]:
+def _build_health(
+    *,
+    report: dict[str, Any],
+    is_stale_at_publish: bool,
+    manifest_verification: dict[str, Any],
+    publication_history: dict[str, Any],
+) -> dict[str, Any]:
     gates = {
         gate["name"]: gate
         for gate in (report.get("full_system_surface") or {}).get("release_gates") or []
@@ -1015,12 +2211,15 @@ def _build_health(*, report: dict[str, Any], is_stale_at_publish: bool) -> dict[
         "runtime_mode": report["runtime_context"]["mode"],
         "data_status": (report.get("data_status") or {}).get("status"),
         "is_stale_at_publish": is_stale_at_publish,
+        "publish_manifest_status": manifest_verification.get("status"),
+        "manifest_verification": manifest_verification,
         "research_publication_status": (gates.get("research_publication") or {}).get(
             "status"
         ),
         "execution_authorization_status": (
             gates.get("execution_authorization") or {}
         ).get("status"),
+        "publication_history": publication_history,
         "disclaimer_url": "/disclaimer.html",
         "status_url": "/status.html",
     }
@@ -1034,8 +2233,10 @@ def _build_status(*, report: dict[str, Any], health: dict[str, Any]) -> dict[str
         "next_expected_at": report["publish_edition"]["next_expected_at"],
         "stale_after": report["publish_edition"]["stale_after"],
         "is_stale_at_publish": health["is_stale_at_publish"],
+        "publish_manifest_status": health["publish_manifest_status"],
         "research_publication_status": health["research_publication_status"],
         "execution_authorization_status": health["execution_authorization_status"],
+        "publication_history": health["publication_history"],
         "disclaimer_url": "/disclaimer.html",
         "privacy_url": "/privacy.html",
         "terms_url": "/terms.html",
@@ -1074,6 +2275,7 @@ def _build_manifest(
         "cadence": report["publish_edition"]["cadence"],
         "engine_version": CODE_VERSION,
         "git_sha": publication_inputs.get("git_sha"),
+        "git_provenance": publication_inputs.get("git_provenance"),
         "web_build_source": {
             "root_name": build_root.name,
             "index_name": "index.html",
@@ -1081,13 +2283,19 @@ def _build_manifest(
         },
         "input_hashes": publication_inputs,
         "artifacts": artifacts,
+        "manifest_verification": {
+            "status": "verified",
+            "artifact_count": len(artifacts),
+            "errors": [],
+        },
         "manifest_policy": {
             "canonical_json": True,
             "self_hash_excluded_paths": sorted(_MANIFEST_PATHS),
             "hash_algorithm": "sha256",
             "history_alignment": (
                 "Underlying and DVOL observations are trimmed to the snapshot "
-                "captured_at UTC date before evaluation and hashing."
+                "captured_at clock before 08:00Z settlement-aligned evaluation "
+                "and hashing."
             ),
         },
     }
@@ -1099,11 +2307,15 @@ def _project_vrp_status(raw_status: dict[str, Any]) -> dict[str, Any]:
     for point in raw_status.get("time_series") or []:
         series.append(
             {
-                "observed_at": _date_to_observed_at(point.get("date")),
+                "observed_at": point.get("evaluation_at"),
+                "evaluation_at": point.get("evaluation_at"),
+                "dvol_observed_at": point.get("dvol_observed_at"),
+                "underlying_observed_at": point.get("underlying_observed_at"),
                 "vrp_percent_points": point.get("vrp_percent_points"),
                 "dvol_percent": point.get("dvol_percent_points"),
                 "rv30_percent": point.get("rv30_percent_points"),
                 "percentile": point.get("percentile"),
+                "percentile_sample_count": point.get("percentile_sample_count"),
                 "band": _project_vrp_band(point.get("band"), point.get("percentile")),
                 "evidence_class": point.get("evidence_class"),
             }
@@ -1114,6 +2326,9 @@ def _project_vrp_status(raw_status: dict[str, Any]) -> dict[str, Any]:
         "current_vrp_percent_points": current.get("vrp_percent_points"),
         "current_dvol_percent": current.get("dvol_percent_points"),
         "current_rv30_percent": current.get("rv30_percent_points"),
+        "evaluation_at": current.get("evaluation_at"),
+        "dvol_observed_at": current.get("dvol_observed_at"),
+        "underlying_observed_at": current.get("underlying_observed_at"),
         "percentile": current.get("percentile"),
         "band": _project_vrp_band(current.get("band"), current.get("percentile")),
         "evidence_class": raw_status.get("evidence_class"),
@@ -1127,42 +2342,75 @@ def _project_vrp_status(raw_status: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _copy_web_bundle(build_root: Path, out_path: Path) -> None:
+def _copy_web_bundle(
+    build_root: Path,
+    out_path: Path,
+    *,
+    summary: dict[str, Any],
+    site_origin: str,
+) -> None:
     index_source = build_root / "index.html"
     assets_source = build_root / "assets"
     if not index_source.is_file():
         raise ValueError("web build is missing index.html")
     if not assets_source.is_dir():
         raise ValueError("web build is missing assets/")
+    for filename in sorted(_PUBLIC_LICENSE_FILES):
+        if not (build_root / filename).is_file():
+            raise ValueError(f"web build is missing {filename}")
     index_html = index_source.read_text(encoding="utf-8")
     rewritten = _rewrite_index_html(
-        index_html.replace('"/evidence/assets/', '"/assets/')
-        .replace('"./assets/', '"/assets/')
+        index_html.replace('"/evidence/assets/', '"./assets/'),
+        summary=summary,
+        page_url=f"{site_origin}/",
+        image_url=f"{site_origin}/og-card.png",
     )
+    for source in sorted(build_root.rglob("*")):
+        if not source.is_file() or source == index_source:
+            continue
+        relative = source.relative_to(build_root)
+        target = out_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
     _write_html(out_path / "index.html", rewritten)
-    assets_out = out_path / "assets"
-    assets_out.mkdir(parents=True, exist_ok=True)
-    for source in sorted(assets_source.iterdir(), key=lambda item: item.name):
-        if source.is_file():
-            (assets_out / source.name).write_bytes(source.read_bytes())
+    vrp = dict(summary.get("vrp") or {})
+    og_card = render_og_card(
+        vrp_percent_points=vrp.get("vrp_percent_points"),
+        percentile=vrp.get("percentile"),
+        band=vrp.get("band"),
+        publication_date=str(summary.get("published_at") or "")[:10],
+    )
+    _write_bytes(out_path / "og-card.png", og_card)
 
 
 def _ensure_publication_privacy(out_path: Path) -> None:
     for relative_path in _relative_file_paths(out_path):
         path = out_path / relative_path
-        if relative_path == "_headers":
+        if path.name == "_headers":
             continue
-        if path.suffix in {".js", ".css"}:
+        if path.name == "og-card.png":
+            validate_og_card_png(path.read_bytes())
             continue
-        if relative_path == "index.html" or path.suffix == ".html":
+        if (
+            relative_path == "index.html"
+            or path.name in _PUBLIC_LICENSE_FILES
+            or path.suffix in {".html", ".js", ".css", ".txt", ".xml"}
+        ):
             content = path.read_text(encoding="utf-8")
-            for forbidden in (
-                '"api_key"',
-                '"secret"',
-                '"access_token"',
-                '"refresh_token"',
-            ):
-                if forbidden in content:
+            lowered = content.lower()
+            forbidden_tokens = {
+                "api_key",
+                "secret",
+                "access_token",
+                "refresh_token",
+            }
+            if path.suffix in {".js", ".css"}:
+                forbidden_tokens.update(forbidden_bundle_tokens())
+            for forbidden in sorted(forbidden_tokens):
+                if re.search(
+                    rf"(?<![a-z0-9_]){re.escape(forbidden.lower())}(?![a-z0-9_])",
+                    lowered,
+                ):
                     raise ValueError(f"publication blocked: forbidden token {forbidden}")
             if _contains_absolute_local_path(content):
                 raise ValueError(
@@ -1199,7 +2447,13 @@ def _contains_forbidden_publication_key(value: Any) -> bool:
 
 def _contains_absolute_local_path(value: Any) -> bool:
     if isinstance(value, str):
-        return _ABSOLUTE_LOCAL_PATH_RE.search(value) is not None
+        return (
+            "file://" in value
+            or _WINDOWS_DRIVE_PATH_RE.search(value) is not None
+            or _UNC_PATH_RE.search(value) is not None
+            or _UNIX_ABSOLUTE_PATH_RE.search(value) is not None
+            or re.search(r"(?:^|\s)~[\\/][^\s]+", value) is not None
+        )
     if isinstance(value, dict):
         return any(_contains_absolute_local_path(item) for item in value.values())
     if isinstance(value, list):
@@ -1220,11 +2474,9 @@ def _prepare_output_directory(out: str) -> Path:
 
 
 def _resolve_web_build(web_build: str | None) -> Path:
-    build_root = (
-        Path(web_build).expanduser().resolve()
-        if web_build
-        else (Path(__file__).resolve().parent / "static" / "evidence")
-    )
+    if not web_build:
+        raise ValueError("explicit public web build directory is required")
+    build_root = Path(web_build).expanduser().resolve()
     if not build_root.is_dir():
         raise ValueError("web build directory not found")
     return build_root
@@ -1252,6 +2504,11 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+
+
 def _relative_file_paths(root: Path) -> list[str]:
     return sorted(
         str(path.relative_to(root)).replace("\\", "/")
@@ -1276,7 +2533,7 @@ def _timestamp(value: datetime) -> str:
     return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _trim_history_to_capture_date(
+def _trim_history_to_capture_clock(
     payload: dict[str, Any],
     *,
     captured_dt: datetime,
@@ -1285,20 +2542,20 @@ def _trim_history_to_capture_date(
     observations = payload.get("observations")
     if not isinstance(observations, list):
         raise ValueError(f"{label} observations must be a list")
-    cutoff_date = captured_dt.date().isoformat()
     trimmed: list[dict[str, Any]] = []
     for item in observations:
         if not isinstance(item, dict):
             raise ValueError(f"{label} observations must contain only objects")
-        observed_at = str(item.get("observed_at") or "")
-        if len(observed_at) < 10:
-            raise ValueError(f"{label} observation missing observed_at")
-        observed_date = observed_at[:10]
-        if observed_date > cutoff_date:
+        observed_at = item.get("observed_at")
+        observed_dt = _parse_timestamp(
+            observed_at,
+            field=f"{label} observation observed_at",
+        )
+        if observed_dt > captured_dt:
             continue
         trimmed.append(item)
     if not trimmed:
-        raise ValueError(f"{label} has no observations on or before snapshot capture date")
+        raise ValueError(f"{label} has no observations on or before snapshot capture clock")
     trimmed_payload = dict(payload)
     trimmed_payload["observations"] = trimmed
     trimmed_payload["observation_count"] = len(trimmed)
@@ -1306,89 +2563,74 @@ def _trim_history_to_capture_date(
     trimmed_payload["last_observed_at"] = trimmed[-1].get("observed_at")
     coverage = dict(trimmed_payload.get("coverage") or {})
     if coverage:
-        missing_days = list(coverage.get("missing_days") or [])
+        observed_dates = {
+            date.fromisoformat(str(item["observed_at"])[:10]) for item in trimmed
+        }
+        first_date = min(observed_dates)
+        last_date = max(observed_dates)
+        expected_dates = {
+            first_date + timedelta(days=offset)
+            for offset in range((last_date - first_date).days + 1)
+        }
+        missing_dates = sorted(expected_dates - observed_dates)
+        expected_day_count = len(expected_dates)
         trimmed_coverage = dict(coverage)
-        trimmed_coverage["observed_day_count"] = len(trimmed)
-        trimmed_coverage["missing_days"] = [
-            day for day in missing_days if isinstance(day, str) and day <= cutoff_date
-        ]
-        expected_day_count = trimmed_coverage.get("expected_day_count")
-        if isinstance(expected_day_count, int):
-            trimmed_coverage["expected_day_count"] = min(expected_day_count, len(trimmed))
-        missing_day_count = trimmed_coverage.get("missing_day_count")
-        if isinstance(missing_day_count, int):
-            trimmed_coverage["missing_day_count"] = min(
-                missing_day_count,
-                len(trimmed_coverage["missing_days"]),
-            )
+        trimmed_coverage["expected_day_count"] = expected_day_count
+        trimmed_coverage["observed_day_count"] = len(observed_dates)
+        trimmed_coverage["missing_days"] = [item.isoformat() for item in missing_dates]
+        trimmed_coverage["missing_day_count"] = len(missing_dates)
+        trimmed_coverage["coverage_ratio"] = (
+            len(observed_dates) / expected_day_count
+        )
         trimmed_payload["coverage"] = trimmed_coverage
     return trimmed_payload
-
-
-def _date_to_observed_at(value: Any) -> str | None:
-    if not isinstance(value, str) or not value:
-        return None
-    return f"{value}T08:00:00Z"
 
 
 def _project_vrp_band(raw_band: Any, percentile: Any) -> str | None:
     if not isinstance(percentile, (int, float)):
         return None
-    value = float(percentile)
-    if value >= 0.90:
-        return "P90+"
-    if value >= 0.70:
-        return "P70+"
-    if value <= 0.10:
-        return "P10-"
-    if value <= 0.30:
-        return "P30-"
-    if isinstance(raw_band, str) and raw_band:
-        return raw_band
-    return "P30-P70"
-
-
-def _html_shell(*, title: str, body: str) -> str:
-    return (
-        "<!doctype html>\n"
-        '<html lang="en">\n'
-        "  <head>\n"
-        '    <meta charset="utf-8">\n'
-        '    <meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f"    <title>{title}</title>\n"
-        "    <style>\n"
-        "      :root { color-scheme: light; }\n"
-        "      body { font-family: Georgia, 'Times New Roman', serif; margin: 0; background: #f7f3ea; color: #161616; }\n"
-        "      main { max-width: 860px; margin: 0 auto; padding: 48px 24px 72px; }\n"
-        "      h1, h2 { line-height: 1.15; }\n"
-        "      p, li { line-height: 1.65; }\n"
-        "      code { background: rgba(22,22,22,0.08); padding: 0.1rem 0.35rem; }\n"
-        "      .eyebrow { text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.78rem; color: #645b52; }\n"
-        "      .panel { border: 1px solid rgba(22,22,22,0.14); background: rgba(255,255,255,0.72); padding: 18px 20px; margin: 20px 0; }\n"
-        "      ul { padding-left: 1.25rem; }\n"
-        "      footer { margin-top: 32px; font-size: 0.95rem; color: #514940; }\n"
-        "      a { color: #0b5cab; }\n"
-        "    </style>\n"
-        "  </head>\n"
-        "  <body>\n"
-        "    <main>\n"
-        f"{body}\n"
-        "      <footer>\n"
-        "        <p>LensOS Option public research edition. All rights reserved.</p>\n"
-        "      </footer>\n"
-        "    </main>\n"
-        "  </body>\n"
-        "</html>\n"
+    internal_band = (
+        str(raw_band)
+        if isinstance(raw_band, str) and raw_band
+        else vrp_band_for_percentile(float(percentile))
     )
+    return {
+        "extremely_expensive": "P90+",
+        "expensive": "P70+",
+        "neutral": "P30-P70",
+        "thin": "P30-",
+        "extremely_thin": "P10-",
+    }.get(internal_band)
 
 
 def _headers_text() -> str:
     return (
+        "/*\n"
+        "  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'\n"
+        "  X-Content-Type-Options: nosniff\n"
+        "  Referrer-Policy: no-referrer\n"
+        "  X-Frame-Options: DENY\n"
+        "  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()\n"
+        "\n"
         "/api/v1/*\n"
         "  Access-Control-Allow-Origin: *\n"
+        "  Content-Type: application/json; charset=utf-8\n"
         "  Cache-Control: public, max-age=300\n"
         "\n"
         "/research/*\n"
+        "  Access-Control-Allow-Origin: *\n"
+        "  Content-Type: application/json; charset=utf-8\n"
+        "  Cache-Control: public, max-age=300\n"
+        "\n"
+        "/robots.txt\n"
+        "  Content-Type: text/plain; charset=utf-8\n"
+        "\n"
+        "/sitemap.xml\n"
+        "  Content-Type: application/xml; charset=utf-8\n"
+        "\n"
+        "/api/openapi.json\n"
+        "  Access-Control-Allow-Origin: *\n"
+        "  Content-Type: application/json; charset=utf-8\n"
         "  Cache-Control: public, max-age=300\n"
         "\n"
         "/assets/*\n"
@@ -1396,9 +2638,22 @@ def _headers_text() -> str:
     )
 
 
-def _rewrite_index_html(index_html: str) -> str:
+def _rewrite_index_html(
+    index_html: str,
+    *,
+    summary: dict[str, Any],
+    page_url: str,
+    image_url: str,
+) -> str:
     title = PUBLIC_SITE_TITLE
     description = PUBLIC_SITE_DESCRIPTION
+    vrp = dict(summary.get("vrp") or {})
+    og_alt = (
+        "BTC volatility risk premium "
+        f"{float(vrp['vrp_percent_points']):+.2f} vol points, "
+        f"{float(vrp['percentile']) * 100:.1f} percentile, "
+        f"{vrp['band']}, research only"
+    )
     rewritten = re.sub(r"<title>.*?</title>", f"<title>{title}</title>", index_html, count=1, flags=re.S)
     rewritten = re.sub(
         r'(<meta\s+name="description"\s+content=")(.*?)(".*?>)',
@@ -1412,98 +2667,45 @@ def _rewrite_index_html(index_html: str) -> str:
         f'    <meta property="og:description" content="{description}">\n'
         '    <meta property="og:type" content="website">\n'
         '    <meta property="og:locale" content="zh_CN">\n'
-        '    <meta name="twitter:card" content="summary">\n'
+        f'    <meta property="og:url" content="{page_url}">\n'
+        f'    <meta property="og:image" content="{image_url}">\n'
+        f'    <meta property="og:image:alt" content="{og_alt}">\n'
+        '    <meta property="og:image:width" content="1200">\n'
+        '    <meta property="og:image:height" content="630">\n'
+        '    <meta property="og:image:type" content="image/png">\n'
+        '    <meta name="twitter:card" content="summary_large_image">\n'
+        f'    <meta name="twitter:image" content="{image_url}">\n'
+        f'    <meta name="twitter:image:alt" content="{og_alt}">\n'
         f'    <meta name="twitter:title" content="{title}">\n'
         f'    <meta name="twitter:description" content="{description}">\n'
     )
     if 'property="og:title"' not in rewritten:
-        rewritten = rewritten.replace("  </head>", f"{meta_block}  </head>", 1)
+        rewritten = rewritten.replace("</head>", f"{meta_block}</head>", 1)
+    rewritten = re.sub(
+        r'(<meta\s+property="og:url"\s+content=")(.*?)(">)',
+        rf"\g<1>{page_url}\g<3>",
+        rewritten,
+        count=1,
+    )
+    rewritten = re.sub(
+        r'(<meta\s+property="og:image"\s+content=")(.*?)(">)',
+        rf"\g<1>{image_url}\g<3>",
+        rewritten,
+        count=1,
+    )
+    rewritten = re.sub(
+        r'(<meta\s+name="twitter:image"\s+content=")(.*?)(">)',
+        rf"\g<1>{image_url}\g<3>",
+        rewritten,
+        count=1,
+    )
     return rewritten
 
 
-def _methodology_html(report: dict[str, Any]) -> str:
-    publish = report["publish_edition"]
-    body = (
-        '<p class="eyebrow">Methodology</p>\n'
-        "<h1>Public research methodology</h1>\n"
-        "<p>This edition publishes a deterministic snapshot of the research state. "
-        "It is evaluated at the capture time and then served read-only.</p>\n"
-        '<section class="panel">\n'
-        "  <h2>VRP definition</h2>\n"
-        "  <p><code>VRP(t) = DVOL(t) - RV_30(t)</code>.</p>\n"
-        "  <ul>\n"
-        "    <li>DVOL is the Deribit BTC DVOL daily close from the public volatility-index endpoint.</li>\n"
-        "    <li>RV30 is the sample standard deviation of the past 30 calendar days of close-to-close log returns, annualized with a 365-day factor.</li>\n"
-        "    <li>The percentile is the empirical rank of the current VRP inside a 1095-day rolling window.</li>\n"
-        "    <li>Thresholds: P90+ extremely expensive, P70+ expensive, P30-P70 neutral, P30- thin, P10- extremely thin.</li>\n"
-        "  </ul>\n"
-        "</section>\n"
-        '<section class="panel">\n'
-        "  <h2>Missing days and boundaries</h2>\n"
-        "  <p>Missing DVOL or underlying days are not interpolated. They are marked missing and excluded from the percentile sample instead of being coerced to zero.</p>\n"
-        "  <p>Publication never enables execution. Order entry, sizing, and account credentials stay outside the public tree.</p>\n"
-        "</section>\n"
-        '<section class="panel">\n'
-        "  <h2>Publication contract</h2>\n"
-        f"  <p>Captured at <code>{publish['captured_at']}</code>, published at <code>{publish['published_at']}</code>, next expected at <code>{publish['next_expected_at']}</code>, stale after <code>{publish['stale_after']}</code>.</p>\n"
-        "</section>\n"
-    )
-    return _html_shell(title="LensOS Option Methodology", body=body)
+def _status_html(status: dict[str, Any], *, language: str) -> str:
+    return render_public_status_html(status, language=language)
 
 
-def _disclaimer_html(report: dict[str, Any]) -> str:
-    body = (
-        '<p class="eyebrow">Disclaimer</p>\n'
-        "<h1>Research only</h1>\n"
-        "<p>This site is published for research and information only. It is not investment advice, a solicitation, an offer, or a promise of execution.</p>\n"
-        "<ul>\n"
-        "  <li>No order entry, position sizing, or execution authority is exposed here.</li>\n"
-        "  <li>Data comes from third-party public endpoints and may be incomplete, delayed, or wrong.</li>\n"
-        "  <li>Crypto options are high risk. Short-volatility positions can lose more than collected premium.</li>\n"
-        "  <li>Users remain responsible for every decision they make.</li>\n"
-        "</ul>\n"
-        f"<p>Current public edition: <code>{report['publish_edition']['published_at']}</code>.</p>\n"
-    )
-    return _html_shell(title="LensOS Option Disclaimer", body=body)
-
-
-def _privacy_html(report: dict[str, Any]) -> str:
-    body = (
-        '<p class="eyebrow">Privacy</p>\n'
-        "<h1>Privacy policy</h1>\n"
-        "<p>This static publication does not set cookies, does not accept user accounts, and does not embed third-party analytics tags.</p>\n"
-        "<p>Operational logs at the hosting layer may still record normal HTTP metadata such as IP address, user agent, and request time according to the host's own policies.</p>\n"
-        f"<p>Published edition timestamp: <code>{report['publish_edition']['published_at']}</code>.</p>\n"
-    )
-    return _html_shell(title="LensOS Option Privacy", body=body)
-
-
-def _terms_html(report: dict[str, Any]) -> str:
-    body = (
-        '<p class="eyebrow">Terms</p>\n'
-        "<h1>Terms of use</h1>\n"
-        "<p>All rights are reserved unless a separate written grant says otherwise. The public API is provided on a best-effort basis with no service-level guarantee.</p>\n"
-        "<ul>\n"
-        "  <li>Do not present this material as a live trading signal or execution service.</li>\n"
-        "  <li>Attribute the source when quoting the public JSON outputs.</li>\n"
-        "  <li>Do not imply official affiliation with Deribit.</li>\n"
-        "</ul>\n"
-        f"<p>Cadence: <code>{report['publish_edition']['cadence']}</code>.</p>\n"
-    )
-    return _html_shell(title="LensOS Option Terms", body=body)
-
-
-def _status_html(status: dict[str, Any]) -> str:
-    body = (
-        '<p class="eyebrow">Status</p>\n'
-        "<h1>Publication status</h1>\n"
-        '<section class="panel">\n'
-        f"  <p>Published at <code>{status['published_at']}</code>.</p>\n"
-        f"  <p>Next expected at <code>{status['next_expected_at']}</code>.</p>\n"
-        f"  <p>Stale after <code>{status['stale_after']}</code>.</p>\n"
-        f"  <p>Research publication gate: <strong>{status['research_publication_status']}</strong>.</p>\n"
-        f"  <p>Execution authorization: <strong>{status['execution_authorization_status']}</strong>.</p>\n"
-        f"  <p>Stale at publish: <strong>{'yes' if status['is_stale_at_publish'] else 'no'}</strong>.</p>\n"
-        "</section>\n"
-    )
-    return _html_shell(title="LensOS Option Status", body=body)
+def _write_status_pages(out_path: Path, status: dict[str, Any]) -> None:
+    _write_html(out_path / "status.html", _status_html(status, language="zh-CN"))
+    _write_html(out_path / "en" / "status.html", _status_html(status, language="en"))

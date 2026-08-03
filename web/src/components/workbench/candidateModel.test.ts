@@ -7,6 +7,7 @@ import {
   dominanceExplanationFor,
   evCandidateScannerOf,
   parseCandidateLegs,
+  researchRankingValueLabel,
   scannerStatus,
   sortCandidateRows,
   structureTypeOptions,
@@ -118,6 +119,13 @@ describe("scannerStatus / evCandidateScannerOf", () => {
       "theta_efficiency",
       "liquidity_cost_ratio",
     ]);
+  });
+
+  it("uses the public-facing uncalibrated ranking label as the minimum fallback", () => {
+    expect(researchRankingValueLabel(undefined)).toBe("研究排序值（未校准）");
+    expect(researchRankingValueLabel("UNCALIBRATED_RESEARCH_ONLY")).toBe(
+      "研究排序值（未校准）",
+    );
   });
 });
 

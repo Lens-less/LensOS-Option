@@ -60,7 +60,7 @@ export function signedMoney(
 
 export function dte(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "—";
+    return "不可用";
   }
   return `${value.toLocaleString("zh-CN", { maximumFractionDigits: 1 })} 天`;
 }

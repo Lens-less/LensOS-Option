@@ -16,6 +16,7 @@ import { finiteNumber } from "../../report";
 
 export type ScannerStatus = "unavailable" | "blocked" | "validated";
 export type StructureKind = "spread" | "naked" | "unknown";
+export const RESEARCH_RANKING_VALUE_LABEL = "研究排序值（未校准）";
 
 /** Edge component and dominance-axis names share this vocabulary. */
 export const AXIS_LABELS: Record<string, string> = {
@@ -252,6 +253,13 @@ export function parseCandidateLegs(candidateId: string): CandidateLegs {
 
 export function scannerStatus(report: ResearchReport): ScannerStatus {
   return evCandidateScannerOf(report)?.status ?? "unavailable";
+}
+
+export function researchRankingValueLabel(scoreStatus?: string | null): string {
+  if (!scoreStatus || scoreStatus === "UNCALIBRATED_RESEARCH_ONLY") {
+    return RESEARCH_RANKING_VALUE_LABEL;
+  }
+  return scoreStatus.replaceAll("_", " ");
 }
 
 function toRow(candidate: RankedCandidate): CandidateViewRow {

@@ -501,10 +501,12 @@ The headline is one measurement, not a weighted score:
 
 Both values use percentage points. `RV30` is the sample standard deviation of
 30 daily close-to-close log returns, annualized by `sqrt(365)`. The gauge is
-the empirical percentile of the current VRP in the trailing 1095 calendar-day
-window. Missing dates are neither interpolated nor forward-filled; they are
-excluded and listed, with the actual sample count published. Thresholds are
-registered as P90/P70/P30/P10 and may not change silently.
+the leave-current-out empirical percentile of the current VRP over the
+configured trailing calendar-day window. The publisher discloses that window
+as `window_days`; consumers must read it rather than assume a fixed duration.
+Missing dates are neither interpolated nor forward-filled; they are excluded
+and listed with the effective comparison sample. Thresholds are registered as
+P90/P70/P30/P10 and may not change silently.
 
 Every rendering keeps the limitation next to the number: positive VRP is not
 proof of opportunity. It may be compensation for future volatility. Missing,

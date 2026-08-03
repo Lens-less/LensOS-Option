@@ -7,7 +7,12 @@ import {
   tierLabel,
   tierTone,
 } from "../candidate/vocabulary";
-import type { CandidateViewRow, SortKey, SortState } from "./candidateModel";
+import {
+  RESEARCH_RANKING_VALUE_LABEL,
+  type CandidateViewRow,
+  type SortKey,
+  type SortState,
+} from "./candidateModel";
 
 const COLUMNS: Array<{ key: SortKey; label: string }> = [
   { key: "structureType", label: "合约 / 结构" },
@@ -15,7 +20,7 @@ const COLUMNS: Array<{ key: SortKey; label: string }> = [
   { key: "dteDays", label: "DTE" },
   { key: "executableCreditUsdc", label: "可成交信用" },
   { key: "evAfterCostUsdc", label: "税后 EV" },
-  { key: "rankingScore", label: "排序分" },
+  { key: "rankingScore", label: RESEARCH_RANKING_VALUE_LABEL },
 ];
 
 /**
@@ -180,7 +185,7 @@ export function CandidateScreenerTable({
                 {evCellContent(row)}
               </td>
               <td className="numeric-cell">
-                {row.rankingScore === null ? "—" : row.rankingScore.toFixed(3)}
+                {row.rankingScore === null ? "不可用" : row.rankingScore.toFixed(3)}
               </td>
             </tr>
           ))}

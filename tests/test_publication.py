@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import tempfile
 import threading
 import unittest
@@ -14,12 +15,18 @@ from crypto_options_report.market_data import (
     load_public_replay_fixture,
     load_snapshot_fixture,
 )
-from crypto_options_report.publication import publish_site
+from crypto_options_report.publication import (
+    _build_release_gates_from_disk,
+    _load_manifest_verification,
+    _trim_history_to_capture_clock,
+    publish_site,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_FIXTURE = ROOT / "tests" / "fixtures" / "deribit_btc_option_chain_snapshot.json"
 PUBLIC_REPLAY_FIXTURE = ROOT / "tests" / "fixtures" / "public_deribit_replay.json"
 PUBLIC_TITLE = "\u0042\u0054\u0043\u0020\u671f\u6743\u5356\u65b9\u6ea2\u4ef7\u6301\u7eed\u89c2\u5bdf\u53f0"
+SITE_ORIGIN = "https://research.lensos.dev"
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -58,6 +65,45 @@ def _contains_forbidden_key(value: object, forbidden: set[str]) -> bool:
     if isinstance(value, list):
         return any(_contains_forbidden_key(item, forbidden) for item in value)
     return False
+
+
+def _assert_schema_accepts(value: object, schema: dict, *, path: str = "$") -> None:
+    if "anyOf" in schema:
+        failures = []
+        for candidate in schema["anyOf"]:
+            try:
+                _assert_schema_accepts(value, candidate, path=path)
+                return
+            except AssertionError as exc:
+                failures.append(str(exc))
+        raise AssertionError(f"{path} matched no anyOf branch: {failures}")
+
+    expected_type = schema.get("type")
+    if expected_type == "null":
+        assert value is None, path
+    elif expected_type == "boolean":
+        assert isinstance(value, bool), path
+    elif expected_type == "integer":
+        assert isinstance(value, int) and not isinstance(value, bool), path
+    elif expected_type == "number":
+        assert isinstance(value, (int, float)) and not isinstance(value, bool), path
+    elif expected_type == "string":
+        assert isinstance(value, str), path
+    elif expected_type == "array":
+        assert isinstance(value, list), path
+        for index, item in enumerate(value):
+            _assert_schema_accepts(item, schema.get("items", {}), path=f"{path}[{index}]")
+    elif expected_type == "object":
+        assert isinstance(value, dict), path
+        properties = schema.get("properties", {})
+        missing = set(schema.get("required", [])) - set(value)
+        assert not missing, f"{path} missing {sorted(missing)}"
+        if schema.get("additionalProperties") is False:
+            extra = set(value) - set(properties)
+            assert not extra, f"{path} has additional properties {sorted(extra)}"
+        for key, item in value.items():
+            if key in properties:
+                _assert_schema_accepts(item, properties[key], path=f"{path}.{key}")
 
 
 def _build_underlying_history_fixture(
@@ -190,13 +236,29 @@ def _build_signal_artifact(captured_at: str) -> dict[str, object]:
     return {
         "schema_version": "signal_preflight.v1",
         "captured_at": captured_at,
-        "status": "validated",
+        "generated_at": captured_at,
+        "research_only": True,
+        "status": "projected",
         "headline": "Published public research signal artifact",
+        "summary": {
+            "signals_measured": 1,
+            "signals_with_detectable_ic": 0,
+        },
+        "bands": {
+            "research_window": {
+                "cohorts_required": 8,
+                "cohorts_seen": 3,
+                "cohorts_short_by": 5,
+                "pending_cohorts": 1,
+                "settled_cohorts": 2,
+            }
+        },
         "cohorts": [
             {
                 "name": "smile_residual_z",
                 "registered_at": "2026-07-27T00:00:00Z",
                 "status": "collecting",
+                "observation_count": 3,
             }
         ],
     }
@@ -234,7 +296,65 @@ def _build_series_artifact(
     }
 
 
+def _build_publication_history_fixture(published_at: str) -> dict[str, object]:
+    published_dt = _parse_timestamp(published_at) - timedelta(days=1)
+    prior_published_at = _timestamp(published_dt)
+    return {
+        "schema_version": "publication_history.v1",
+        "generated_at": published_at,
+        "entries": [
+            {
+                "date": prior_published_at[:10],
+                "captured_at": _timestamp(published_dt - timedelta(hours=1)),
+                "published_at": prior_published_at,
+                "status": "success",
+                "research_publication_status": "GO",
+                "capture_row_count": 96,
+                "quality_gate_blocked_count": 0,
+                "excluded_snapshot_count": 1,
+                "manifest_sha256": "a" * 64,
+                "reason_code": None,
+            }
+        ],
+    }
+
+
 class PublicationTests(unittest.TestCase):
+    def test_history_cutoff_uses_exact_capture_clock_and_recomputes_coverage(self) -> None:
+        payload = {
+            "coverage": {
+                "expected_day_count": 4,
+                "observed_day_count": 3,
+                "missing_day_count": 1,
+                "coverage_ratio": 0.75,
+                "missing_days": ["2026-08-02"],
+            },
+            "observations": [
+                {"observed_at": "2026-08-01T00:00:00Z", "close": 30.0},
+                {"observed_at": "2026-08-03T00:00:00Z", "close": 31.0},
+                {"observed_at": "2026-08-03T00:02:00Z", "close": 99.0},
+            ],
+        }
+
+        trimmed = _trim_history_to_capture_clock(
+            payload,
+            captured_dt=_parse_timestamp("2026-08-03T00:01:00Z"),
+            label="DVOL history",
+        )
+
+        self.assertEqual(2, trimmed["observation_count"])
+        self.assertEqual("2026-08-03T00:00:00Z", trimmed["last_observed_at"])
+        self.assertEqual(
+            {
+                "expected_day_count": 3,
+                "observed_day_count": 2,
+                "missing_day_count": 1,
+                "coverage_ratio": 2 / 3,
+                "missing_days": ["2026-08-02"],
+            },
+            trimmed["coverage"],
+        )
+
     def _write_json(self, path: Path, payload: object) -> Path:
         path.write_text(canonical_json_text(payload), encoding="utf-8")
         return path
@@ -247,8 +367,13 @@ class PublicationTests(unittest.TestCase):
         underlying_payload: dict | None = None,
         dvol_payload: dict | None = None,
         signal_payload: dict | None = None,
+        series_payload: dict | None = None,
+        publication_history_payload: dict | None = None,
         published_at: str | None = None,
         out_name: str = "site",
+        git_sha: str | None = "abc123def456",
+        web_build: Path | None = None,
+        site_origin: str = SITE_ORIGIN,
     ) -> tuple[Path, dict]:
         snapshot = snapshot_payload or load_snapshot_fixture(str(SNAPSHOT_FIXTURE))
         snapshot_path = self._write_json(tempdir / "snapshot.json", snapshot)
@@ -266,21 +391,84 @@ class PublicationTests(unittest.TestCase):
         )
         series_path = self._write_json(
             tempdir / "series.json",
-            _build_series_artifact(snapshot["captured_at"]),
+            series_payload or _build_series_artifact(snapshot["captured_at"]),
         )
         published_value = published_at or snapshot["captured_at"]
+        publication_history_path = self._write_json(
+            tempdir / "publication-history.json",
+            publication_history_payload
+            or _build_publication_history_fixture(published_value),
+        )
         output_dir = tempdir / out_name
+        resolved_web_build = web_build or self._build_custom_web_build(tempdir)
         result = publish_site(
             snapshot=str(snapshot_path),
             underlying_history=str(underlying_path),
             dvol_history=str(dvol_path),
             signal_artifact=str(signal_path),
             series_artifact=str(series_path),
+            publication_history=str(publication_history_path),
             out=str(output_dir),
             published_at=published_value,
-            git_sha="abc123def456",
+            git_sha=git_sha,
+            web_build=str(resolved_web_build),
+            site_origin=site_origin,
         )
         return output_dir, result
+
+    def _build_custom_web_build(
+        self,
+        tempdir: Path,
+        *,
+        js_append: str = "",
+        css_append: str = "",
+    ) -> Path:
+        destination = tempdir / "custom-web-build"
+        if destination.exists():
+            shutil.rmtree(destination)
+        (destination / "assets").mkdir(parents=True)
+        (destination / "index.html").write_text(
+            "<!doctype html><html lang=\"zh-CN\"><head>"
+            "<meta charset=\"UTF-8\"><meta name=\"description\" content=\"public\">"
+            "<title>Public</title><link rel=\"stylesheet\" href=\"./assets/app.css\">"
+            "</head><body><div id=\"root\"></div>"
+            "<script type=\"module\" src=\"./assets/app.js\"></script></body></html>\n",
+            encoding="utf-8",
+        )
+        (destination / "assets" / "app.js").write_text(
+            'document.querySelector("#root")?.setAttribute("data-public", "true");\n',
+            encoding="utf-8",
+        )
+        (destination / "assets" / "app.css").write_text(
+            ":root { color-scheme: light; }\n",
+            encoding="utf-8",
+        )
+        public_pages = ROOT / "web" / "public"
+        for source in sorted(public_pages.rglob("*")):
+            if not source.is_file():
+                continue
+            target = destination / source.relative_to(public_pages)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        for filename in ("LICENSE", "LICENSE-DATA"):
+            shutil.copy2(ROOT / filename, destination / filename)
+        if js_append:
+            target = next(
+                path for path in sorted((destination / "assets").iterdir()) if path.suffix == ".js"
+            )
+            target.write_text(
+                target.read_text(encoding="utf-8") + js_append,
+                encoding="utf-8",
+            )
+        if css_append:
+            target = next(
+                path for path in sorted((destination / "assets").iterdir()) if path.suffix == ".css"
+            )
+            target.write_text(
+                target.read_text(encoding="utf-8") + css_append,
+                encoding="utf-8",
+            )
+        return destination
 
     def test_publish_is_deterministic_and_rewrites_bundle_paths(self) -> None:
         with tempfile.TemporaryDirectory() as first_tmp, tempfile.TemporaryDirectory() as second_tmp:
@@ -288,6 +476,7 @@ class PublicationTests(unittest.TestCase):
             published_at = _timestamp(
                 _parse_timestamp(snapshot["captured_at"]) + timedelta(hours=25)
             )
+            edition_date = published_at[:10]
             first_dir, first_result = self._publish(
                 Path(first_tmp),
                 published_at=published_at,
@@ -299,33 +488,102 @@ class PublicationTests(unittest.TestCase):
                 out_name="second",
             )
 
-            asset_paths = {
-                f"assets/{path.name}"
-                for path in (ROOT / "crypto_options_report" / "static" / "evidence" / "assets").iterdir()
-                if path.is_file()
-            }
+            asset_paths = {"assets/app.css", "assets/app.js"}
             expected_paths = {
                 ".well-known/publish-manifest.json",
                 "_headers",
+                "LICENSE",
+                "LICENSE-DATA",
+                "api/openapi.json",
                 "api/v1/candidates.json",
                 "api/v1/health.json",
                 "api/v1/manifest.json",
                 "api/v1/signal.json",
                 "api/v1/summary.json",
                 "api/v1/thermo.json",
+                "api/v1/thermo/recent.json",
                 "disclaimer.html",
+                "en/disclaimer.html",
+                "en/methodology.html",
+                "en/privacy.html",
+                "en/status.html",
+                "en/terms.html",
                 "index.html",
                 "methodology.html",
+                "og-card.png",
                 "privacy.html",
                 "research/report",
                 "research/series",
                 "research/signal",
+                "robots.txt",
+                "sitemap.xml",
                 "status.html",
+                "static-page.css",
                 "terms.html",
             }
             expected_paths.update(asset_paths)
+            expected_paths.update(
+                {
+                    f"api/v1/thermo/by-year/{year}.json"
+                    for year in ("2023", "2024", "2025", "2026")
+                }
+            )
+            expected_paths.update(
+                {
+                    f"editions/{edition_date}/{relative}"
+                    for relative in asset_paths
+                }
+            )
+            expected_paths.update(
+                {
+                    f"editions/{edition_date}/.well-known/publish-manifest.json",
+                    f"editions/{edition_date}/_headers",
+                    f"editions/{edition_date}/LICENSE",
+                    f"editions/{edition_date}/LICENSE-DATA",
+                    f"editions/{edition_date}/api/openapi.json",
+                    f"editions/{edition_date}/api/v1/candidates.json",
+                    f"editions/{edition_date}/api/v1/health.json",
+                    f"editions/{edition_date}/api/v1/manifest.json",
+                    f"editions/{edition_date}/api/v1/signal.json",
+                    f"editions/{edition_date}/api/v1/summary.json",
+                    f"editions/{edition_date}/api/v1/thermo.json",
+                    f"editions/{edition_date}/api/v1/thermo/recent.json",
+                    f"editions/{edition_date}/disclaimer.html",
+                    f"editions/{edition_date}/en/disclaimer.html",
+                    f"editions/{edition_date}/en/methodology.html",
+                    f"editions/{edition_date}/en/privacy.html",
+                    f"editions/{edition_date}/en/status.html",
+                    f"editions/{edition_date}/en/terms.html",
+                    f"editions/{edition_date}/index.html",
+                    f"editions/{edition_date}/methodology.html",
+                    f"editions/{edition_date}/og-card.png",
+                    f"editions/{edition_date}/privacy.html",
+                    f"editions/{edition_date}/research/report",
+                    f"editions/{edition_date}/research/series",
+                    f"editions/{edition_date}/research/signal",
+                    f"editions/{edition_date}/robots.txt",
+                    f"editions/{edition_date}/sitemap.xml",
+                    f"editions/{edition_date}/status.html",
+                    f"editions/{edition_date}/static-page.css",
+                    f"editions/{edition_date}/terms.html",
+                }
+            )
+            expected_paths.update(
+                {
+                    f"editions/{edition_date}/api/v1/thermo/by-year/{year}.json"
+                    for year in ("2023", "2024", "2025", "2026")
+                }
+            )
 
             self.assertTrue(expected_paths.issubset(set(_tree_listing(first_dir))))
+            self.assertEqual(
+                (ROOT / "LICENSE").read_bytes(),
+                (first_dir / "LICENSE").read_bytes(),
+            )
+            self.assertEqual(
+                (ROOT / "LICENSE-DATA").read_bytes(),
+                (first_dir / "LICENSE-DATA").read_bytes(),
+            )
             self.assertEqual(_tree_listing(first_dir), _tree_listing(second_dir))
             self.assertEqual(_tree_hashes(first_dir), _tree_hashes(second_dir))
 
@@ -335,13 +593,91 @@ class PublicationTests(unittest.TestCase):
                 f'<meta property="og:title" content="{PUBLIC_TITLE}">',
                 index_html,
             )
-            self.assertIn('src="/assets/', index_html)
-            self.assertIn('href="/assets/', index_html)
+            self.assertIn(
+                f'<meta property="og:url" content="{SITE_ORIGIN}/">',
+                index_html,
+            )
+            self.assertIn(
+                f'<meta property="og:image" content="{SITE_ORIGIN}/og-card.png">',
+                index_html,
+            )
+            self.assertIn(
+                '<meta name="twitter:card" content="summary_large_image">',
+                index_html,
+            )
+            self.assertIn(
+                f'<meta name="twitter:image" content="{SITE_ORIGIN}/og-card.png">',
+                index_html,
+            )
+            self.assertEqual(
+                f"User-agent: *\nAllow: /\nSitemap: {SITE_ORIGIN}/sitemap.xml\n",
+                (first_dir / "robots.txt").read_text(encoding="utf-8"),
+            )
+            sitemap = (first_dir / "sitemap.xml").read_text(encoding="utf-8")
+            self.assertIn(f"<loc>{SITE_ORIGIN}/</loc>", sitemap)
+            self.assertIn(
+                f"<loc>{SITE_ORIGIN}/editions/{edition_date}/</loc>", sitemap
+            )
+            edition_index = (
+                first_dir / "editions" / edition_date / "index.html"
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                f'<meta property="og:url" content="{SITE_ORIGIN}/editions/{edition_date}/">',
+                edition_index,
+            )
+            self.assertTrue(
+                (first_dir / "og-card.png").read_bytes().startswith(
+                    b"\x89PNG\r\n\x1a\n"
+                )
+            )
+            self.assertIn('src="./assets/', index_html)
+            self.assertIn('href="./assets/', index_html)
             self.assertNotIn("/evidence/assets/", index_html)
+            archived_index = (
+                first_dir / "editions" / edition_date / "index.html"
+            ).read_text(encoding="utf-8")
+            self.assertIn('src="./assets/', archived_index)
+            self.assertIn('href="./assets/', archived_index)
+            self.assertIn('lang="zh-CN"', (first_dir / "status.html").read_text(encoding="utf-8"))
+            self.assertIn(
+                'href="./LICENSE"',
+                (first_dir / "terms.html").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'href="../LICENSE"',
+                (first_dir / "en" / "terms.html").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'href="./LICENSE-DATA"',
+                (first_dir / "editions" / edition_date / "terms.html").read_text(
+                    encoding="utf-8"
+                ),
+            )
+            self.assertIn(
+                'href="../LICENSE-DATA"',
+                (
+                    first_dir
+                    / "editions"
+                    / edition_date
+                    / "en"
+                    / "terms.html"
+                ).read_text(encoding="utf-8"),
+            )
+            self.assertIn('lang="en"', (first_dir / "en" / "status.html").read_text(encoding="utf-8"))
+            self.assertIn("静态状态页不会自行判定", (first_dir / "status.html").read_text(encoding="utf-8"))
+            self.assertIn("公开头条默认滞后一日", (first_dir / "methodology.html").read_text(encoding="utf-8"))
             headers = (first_dir / "_headers").read_text(encoding="utf-8")
+            self.assertTrue(headers.startswith("/*\n"))
             self.assertIn("/api/v1/*", headers)
             self.assertIn("Access-Control-Allow-Origin: *", headers)
             self.assertIn("Cache-Control: public, max-age=300", headers)
+            self.assertIn("/research/*", headers)
+            self.assertIn("Content-Type: application/json; charset=utf-8", headers)
+            self.assertIn("Content-Security-Policy: default-src 'self';", headers)
+            self.assertIn("X-Content-Type-Options: nosniff", headers)
+            self.assertIn("Referrer-Policy: no-referrer", headers)
+            self.assertIn("X-Frame-Options: DENY", headers)
+            self.assertNotIn("'unsafe-inline'", headers)
 
             manifest = json.loads(
                 (first_dir / "api" / "v1" / "manifest.json").read_text(
@@ -355,6 +691,7 @@ class PublicationTests(unittest.TestCase):
             )
             self.assertEqual(manifest, publish_manifest)
             self.assertEqual(first_result["manifest_sha256"], second_result["manifest_sha256"])
+            self.assertEqual("verified", manifest["manifest_verification"]["status"])
             for artifact in manifest["artifacts"]:
                 path = first_dir / artifact["path"]
                 self.assertTrue(path.is_file(), artifact["path"])
@@ -450,6 +787,16 @@ class PublicationTests(unittest.TestCase):
                     summary["vrp"]["evidence_class"], field["evidence_class"]
                 )
             self.assertFalse(health["is_stale_at_publish"])
+            self.assertEqual("verified", health["publish_manifest_status"])
+            self.assertEqual("available", health["publication_history"]["status"])
+            self.assertEqual(1, len(health["publication_history"]["history"]))
+            self.assertNotIn(
+                "manifest_sha256",
+                health["publication_history"]["history"][0],
+            )
+            self.assertIn("change", summary)
+            self.assertIn("alert", summary)
+            self.assertIn("publication_history", summary)
 
     def test_publish_marks_a_50_hour_old_edition_as_stale_at_publish(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -498,6 +845,11 @@ class PublicationTests(unittest.TestCase):
                 tempdir / "series.json",
                 _build_series_artifact(snapshot["captured_at"]),
             )
+            publication_history_path = self._write_json(
+                tempdir / "publication-history.json",
+                _build_publication_history_fixture("2026-08-01T09:00:14Z"),
+            )
+            web_build = self._build_custom_web_build(tempdir)
 
             with self.assertRaisesRegex(ValueError, "snapshot input not found"):
                 publish_site(
@@ -506,8 +858,10 @@ class PublicationTests(unittest.TestCase):
                     dvol_history=str(dvol_path),
                     signal_artifact=str(signal_path),
                     series_artifact=str(series_path),
+                    publication_history=str(publication_history_path),
                     out=str(tempdir / "other-site"),
                     published_at="2026-08-01T09:00:14Z",
+                    site_origin=SITE_ORIGIN,
                 )
 
             with self.assertRaisesRegex(ValueError, "output directory must not already contain files"):
@@ -517,8 +871,11 @@ class PublicationTests(unittest.TestCase):
                     dvol_history=str(dvol_path),
                     signal_artifact=str(signal_path),
                     series_artifact=str(series_path),
+                    publication_history=str(publication_history_path),
                     out=str(out_dir),
                     published_at="2026-08-01T09:00:14Z",
+                    web_build=str(web_build),
+                    site_origin=SITE_ORIGIN,
                 )
 
             with self.assertRaisesRegex(
@@ -531,11 +888,67 @@ class PublicationTests(unittest.TestCase):
                     dvol_history=str(dvol_path),
                     signal_artifact=str(signal_path),
                     series_artifact=str(series_path),
+                    publication_history=str(publication_history_path),
                     out=str(tempdir / "too-early"),
                     published_at=_timestamp(
                         _parse_timestamp(snapshot["captured_at"]) - timedelta(seconds=1)
                     ),
+                    web_build=str(web_build),
+                    site_origin=SITE_ORIGIN,
                 )
+
+    def test_publish_rejects_non_https_or_non_origin_site_urls_before_writing(self) -> None:
+        invalid_origins = (
+            "",
+            "http://research.example.com",
+            "https://user:password@research.example.com",
+            "https://research.example.com/public",
+            "https://research.example.com/?preview=true",
+            "https://research.example.com/#latest",
+            "https://localhost",
+            "https://127.0.0.1",
+            "https://[::1]",
+            "https://intranet",
+            "https://preview.invalid",
+            "https://preview.alt",
+            "https://service.arpa",
+            "https://research.example.com",
+            "https://research.lensos.dev:8443",
+            "https://research.lensos.dev.",
+            "https://-research.lensos.dev",
+            "https://research_.lensos.dev",
+            "https://research..lensos.dev",
+            "https://research.lensos.123",
+            f"https://{'a' * 64}.lensos.dev",
+        )
+        for index, site_origin in enumerate(invalid_origins):
+            with self.subTest(site_origin=site_origin), tempfile.TemporaryDirectory() as tmp:
+                tempdir = Path(tmp)
+                output_dir = tempdir / f"invalid-origin-{index}"
+                with self.assertRaisesRegex(ValueError, "site_origin"):
+                    self._publish(
+                        tempdir,
+                        out_name=output_dir.name,
+                        site_origin=site_origin,
+                    )
+                self.assertFalse(output_dir.exists())
+
+    def test_publish_rejects_public_build_without_license_files(self) -> None:
+        for filename in ("LICENSE", "LICENSE-DATA"):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as tmp:
+                tempdir = Path(tmp)
+                web_build = self._build_custom_web_build(tempdir)
+                (web_build / filename).unlink()
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"web build is missing {filename}",
+                ):
+                    self._publish(
+                        tempdir,
+                        out_name=f"site-without-{filename.lower()}",
+                        web_build=web_build,
+                    )
 
     def test_publish_report_is_explicitly_sanitized_and_tree_excludes_private_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -636,7 +1049,14 @@ class PublicationTests(unittest.TestCase):
             }
             for relative in _tree_listing(output_dir):
                 path = output_dir / relative
-                if relative == "_headers" or path.suffix in {".html", ".js", ".css"}:
+                if path.name in {"_headers", "LICENSE", "LICENSE-DATA"} or path.suffix in {
+                    ".html",
+                    ".js",
+                    ".css",
+                    ".png",
+                    ".txt",
+                    ".xml",
+                }:
                     continue
                 with self.subTest(relative=relative):
                     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -650,6 +1070,9 @@ class PublicationTests(unittest.TestCase):
                 "private-field": {"account_status": {"status": "missing"}},
                 "absolute-path": {
                     "diagnostic_path": r"C:\Users\operator\private\signal.json"
+                },
+                "unexpected-public-field": {
+                    "operator_notes": {"desk_name": "research-a", "equity_usd": 123456.78}
                 },
             }
             for out_name, injected in cases.items():
@@ -665,6 +1088,87 @@ class PublicationTests(unittest.TestCase):
                     output_dir = tempdir / out_name
                     self.assertTrue(output_dir.is_dir())
                     self.assertEqual([], list(output_dir.rglob("*")))
+
+    def test_publish_rejects_unlisted_series_fields_even_when_not_blacklisted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tempdir = Path(tmp)
+            snapshot = load_snapshot_fixture(str(SNAPSHOT_FIXTURE))
+            series = _build_series_artifact(snapshot["captured_at"])
+            series["points"][0]["desk_comment"] = "private review note"
+            with self.assertRaisesRegex(ValueError, "publication blocked"):
+                self._publish(
+                    tempdir,
+                    series_payload=series,
+                    out_name="series-unexpected-field",
+                )
+            output_dir = tempdir / "series-unexpected-field"
+            self.assertTrue(output_dir.is_dir())
+            self.assertEqual([], list(output_dir.rglob("*")))
+
+    def test_publish_rejects_bundle_tokens_and_non_sha_git_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tempdir = Path(tmp)
+            web_build = self._build_custom_web_build(
+                tempdir,
+                js_append='\nwindow.__leak = "api_key";\n',
+                css_append='\n.leak { content: "dk_live_7f3"; }\n',
+            )
+            with self.assertRaisesRegex(ValueError, "publication blocked"):
+                self._publish(
+                    tempdir,
+                    out_name="bundle-leak",
+                    web_build=web_build,
+                )
+            shape_leak_build = self._build_custom_web_build(
+                tempdir,
+                js_append='\nwindow.__shape = "portfolio_risk";\n',
+            )
+            with self.assertRaisesRegex(ValueError, "publication blocked"):
+                self._publish(
+                    tempdir,
+                    out_name="bundle-shape-leak",
+                    web_build=shape_leak_build,
+                )
+            with self.assertRaisesRegex(ValueError, "git_sha must be a plain SHA"):
+                self._publish(
+                    tempdir,
+                    out_name="bad-git-sha",
+                    git_sha=r"built from C:\Users\example-user\secret-build",
+                )
+
+    def test_release_gate_is_recomputed_from_disk_and_manifest_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir, _ = self._publish(Path(tmp))
+            report = json.loads(
+                (output_dir / "research" / "report").read_text(encoding="utf-8")
+            )
+            manifest = json.loads(
+                (output_dir / "api" / "v1" / "manifest.json").read_text(encoding="utf-8")
+            )
+
+            verification = _load_manifest_verification(output_dir, manifest)
+            gates = {
+                gate["name"]: gate
+                for gate in _build_release_gates_from_disk(
+                    report=report,
+                    out_path=output_dir,
+                    manifest_verification=verification,
+                )
+            }
+            self.assertEqual("GO", gates["research_publication"]["status"])
+            self.assertEqual("verified", gates["research_publication"]["publication_evidence"]["publish_manifest"])
+
+            (output_dir / "methodology.html").unlink()
+            gates = {
+                gate["name"]: gate
+                for gate in _build_release_gates_from_disk(
+                    report=report,
+                    out_path=output_dir,
+                    manifest_verification=verification,
+                )
+            }
+            self.assertEqual("NO-GO", gates["research_publication"]["status"])
+            self.assertIn("methodology", gates["research_publication"]["missing_prerequisites"])
 
     def test_publish_trims_future_history_rows_to_snapshot_date(self) -> None:
         with tempfile.TemporaryDirectory() as first_tmp, tempfile.TemporaryDirectory() as second_tmp:
@@ -716,9 +1220,102 @@ class PublicationTests(unittest.TestCase):
                 )
             )
             self.assertIn(
-                "trimmed to the snapshot captured_at UTC date",
+                "trimmed to the snapshot captured_at clock",
                 manifest["manifest_policy"]["history_alignment"],
             )
+
+    def test_publish_exposes_numeric_field_evidence_and_thermo_shards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir, _ = self._publish(Path(tmp))
+            candidates = json.loads(
+                (output_dir / "api" / "v1" / "candidates.json").read_text(encoding="utf-8")
+            )
+            signal = json.loads(
+                (output_dir / "api" / "v1" / "signal.json").read_text(encoding="utf-8")
+            )
+            thermo = json.loads(
+                (output_dir / "api" / "v1" / "thermo.json").read_text(encoding="utf-8")
+            )
+            recent = json.loads(
+                (output_dir / "api" / "v1" / "thermo" / "recent.json").read_text(encoding="utf-8")
+            )
+            by_year = json.loads(
+                (output_dir / "api" / "v1" / "thermo" / "by-year" / "2026.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual("public_thermo.v1", thermo["schema_version"])
+            self.assertIn("year_shards", thermo)
+            self.assertIn("recent_series_path", thermo)
+            self.assertLessEqual(len(recent["series"]), len(thermo["series"]))
+            self.assertTrue(by_year["series"])
+            gated_point = next(
+                point for point in thermo["series"] if point["percentile"] is None
+            )
+            self.assertIsNone(gated_point["band"])
+            self.assertLess(
+                gated_point["percentile_sample_count"],
+                thermo["minimum_series_sample_count"],
+            )
+            if candidates["ranked_candidates"]:
+                row = candidates["ranked_candidates"][0]
+                self.assertIn("field_evidence", row)
+                self.assertIn("ranking_score", row["field_evidence"])
+            self.assertIn("field_evidence", signal["artifact"]["bands"]["research_window"])
+            self.assertIn(
+                "cohorts_seen",
+                signal["artifact"]["bands"]["research_window"]["field_evidence"],
+            )
+
+            openapi = json.loads(
+                (output_dir / "api" / "openapi.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("3.1.0", openapi["openapi"])
+            for path, operation in openapi["paths"].items():
+                with self.subTest(path=path):
+                    response = operation["get"]["responses"]["200"]
+                    schema = response["content"]["application/json"]["schema"]
+                    self.assertRegex(schema["$ref"], r"^#/components/schemas/")
+            summary_schema = openapi["components"]["schemas"]["Summary"]
+            self.assertFalse(summary_schema["additionalProperties"])
+            public_summary = json.loads(
+                (output_dir / "api" / "v1" / "summary.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                set(public_summary),
+                set(summary_schema["required"]),
+            )
+            endpoint_files = {
+                "/api/v1/summary.json": "api/v1/summary.json",
+                "/api/v1/thermo.json": "api/v1/thermo.json",
+                "/api/v1/thermo/recent.json": "api/v1/thermo/recent.json",
+                "/api/v1/thermo/by-year/{year}.json": "api/v1/thermo/by-year/2026.json",
+                "/api/v1/candidates.json": "api/v1/candidates.json",
+                "/api/v1/signal.json": "api/v1/signal.json",
+                "/api/v1/health.json": "api/v1/health.json",
+                "/api/v1/manifest.json": "api/v1/manifest.json",
+                "/research/report": "research/report",
+                "/research/signal": "research/signal",
+                "/research/series": "research/series",
+            }
+            for route, relative_path in endpoint_files.items():
+                with self.subTest(response_schema=route):
+                    response_schema = openapi["paths"][route]["get"]["responses"][
+                        "200"
+                    ]["content"]["application/json"]["schema"]
+                    component = response_schema["$ref"].rsplit("/", 1)[-1]
+                    payload = json.loads(
+                        (output_dir / relative_path).read_text(encoding="utf-8")
+                    )
+                    _assert_schema_accepts(
+                        payload,
+                        openapi["components"]["schemas"][component],
+                    )
+            openapi_text = canonical_json_text(openapi).lower()
+            for private_term in ("margin_snapshot", "account_status", "api_key"):
+                self.assertNotIn(private_term, openapi_text)
 
     def test_published_site_serves_index_assets_and_extensionless_json_without_404(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -745,10 +1342,13 @@ class PublicationTests(unittest.TestCase):
                     "/api/v1/candidates.json",
                     "/api/v1/signal.json",
                     "/api/v1/health.json",
+                    "/api/openapi.json",
                     "/.well-known/publish-manifest.json",
                     "/methodology.html",
                     "/disclaimer.html",
                     "/privacy.html",
+                    "/robots.txt",
+                    "/sitemap.xml",
                     "/terms.html",
                     "/status.html",
                     "/_headers",

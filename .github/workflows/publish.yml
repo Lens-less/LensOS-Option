@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: "10 8 * * *"
 
+concurrency:
+  group: publish-public-evidence
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -13,6 +17,8 @@ env:
   LENSOS_EVIDENCE_REPO_SYNC_ENABLED: ${{ vars.LENSOS_EVIDENCE_REPO_SYNC_ENABLED || 'false' }}
   LENSOS_EVIDENCE_REPO_SLUG: ${{ vars.LENSOS_EVIDENCE_REPO_SLUG || '' }}
   LENSOS_EVIDENCE_REPO_BRANCH: ${{ vars.LENSOS_EVIDENCE_REPO_BRANCH || 'main' }}
+  LENSOS_PUBLIC_SITE_ORIGIN: ${{ vars.LENSOS_PUBLIC_SITE_ORIGIN || '' }}
+  LENSOS_STALE_MONITOR_ID: ${{ vars.LENSOS_STALE_MONITOR_ID || '' }}
 
 jobs:
   capture_and_publish:
@@ -33,29 +39,391 @@ jobs:
           cache: pip
           cache-dependency-path: product/pyproject.toml
 
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: product/web/package-lock.json
+
       - name: Install package
         run: python -m pip install -e .
 
+      - name: Install public bundle dependencies
+        working-directory: product/web
+        run: npm ci
+
       - name: Preflight explicit workflow config
+        id: config
         shell: pwsh
         env:
           FAILURE_WEBHOOK_SECRET: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
+          SUCCESS_HEARTBEAT_SECRET: ${{ secrets.CAPTURE_SUCCESS_HEARTBEAT_URL }}
           EVIDENCE_REPO_PUSH_TOKEN: ${{ secrets.LENSOS_EVIDENCE_REPO_PUSH_TOKEN }}
+          MONITOR_ATTESTATION_URL: ${{ secrets.LENSOS_STALE_MONITOR_ATTESTATION_URL }}
+          MONITOR_ATTESTATION_TOKEN: ${{ secrets.LENSOS_STALE_MONITOR_ATTESTATION_TOKEN }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:FAILURE_WEBHOOK_SECRET)) {
-            throw "CAPTURE_FAILURE_WEBHOOK_URL secret is required; scheduled evidence loss must not fail silently."
-          }
-          if ($env:LENSOS_EVIDENCE_REPO_SYNC_ENABLED -eq 'true') {
-            if ([string]::IsNullOrWhiteSpace($env:LENSOS_EVIDENCE_REPO_SLUG)) {
-              throw "LENSOS_EVIDENCE_REPO_SLUG must be configured when durable evidence sync is enabled."
+          function Test-IpAddressInPrefix {
+            param(
+              [Parameter(Mandatory)] [System.Net.IPAddress] $Address,
+              [Parameter(Mandatory)] [System.Net.IPAddress] $Network,
+              [Parameter(Mandatory)] [int] $PrefixLength
+            )
+
+            $addressBytes = $Address.GetAddressBytes()
+            $networkBytes = $Network.GetAddressBytes()
+            if ($addressBytes.Length -ne $networkBytes.Length) { return $false }
+            if ($PrefixLength -lt 0 -or $PrefixLength -gt ($addressBytes.Length * 8)) {
+              throw 'IP prefix length is invalid'
             }
-            if ([string]::IsNullOrWhiteSpace($env:EVIDENCE_REPO_PUSH_TOKEN)) {
-              throw "LENSOS_EVIDENCE_REPO_PUSH_TOKEN secret is required when durable evidence sync is enabled."
+            [int] $wholeBytes = [Math]::Floor($PrefixLength / 8)
+            for ($index = 0; $index -lt $wholeBytes; $index++) {
+              if ($addressBytes[$index] -ne $networkBytes[$index]) { return $false }
+            }
+            $remainingBits = $PrefixLength % 8
+            if ($remainingBits -eq 0) { return $true }
+            $mask = (0xff -shl (8 - $remainingBits)) -band 0xff
+            return `
+              ($addressBytes[$wholeBytes] -band $mask) -eq `
+              ($networkBytes[$wholeBytes] -band $mask)
+          }
+
+          function Test-PublicIpAddress {
+            param([Parameter(Mandatory)] [System.Net.IPAddress] $Address)
+
+            if ([System.Net.IPAddress]::IsLoopback($Address)) { return $false }
+            if ($Address.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+              $specialPurposePrefixes = @(
+                [pscustomobject]@{ Network = '0.0.0.0'; PrefixLength = 8 },
+                [pscustomobject]@{ Network = '10.0.0.0'; PrefixLength = 8 },
+                [pscustomobject]@{ Network = '100.64.0.0'; PrefixLength = 10 },
+                [pscustomobject]@{ Network = '127.0.0.0'; PrefixLength = 8 },
+                [pscustomobject]@{ Network = '169.254.0.0'; PrefixLength = 16 },
+                [pscustomobject]@{ Network = '172.16.0.0'; PrefixLength = 12 },
+                [pscustomobject]@{ Network = '192.0.0.0'; PrefixLength = 24 },
+                [pscustomobject]@{ Network = '192.0.2.0'; PrefixLength = 24 },
+                [pscustomobject]@{ Network = '192.31.196.0'; PrefixLength = 24 },
+                [pscustomobject]@{ Network = '192.52.193.0'; PrefixLength = 24 },
+                [pscustomobject]@{ Network = '192.88.99.0'; PrefixLength = 24 },
+                [pscustomobject]@{ Network = '192.168.0.0'; PrefixLength = 16 },
+                [pscustomobject]@{ Network = '192.175.48.0'; PrefixLength = 24 },
+                [pscustomobject]@{ Network = '198.18.0.0'; PrefixLength = 15 },
+                [pscustomobject]@{ Network = '198.51.100.0'; PrefixLength = 24 },
+                [pscustomobject]@{ Network = '203.0.113.0'; PrefixLength = 24 },
+                [pscustomobject]@{ Network = '224.0.0.0'; PrefixLength = 4 },
+                [pscustomobject]@{ Network = '240.0.0.0'; PrefixLength = 4 }
+              )
+              foreach ($prefix in $specialPurposePrefixes) {
+                if (Test-IpAddressInPrefix `
+                  -Address $Address `
+                  -Network ([System.Net.IPAddress]::Parse($prefix.Network)) `
+                  -PrefixLength $prefix.PrefixLength
+                ) { return $false }
+              }
+              return $true
+            }
+            if ($Address.IsIPv4MappedToIPv6) {
+              return $false
+            }
+            if (
+              $Address.Equals([System.Net.IPAddress]::IPv6Any) `
+              -or $Address.IsIPv6LinkLocal `
+              -or $Address.IsIPv6Multicast `
+              -or $Address.IsIPv6SiteLocal
+            ) { return $false }
+            # Reject every current IANA IPv6 special-purpose allocation. Even
+            # entries marked globally reachable are not suitable site origins.
+            $specialPurposePrefixes = @(
+              [pscustomobject]@{ Network = '::'; PrefixLength = 96 },
+              [pscustomobject]@{ Network = '64:ff9b::'; PrefixLength = 96 },
+              [pscustomobject]@{ Network = '64:ff9b:1::'; PrefixLength = 48 },
+              [pscustomobject]@{ Network = '100::'; PrefixLength = 64 },
+              [pscustomobject]@{ Network = '100:0:0:1::'; PrefixLength = 64 },
+              [pscustomobject]@{ Network = '2001::'; PrefixLength = 23 },
+              [pscustomobject]@{ Network = '2001:db8::'; PrefixLength = 32 },
+              [pscustomobject]@{ Network = '2002::'; PrefixLength = 16 },
+              [pscustomobject]@{ Network = '2620:4f:8000::'; PrefixLength = 48 },
+              [pscustomobject]@{ Network = '3fff::'; PrefixLength = 20 },
+              [pscustomobject]@{ Network = '5f00::'; PrefixLength = 16 },
+              [pscustomobject]@{ Network = 'fc00::'; PrefixLength = 7 },
+              [pscustomobject]@{ Network = 'fe80::'; PrefixLength = 10 }
+            )
+            foreach ($prefix in $specialPurposePrefixes) {
+              if (Test-IpAddressInPrefix `
+                -Address $Address `
+                -Network ([System.Net.IPAddress]::Parse($prefix.Network)) `
+                -PrefixLength $prefix.PrefixLength
+              ) { return $false }
+            }
+            $bytes = $Address.GetAddressBytes()
+            if (($bytes[0] -band 0xE0) -ne 0x20) { return $false }
+            return $true
+          }
+
+          function Test-PublicDnsHost {
+            param([Parameter(Mandatory)] [string] $HostName)
+
+            if ($HostName.EndsWith('.')) { return $false }
+            try {
+              $hostAscii = [Globalization.IdnMapping]::new().GetAscii($HostName).ToLowerInvariant()
+            } catch { return $false }
+            if ($hostAscii.Length -gt 253 -or $hostAscii -notmatch '\.') { return $false }
+            $labels = @($hostAscii -split '\.')
+            foreach ($label in $labels) {
+              if ($label -notmatch '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$') { return $false }
+            }
+            $topLevel = $labels[-1]
+            if (-not $topLevel.StartsWith('xn--') -and ($topLevel.Length -lt 2 -or $topLevel -notmatch '^[a-z]+$')) {
+              return $false
+            }
+            $reservedSuffixes = @('alt', 'arpa', 'example', 'internal', 'invalid', 'local', 'localhost', 'onion', 'test')
+            foreach ($suffix in $reservedSuffixes) {
+              if ($hostAscii -eq $suffix -or $hostAscii.EndsWith(".$suffix")) { return $false }
+            }
+            foreach ($domain in @('example.com', 'example.net', 'example.org')) {
+              if ($hostAscii -eq $domain -or $hostAscii.EndsWith(".$domain")) { return $false }
+            }
+            [System.Net.IPAddress] $literalAddress = $null
+            if ([System.Net.IPAddress]::TryParse($hostAscii, [ref] $literalAddress)) { return $false }
+            try {
+              $addresses = @([System.Net.Dns]::GetHostAddresses($hostAscii))
+            } catch { return $false }
+            if ($addresses.Count -eq 0) { return $false }
+            foreach ($address in $addresses) {
+              if (-not (Test-PublicIpAddress -Address $address)) { return $false }
+            }
+            return $true
+          }
+
+          function Test-PublicHttpsUrl {
+            param(
+              [string] $Value,
+              [switch] $OriginOnly
+            )
+
+            if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+            [Uri] $uri = $null
+            if (-not [Uri]::TryCreate([string] $Value, [UriKind]::Absolute, [ref] $uri)) { return $false }
+            if (
+              $uri.Scheme -ne 'https' `
+              -or -not $uri.IsDefaultPort `
+              -or -not [string]::IsNullOrWhiteSpace($uri.UserInfo) `
+              -or -not [string]::IsNullOrWhiteSpace($uri.Fragment) `
+              -or -not (Test-PublicDnsHost -HostName $uri.DnsSafeHost)
+            ) { return $false }
+            if (
+              $OriginOnly.IsPresent `
+              -and ($uri.AbsolutePath -ne '/' -or -not [string]::IsNullOrWhiteSpace($uri.Query))
+            ) { return $false }
+            return $true
+          }
+
+          function Get-NormalizedPublicOrigin {
+            param([Parameter(Mandatory)] [string] $Value)
+
+            [Uri] $uri = $Value
+            $hostAscii = [Globalization.IdnMapping]::new().GetAscii(
+              $uri.DnsSafeHost
+            ).ToLowerInvariant()
+            return "https://$hostAscii"
+          }
+
+          function Get-Sha256Text {
+            param([Parameter(Mandatory)] [string] $Value)
+            $hasher = [Security.Cryptography.SHA256]::Create()
+            try {
+              $hash = $hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Value))
+              return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+            } finally {
+              $hasher.Dispose()
             }
           }
 
+          function Test-MonitorId {
+            param([string] $Value)
+            return `
+              [string] $Value -cmatch `
+              '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          }
+
+          function Test-MonitorAttestationPayload {
+            param(
+              [Parameter(Mandatory)] [pscustomobject] $Attestation,
+              [Parameter(Mandatory)] [DateTimeOffset] $Now,
+              [Parameter(Mandatory)] [string] $SiteOrigin,
+              [Parameter(Mandatory)] [string] $MonitorId,
+              [Parameter(Mandatory)] [string] $FailureWebhook,
+              [Parameter(Mandatory)] [string] $SuccessHeartbeat
+            )
+
+            try {
+              if (-not (Test-MonitorId -Value $MonitorId)) { return $false }
+              $timestampPattern = '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$'
+              if (
+                [string] $Attestation.checked_at -notmatch $timestampPattern `
+                -or [string] $Attestation.failure_delivery_drill_at -notmatch $timestampPattern
+              ) { return $false }
+              $checkedAt = [DateTimeOffset]::Parse(
+                [string] $Attestation.checked_at,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind
+              ).ToUniversalTime()
+              $failureDrillAt = [DateTimeOffset]::Parse(
+                [string] $Attestation.failure_delivery_drill_at,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind
+              ).ToUniversalTime()
+              [int] $checkIntervalSeconds = 0
+              if (-not [int]::TryParse(
+                [string] $Attestation.check_interval_seconds,
+                [Globalization.NumberStyles]::None,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [ref] $checkIntervalSeconds
+              )) { return $false }
+              [Uri] $siteOriginUri = $SiteOrigin
+              $normalizedOrigin = $siteOriginUri.GetLeftPart([UriPartial]::Authority)
+              $expectedHealthUrl = "$normalizedOrigin/api/v1/health.json"
+              $expectedFailureFingerprint = Get-Sha256Text -Value $FailureWebhook
+              $expectedHeartbeatFingerprint = Get-Sha256Text -Value $SuccessHeartbeat
+              $statusReady = [string] $Attestation.status -cin @('armed', 'healthy')
+              return `
+                [string] $Attestation.schema_version -ceq 'lensos_stale_monitor_attestation.v1' `
+                -and [string] $Attestation.monitor_id -ceq $MonitorId `
+                -and [string] $Attestation.site_origin -ceq $normalizedOrigin `
+                -and [string] $Attestation.health_url -ceq $expectedHealthUrl `
+                -and [string] $Attestation.contract -ceq 'compare_current_time_to_stale_after' `
+                -and [string] $Attestation.failure_webhook_sha256 -ceq $expectedFailureFingerprint `
+                -and [string] $Attestation.success_heartbeat_sha256 -ceq $expectedHeartbeatFingerprint `
+                -and $checkIntervalSeconds -ge 60 `
+                -and $checkIntervalSeconds -le 3600 `
+                -and $statusReady `
+                -and $checkedAt -ge $Now.AddHours(-2) `
+                -and $checkedAt -le $Now.AddMinutes(5) `
+                -and $failureDrillAt -ge $Now.AddDays(-30) `
+                -and $failureDrillAt -le $Now.AddMinutes(5)
+            } catch {
+              return $false
+            }
+          }
+
+          function New-MonitorProofProjection {
+            param([Parameter(Mandatory)] [pscustomobject] $Attestation)
+
+            # Alphabetical field order plus the validated ASCII-only values
+            # matches the repository canonical JSON encoder for this schema.
+            return [ordered]@{
+              attestation_schema_version = [string] $Attestation.schema_version
+              check_interval_seconds = [int] $Attestation.check_interval_seconds
+              checked_at = [string] $Attestation.checked_at
+              contract = [string] $Attestation.contract
+              failure_delivery_drill_at = [string] $Attestation.failure_delivery_drill_at
+              failure_webhook_sha256 = [string] $Attestation.failure_webhook_sha256
+              health_url = [string] $Attestation.health_url
+              monitor_id = [string] $Attestation.monitor_id
+              site_origin = [string] $Attestation.site_origin
+              status = [string] $Attestation.status
+              success_heartbeat_sha256 = [string] $Attestation.success_heartbeat_sha256
+            }
+          }
+
+          $syncRequested = $env:LENSOS_EVIDENCE_REPO_SYNC_ENABLED -eq 'true'
+          $syncReady = $syncRequested `
+            -and -not [string]::IsNullOrWhiteSpace($env:LENSOS_EVIDENCE_REPO_SLUG) `
+            -and -not [string]::IsNullOrWhiteSpace($env:EVIDENCE_REPO_PUSH_TOKEN)
+          "evidence_sync_ready=$($syncReady.ToString().ToLowerInvariant())" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          $siteOriginReady = Test-PublicHttpsUrl -Value $env:LENSOS_PUBLIC_SITE_ORIGIN -OriginOnly
+          $normalizedSiteOrigin = if ($siteOriginReady) {
+            Get-NormalizedPublicOrigin -Value $env:LENSOS_PUBLIC_SITE_ORIGIN
+          } else { '' }
+          "site_origin_ready=$($siteOriginReady.ToString().ToLowerInvariant())" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "site_origin=$normalizedSiteOrigin" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          $failureWebhookReady = Test-PublicHttpsUrl -Value $env:FAILURE_WEBHOOK_SECRET
+          $successHeartbeatReady = Test-PublicHttpsUrl -Value $env:SUCCESS_HEARTBEAT_SECRET
+          $attestationUrlReady = Test-PublicHttpsUrl -Value $env:MONITOR_ATTESTATION_URL
+          $monitorIdReady = Test-MonitorId -Value $env:LENSOS_STALE_MONITOR_ID
+          $monitoringReady = $false
+          $monitorProofJson = ''
+          $monitorProofSha256 = ''
+          if (
+            $siteOriginReady `
+            -and $failureWebhookReady `
+            -and $successHeartbeatReady `
+            -and $attestationUrlReady `
+            -and -not [string]::IsNullOrWhiteSpace($env:MONITOR_ATTESTATION_TOKEN) `
+            -and $monitorIdReady
+          ) {
+            try {
+              [Uri] $siteOriginUri = $env:LENSOS_PUBLIC_SITE_ORIGIN
+              [Uri] $attestationUri = $env:MONITOR_ATTESTATION_URL
+              if ($siteOriginUri.DnsSafeHost -eq $attestationUri.DnsSafeHost) {
+                throw 'monitor attestation must be hosted independently'
+              }
+              $attestationResponse = Invoke-WebRequest `
+                -Method Get `
+                -Uri $env:MONITOR_ATTESTATION_URL `
+                -Headers @{
+                  Accept = 'application/json'
+                  Authorization = "Bearer $env:MONITOR_ATTESTATION_TOKEN"
+                } `
+                -MaximumRedirection 0 `
+                -TimeoutSec 15 `
+                -UseBasicParsing
+              if ($attestationResponse.StatusCode -ne 200) {
+                throw 'monitor attestation response must be HTTP 200'
+              }
+              $contentType = [string] $attestationResponse.Headers['Content-Type']
+              if ($contentType -notmatch '^(?i:application/(?:json|[^;]+\+json))(?:\s*;|$)') {
+                throw 'monitor attestation response must use a JSON content type'
+              }
+              if ([Text.Encoding]::UTF8.GetByteCount([string] $attestationResponse.Content) -gt 65536) {
+                throw 'monitor attestation response is too large'
+              }
+              $attestation = $attestationResponse.Content | ConvertFrom-Json -ErrorAction Stop
+              $now = [DateTimeOffset]::UtcNow
+              $monitoringReady = Test-MonitorAttestationPayload `
+                -Attestation $attestation `
+                -Now $now `
+                -SiteOrigin $normalizedSiteOrigin `
+                -MonitorId $env:LENSOS_STALE_MONITOR_ID `
+                -FailureWebhook $env:FAILURE_WEBHOOK_SECRET `
+                -SuccessHeartbeat $env:SUCCESS_HEARTBEAT_SECRET
+              if ($monitoringReady) {
+                $monitorProofProjection = New-MonitorProofProjection -Attestation $attestation
+                $monitorProofJson = $monitorProofProjection | ConvertTo-Json -Compress
+                $monitorProofSha256 = Get-Sha256Text -Value $monitorProofJson
+              }
+            } catch {
+              $monitoringReady = $false
+              $monitorProofJson = ''
+              $monitorProofSha256 = ''
+            }
+          }
+          "monitoring_ready=$($monitoringReady.ToString().ToLowerInvariant())" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "monitor_proof_json=$monitorProofJson" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "monitor_proof_sha256=$monitorProofSha256" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          if ($syncRequested -and -not $syncReady) {
+            Write-Warning "Durable evidence sync configuration is incomplete; capture will still run without sync, the evidence artifact will be retained, and the workflow will fail closed afterwards."
+          }
+          if (-not $siteOriginReady) {
+            Write-Warning "Canonical public HTTPS site origin is missing or invalid; capture will still run, but the workflow must fail closed before publication."
+          }
+          if (-not $failureWebhookReady) {
+            Write-Warning "Failure webhook is missing or is not a public HTTPS URL; capture will still run, but the workflow must fail closed afterwards."
+          }
+          if (-not $successHeartbeatReady) {
+            Write-Warning "Success heartbeat is missing or is not a public HTTPS URL; capture will still run, but the workflow must fail closed afterwards."
+          }
+          if (-not $monitoringReady) {
+            Write-Warning "Independent stale_after monitor attestation is missing, expired, or invalid; capture will still run, but the workflow must fail closed afterwards."
+          }
+
       - name: Checkout durable evidence repo
-        if: env.LENSOS_EVIDENCE_REPO_SYNC_ENABLED == 'true'
+        if: steps.config.outputs.evidence_sync_ready == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: ${{ env.LENSOS_EVIDENCE_REPO_SLUG }}
@@ -72,17 +440,32 @@ jobs:
         env:
           CAPTURE_DAILY_CAPTURE_DVOL: "true"
           CAPTURE_DAILY_FAILURE_WEBHOOK_URL: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
-          CAPTURE_DAILY_EVIDENCE_SYNC: ${{ env.LENSOS_EVIDENCE_REPO_SYNC_ENABLED }}
+          CAPTURE_DAILY_EVIDENCE_SYNC: ${{ steps.config.outputs.evidence_sync_ready }}
           CAPTURE_DAILY_EVIDENCE_REPO_ROOT: ${{ github.workspace }}/evidence-repo
+          CAPTURE_SUCCESS_HEARTBEAT_URL: ${{ secrets.CAPTURE_SUCCESS_HEARTBEAT_URL }}
         run: |
           $syncArgs = @()
-          if ($env:LENSOS_EVIDENCE_REPO_SYNC_ENABLED -eq 'true') {
+          if ($env:CAPTURE_DAILY_EVIDENCE_SYNC -eq 'true') {
             $syncArgs = @(
               '-EnableEvidenceRepoSync',
               '-EvidenceRepoRoot', $env:CAPTURE_DAILY_EVIDENCE_REPO_ROOT
             )
           }
           ./tools/capture-daily.ps1 -RepoRoot $PWD @syncArgs
+
+      - name: Build public bundle
+        id: bundle_build
+        if: steps.capture.outcome == 'success' && steps.config.outputs.evidence_sync_ready == 'true'
+        continue-on-error: true
+        working-directory: product/web
+        run: npm run build:public
+
+      - name: Test public bundle boundary
+        id: bundle_boundary
+        if: steps.capture.outcome == 'success' && steps.config.outputs.evidence_sync_ready == 'true' && steps.bundle_build.outcome == 'success'
+        continue-on-error: true
+        working-directory: product/web
+        run: npm run test:public-bundle
 
       - name: Build dist/site or publish contract
         id: publish_site
@@ -91,21 +474,40 @@ jobs:
         shell: pwsh
         env:
           CAPTURE_OUTCOME: ${{ steps.capture.outcome }}
+          BUNDLE_BUILD_OUTCOME: ${{ steps.bundle_build.outcome }}
+          BUNDLE_BOUNDARY_OUTCOME: ${{ steps.bundle_boundary.outcome }}
+          EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready }}
+          SITE_ORIGIN_READY: ${{ steps.config.outputs.site_origin_ready }}
+          SITE_ORIGIN: ${{ steps.config.outputs.site_origin }}
         run: |
           $siteDir = Join-Path $PWD 'dist/site'
-          New-Item -ItemType Directory -Force -Path $siteDir | Out-Null
+          $diagnosticsDir = Join-Path $PWD 'artifacts/reports'
+          New-Item -ItemType Directory -Force -Path $diagnosticsDir | Out-Null
           $summaryPath = Join-Path $PWD 'artifacts/logs/capture-daily-btc.latest.summary.json'
 
-          if ($env:CAPTURE_OUTCOME -ne 'success') {
+          $blockingReason = if ($env:CAPTURE_OUTCOME -ne 'success') {
+            'CAPTURE_FAILED'
+          } elseif ($env:EVIDENCE_SYNC_READY -ne 'true') {
+            'EVIDENCE_SYNC_NOT_READY'
+          } elseif ($env:SITE_ORIGIN_READY -ne 'true') {
+            'SITE_ORIGIN_NOT_CONFIGURED'
+          } elseif ($env:BUNDLE_BUILD_OUTCOME -ne 'success') {
+            'PUBLIC_BUNDLE_BUILD_FAILED'
+          } elseif ($env:BUNDLE_BOUNDARY_OUTCOME -ne 'success') {
+            'PUBLIC_BUNDLE_BOUNDARY_FAILED'
+          } else {
+            $null
+          }
+          if ($null -ne $blockingReason) {
             $failureContract = [ordered]@{
               schema_version = 'publish_contract.v1'
               status = 'blocked'
-              reason_code = 'CAPTURE_FAILED'
+              reason_code = $blockingReason
               summary_path = $summaryPath
-              note = 'capture-daily.ps1 failed before the publish contract could be evaluated.'
+              note = 'A required capture, durable-sync, site-origin, or public-bundle admission gate failed before publication.'
             }
-            $failureContract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $siteDir 'workflow-failure.json') -Encoding utf8
-            throw "Capture failed before publish. See artifacts/logs/capture-daily-btc.latest.summary.json and dist/site/workflow-failure.json."
+            $failureContract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $diagnosticsDir 'workflow-failure.json') -Encoding utf8
+            throw "Publication admission failed: $blockingReason. See artifacts/reports/workflow-failure.json."
           }
 
           if (-not (Test-Path -LiteralPath $summaryPath)) {
@@ -117,6 +519,23 @@ jobs:
             'yyyy-MM-ddTHH:mm:ssZ',
             [Globalization.CultureInfo]::InvariantCulture
           )
+          $publicationHistoryPath = Join-Path $diagnosticsDir 'publication-history.json'
+          $publicationEntries = @()
+          if ($env:EVIDENCE_SYNC_READY -eq 'true') {
+            $publicationsDir = Join-Path $env:GITHUB_WORKSPACE 'evidence-repo/publications'
+            if (Test-Path -LiteralPath $publicationsDir -PathType Container) {
+              foreach ($receiptFile in Get-ChildItem -LiteralPath $publicationsDir -File -Filter '*.json' | Sort-Object Name) {
+                $publicationEntries += Get-Content -Raw -LiteralPath $receiptFile.FullName | ConvertFrom-Json -ErrorAction Stop
+              }
+            }
+          }
+          $publicationHistory = [ordered]@{
+            schema_version = 'publication_history.v1'
+            generated_at = $publishedAt
+            entries = @($publicationEntries)
+          }
+          $publicationHistory | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $publicationHistoryPath -Encoding utf8
+          $webBuildDir = Join-Path $PWD 'web/dist-public'
           $signalArtifactPath = [string] $summary.outputs.signal_preflight
           $requiredInputs = [ordered]@{
             snapshot = [string] $summary.outputs.snapshot
@@ -124,6 +543,8 @@ jobs:
             dvol_history = [string] $summary.outputs.dvol_history
             signal_artifact = $signalArtifactPath
             series_artifact = [string] $summary.outputs.series_history
+            publication_history = $publicationHistoryPath
+            web_build = $webBuildDir
           }
 
           $missingInputs = @()
@@ -143,8 +564,11 @@ jobs:
             "--dvol-history $($requiredInputs.dvol_history)",
             "--signal-artifact $signalArtifactPath",
             "--series-artifact $($requiredInputs.series_artifact)",
+            "--publication-history $($requiredInputs.publication_history)",
             '--out dist/site',
+            '--web-build web/dist-public',
             "--published-at $publishedAt",
+            "--site-origin $env:SITE_ORIGIN",
             "--git-sha $env:GITHUB_SHA"
           )
 
@@ -160,13 +584,14 @@ jobs:
               status_history_contract = '30-day status history requires persisted evidence artifacts outside the per-run GitHub Actions workspace. Without that input, public status can only describe the current edition honestly.'
               health_contract = 'External health monitors must compare the current time to publish_edition.stale_after. Do not rely on a static JSON artifact to mutate its own is_stale field over time.'
             }
-            $contract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $siteDir 'publish-contract.json') -Encoding utf8
+            $contract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $diagnosticsDir 'publish-contract.json') -Encoding utf8
             if (-not $publishAvailable) {
-              throw "Publish CLI is not available yet. See dist/site/publish-contract.json for the contract and missing prerequisites."
+              throw "Publish CLI is not available yet. See artifacts/reports/publish-contract.json for the contract and missing prerequisites."
             }
-            throw "Publish inputs are incomplete. See dist/site/publish-contract.json for the missing prerequisites."
+            throw "Publish inputs are incomplete. See artifacts/reports/publish-contract.json for the missing prerequisites."
           }
 
+          New-Item -ItemType Directory -Force -Path $siteDir | Out-Null
           $publishArgs = @(
             '-m', 'crypto_options_report.cli', 'publish',
             '--snapshot', $requiredInputs.snapshot,
@@ -174,21 +599,239 @@ jobs:
             '--dvol-history', $requiredInputs.dvol_history,
             '--signal-artifact', $signalArtifactPath,
             '--series-artifact', $requiredInputs.series_artifact,
+            '--publication-history', $requiredInputs.publication_history,
             '--out', $siteDir,
+            '--web-build', 'web/dist-public',
             '--published-at', $publishedAt,
+            '--site-origin', $env:SITE_ORIGIN,
             '--git-sha', $env:GITHUB_SHA
           )
-          & python @publishArgs
-          if ($LASTEXITCODE -ne 0) {
-            throw "Publish command exited $LASTEXITCODE."
+          $publishOutput = & python @publishArgs | Out-String
+          $publishExitCode = $LASTEXITCODE
+          $publishOutput | Set-Content -LiteralPath (Join-Path $diagnosticsDir 'publish-result.json') -Encoding utf8
+          if ($publishExitCode -ne 0) {
+            throw "Publish command exited $publishExitCode."
+          }
+          $publishResult = $publishOutput | ConvertFrom-Json -ErrorAction Stop
+          if ($publishResult.research_publication_status -ne 'GO') {
+            throw 'Publish result did not grant the research publication gate.'
           }
 
           if (-not (Get-ChildItem -LiteralPath $siteDir -Force | Select-Object -First 1)) {
             throw 'Publish command completed without producing dist/site content.'
           }
 
+      - name: Record durable publication receipt
+        id: publication_receipt
+        if: always() && steps.config.outputs.evidence_sync_ready == 'true'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          CAPTURE_OUTCOME: ${{ steps.capture.outcome }}
+          BUNDLE_BUILD_OUTCOME: ${{ steps.bundle_build.outcome }}
+          BUNDLE_BOUNDARY_OUTCOME: ${{ steps.bundle_boundary.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.publish_site.outcome }}
+          EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready }}
+          SITE_ORIGIN_READY: ${{ steps.config.outputs.site_origin_ready }}
+          MONITORING_READY: ${{ steps.config.outputs.monitoring_ready }}
+          MONITOR_PROOF_JSON: ${{ steps.config.outputs.monitor_proof_json }}
+          MONITOR_PROOF_SHA256: ${{ steps.config.outputs.monitor_proof_sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidenceRoot = Join-Path $env:GITHUB_WORKSPACE 'evidence-repo'
+          $summaryPath = Join-Path $PWD 'artifacts/logs/capture-daily-btc.latest.summary.json'
+          $publishResultPath = Join-Path $PWD 'artifacts/reports/publish-result.json'
+          $summary = $null
+          if (Test-Path -LiteralPath $summaryPath -PathType Leaf) {
+            $summary = Get-Content -Raw -LiteralPath $summaryPath | ConvertFrom-Json -ErrorAction Stop
+          }
+          $publishResult = $null
+          if (Test-Path -LiteralPath $publishResultPath -PathType Leaf) {
+            $publishResult = Get-Content -Raw -LiteralPath $publishResultPath | ConvertFrom-Json -ErrorAction Stop
+          }
+
+          $publishedAt = if ($null -ne $publishResult -and $publishResult.published_at) {
+            [string] $publishResult.published_at
+          } else {
+            (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+          }
+          $capturedAt = $null
+          $captureRowCount = 0
+          if ($null -ne $summary) {
+            $snapshotStage = @($summary.stages | Where-Object { $_.name -eq 'snapshot' }) | Select-Object -Last 1
+            if ($null -ne $snapshotStage) {
+              $capturedAt = if ($snapshotStage.details.captured_at) { [string] $snapshotStage.details.captured_at } else { $null }
+              if ($snapshotStage.details.row_count -is [int] -or $snapshotStage.details.row_count -is [long]) {
+                $captureRowCount = [int] $snapshotStage.details.row_count
+              }
+            }
+          }
+
+          $qualityGateBlockedCount = 0
+          $excludedSnapshotCount = 0
+          $signalPath = if ($null -ne $summary) { [string] $summary.outputs.signal_preflight } else { '' }
+          if (-not [string]::IsNullOrWhiteSpace($signalPath) -and (Test-Path -LiteralPath $signalPath -PathType Leaf)) {
+            $signal = Get-Content -Raw -LiteralPath $signalPath | ConvertFrom-Json -ErrorAction Stop
+            $qualityGateBlockedCount = @($signal.reason_codes).Count
+            if ($signal.sample.excluded_snapshot_count -is [int] -or $signal.sample.excluded_snapshot_count -is [long]) {
+              $excludedSnapshotCount = [int] $signal.sample.excluded_snapshot_count
+            }
+          }
+
+          $success = `
+            $env:CAPTURE_OUTCOME -eq 'success' `
+            -and $env:BUNDLE_BUILD_OUTCOME -eq 'success' `
+            -and $env:BUNDLE_BOUNDARY_OUTCOME -eq 'success' `
+            -and $env:PUBLISH_OUTCOME -eq 'success' `
+            -and $env:EVIDENCE_SYNC_READY -eq 'true' `
+            -and $env:SITE_ORIGIN_READY -eq 'true' `
+            -and $env:MONITORING_READY -eq 'true'
+          if ($success -and (
+            $null -eq $publishResult -or
+            ([string] $publishResult.research_publication_status) -ne 'GO' -or
+            ([string] $publishResult.manifest_sha256) -notmatch '^[0-9a-f]{64}$'
+          )) {
+            throw 'Successful publish outcome is missing a valid GO result or manifest SHA-256.'
+          }
+          $monitoringProof = $null
+          if ($env:MONITORING_READY -eq 'true') {
+            if (
+              [string]::IsNullOrWhiteSpace($env:MONITOR_PROOF_JSON) `
+              -or $env:MONITOR_PROOF_SHA256 -notmatch '^[0-9a-f]{64}$'
+            ) {
+              throw 'Verified monitoring is missing its replayable proof projection.'
+            }
+            $hasher = [Security.Cryptography.SHA256]::Create()
+            try {
+              $proofHashBytes = $hasher.ComputeHash(
+                [Text.Encoding]::UTF8.GetBytes($env:MONITOR_PROOF_JSON)
+              )
+              $calculatedProofHash = (
+                [BitConverter]::ToString($proofHashBytes) -replace '-', ''
+              ).ToLowerInvariant()
+            } finally {
+              $hasher.Dispose()
+            }
+            if ($calculatedProofHash -cne $env:MONITOR_PROOF_SHA256) {
+              throw 'Verified monitoring proof hash does not match its projection.'
+            }
+            $monitoringProof = [ordered]@{
+              schema_version = 'monitoring_admission_evidence.v1'
+              projection = $env:MONITOR_PROOF_JSON | ConvertFrom-Json -ErrorAction Stop
+              projection_sha256 = $env:MONITOR_PROOF_SHA256
+            }
+          }
+          $reasonCode = if ($success) {
+            $null
+          } elseif ($env:CAPTURE_OUTCOME -ne 'success') {
+            'CAPTURE_FAILED'
+          } elseif ($env:EVIDENCE_SYNC_READY -ne 'true') {
+            'EVIDENCE_SYNC_NOT_READY'
+          } elseif ($env:SITE_ORIGIN_READY -ne 'true') {
+            'SITE_ORIGIN_NOT_CONFIGURED'
+          } elseif ($env:BUNDLE_BUILD_OUTCOME -ne 'success') {
+            'PUBLIC_BUNDLE_BUILD_FAILED'
+          } elseif ($env:BUNDLE_BOUNDARY_OUTCOME -ne 'success') {
+            'PUBLIC_BUNDLE_BOUNDARY_FAILED'
+          } elseif ($env:PUBLISH_OUTCOME -ne 'success') {
+            'PUBLISH_FAILED'
+          } else {
+            'MONITORING_NOT_VERIFIED'
+          }
+          $receipt = [ordered]@{
+            date = $publishedAt.Substring(0, 10)
+            captured_at = $capturedAt
+            published_at = $publishedAt
+            status = if ($success) { 'success' } else { 'failed' }
+            research_publication_status = if ($success) { 'GO' } else { 'NO-GO' }
+            capture_row_count = $captureRowCount
+            quality_gate_blocked_count = $qualityGateBlockedCount
+            excluded_snapshot_count = $excludedSnapshotCount
+            manifest_sha256 = if ($success) { [string] $publishResult.manifest_sha256 } else { $null }
+            reason_code = $reasonCode
+            monitoring_proof = $monitoringProof
+          }
+          $publicationsDir = Join-Path $evidenceRoot 'publications'
+          New-Item -ItemType Directory -Force -Path $publicationsDir | Out-Null
+          $receiptRelativePath = "publications/$($receipt.date).json"
+          $receiptPath = Join-Path $evidenceRoot $receiptRelativePath
+          $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8
+
+          Push-Location -LiteralPath $evidenceRoot
+          try {
+            git config user.name 'lensos-evidence-bot'
+            git config user.email 'lensos-evidence-bot@users.noreply.github.com'
+            git check-ignore --quiet --no-index -- $receiptRelativePath
+            $ignoreExit = $LASTEXITCODE
+            if ($ignoreExit -eq 0) { throw 'publication receipt path is ignored by the evidence repository' }
+            if ($ignoreExit -gt 1) { throw "git check-ignore failed with exit code $ignoreExit" }
+            git add -- $receiptRelativePath
+            if ($LASTEXITCODE -ne 0) { throw 'git add failed for publication receipt' }
+            git ls-files --error-unmatch -- $receiptRelativePath | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'publication receipt is not tracked after git add' }
+            git diff --cached --quiet
+            $diffExit = $LASTEXITCODE
+            if ($diffExit -gt 1) {
+              throw "git diff --cached failed with exit code $diffExit"
+            }
+            if ($diffExit -eq 1) {
+              $commitArgs = @(
+                'commit',
+                '-m', 'Preserve the daily publication outcome for public status truth',
+                '-m', 'The public status page consumes these narrow receipts on the next deterministic build.',
+                '-m', 'Constraint: Receipt data is restricted to the publication_history.v1 allow-list',
+                '-m', 'Confidence: high',
+                '-m', 'Scope-risk: narrow',
+                '-m', 'Tested: Receipt schema is validated by the subsequent publish build'
+              )
+              git @commitArgs
+              if ($LASTEXITCODE -ne 0) { throw 'git commit failed for publication receipt' }
+            }
+
+            $pushed = $false
+            foreach ($attempt in 1..3) {
+              git fetch origin $env:LENSOS_EVIDENCE_REPO_BRANCH
+              if ($LASTEXITCODE -ne 0) { throw 'git fetch failed for publication receipt' }
+              git rebase "origin/$env:LENSOS_EVIDENCE_REPO_BRANCH"
+              if ($LASTEXITCODE -ne 0) { throw 'git rebase failed for publication receipt' }
+              git push origin "HEAD:$env:LENSOS_EVIDENCE_REPO_BRANCH"
+              if ($LASTEXITCODE -eq 0) {
+                $pushed = $true
+                break
+              }
+              Start-Sleep -Seconds ([Math]::Pow(2, $attempt - 1))
+            }
+            if (-not $pushed) { throw 'git push failed for publication receipt after 3 attempts' }
+            $trackedReceipt = (git ls-tree -r --name-only HEAD -- $receiptRelativePath | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $trackedReceipt -ne $receiptRelativePath) {
+              throw 'publication receipt is missing from the pushed commit tree'
+            }
+            $localHead = (git rev-parse HEAD | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $localHead -notmatch '^[0-9a-f]{40}$') {
+              throw 'git rev-parse failed after publication receipt push'
+            }
+            $remoteHeadLine = (git ls-remote --heads origin "refs/heads/$env:LENSOS_EVIDENCE_REPO_BRANCH" | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($remoteHeadLine)) {
+              throw 'git ls-remote failed after publication receipt push'
+            }
+            $remoteHead = @($remoteHeadLine -split '\s+')[0]
+            if ($remoteHead -ne $localHead) {
+              throw 'remote evidence branch does not contain the publication receipt commit'
+            }
+          } finally {
+            Pop-Location
+          }
+
       - name: Upload dist/site artifact
-        if: always()
+        if: >-
+          steps.capture.outcome == 'success' &&
+          steps.config.outputs.evidence_sync_ready == 'true' &&
+          steps.config.outputs.site_origin_ready == 'true' &&
+          steps.config.outputs.monitoring_ready == 'true' &&
+          steps.bundle_build.outcome == 'success' &&
+          steps.bundle_boundary.outcome == 'success' &&
+          steps.publish_site.outcome == 'success' &&
+          steps.publication_receipt.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-site
@@ -213,11 +856,46 @@ jobs:
         shell: pwsh
         env:
           CAPTURE_OUTCOME: ${{ steps.capture.outcome }}
+          BUNDLE_BUILD_OUTCOME: ${{ steps.bundle_build.outcome }}
+          BUNDLE_BOUNDARY_OUTCOME: ${{ steps.bundle_boundary.outcome }}
           PUBLISH_OUTCOME: ${{ steps.publish_site.outcome }}
+          RECEIPT_OUTCOME: ${{ steps.publication_receipt.outcome }}
+          EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready }}
+          SITE_ORIGIN_READY: ${{ steps.config.outputs.site_origin_ready }}
+          MONITORING_READY: ${{ steps.config.outputs.monitoring_ready }}
+          FAILURE_WEBHOOK_SECRET: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
+          SUCCESS_HEARTBEAT_SECRET: ${{ secrets.CAPTURE_SUCCESS_HEARTBEAT_URL }}
         run: |
           if ($env:CAPTURE_OUTCOME -ne 'success') {
-            throw 'Capture failed. See artifacts/logs/capture-daily-btc.latest.summary.json and dist/site/workflow-failure.json.'
+            throw 'Capture failed. See artifacts/logs/capture-daily-btc.latest.summary.json and artifacts/reports/workflow-failure.json.'
+          }
+          if ($env:LENSOS_EVIDENCE_REPO_SYNC_ENABLED -ne 'true') {
+            throw 'Durable evidence sync is disabled. Capture was allowed to run, but publication is NO-GO until LENSOS_EVIDENCE_REPO_SYNC_ENABLED=true and the private evidence repository are configured.'
+          }
+          if ($env:EVIDENCE_SYNC_READY -ne 'true') {
+            throw 'Durable evidence sync configuration is incomplete. Capture still ran and its workflow artifact was retained, but publication is NO-GO until the private repository slug and push token are configured.'
+          }
+          if ($env:SITE_ORIGIN_READY -ne 'true') {
+            throw 'Canonical public site origin is missing or invalid. Capture still ran, but publication is NO-GO until LENSOS_PUBLIC_SITE_ORIGIN names the final absolute HTTPS origin.'
+          }
+          if ($env:BUNDLE_BUILD_OUTCOME -ne 'success') {
+            throw 'Public bundle build failed closed.'
+          }
+          if ($env:BUNDLE_BOUNDARY_OUTCOME -ne 'success') {
+            throw 'Public bundle privacy boundary failed closed.'
           }
           if ($env:PUBLISH_OUTCOME -ne 'success') {
-            throw 'Publish failed closed. See dist/site/publish-contract.json for the expected command and prerequisites.'
+            throw 'Publish failed closed. See artifacts/reports/publish-contract.json for the expected command and prerequisites.'
+          }
+          if ($env:RECEIPT_OUTCOME -ne 'success') {
+            throw 'Durable publication receipt was not pushed to the private evidence repository.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:FAILURE_WEBHOOK_SECRET)) {
+            throw 'Failure webhook configuration is missing. Capture was allowed to run so evidence is preserved, but the workflow must still fail closed until CAPTURE_FAILURE_WEBHOOK_URL is configured.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SUCCESS_HEARTBEAT_SECRET)) {
+            throw 'Success heartbeat configuration is missing. Capture was allowed to run so evidence is preserved, but the workflow must still fail closed until CAPTURE_SUCCESS_HEARTBEAT_URL is configured. Independent hourly stale_after polling still requires external monitor/domain ownership and is not configured here.'
+          }
+          if ($env:MONITORING_READY -ne 'true') {
+            throw 'Monitoring is not independently verified. Publication remains NO-GO until public HTTPS failure/heartbeat endpoints and a fresh external lensos_stale_monitor_attestation.v1 proof bind this origin, health contract, endpoint fingerprints, and a recent failure-delivery drill.'
           }

@@ -18,8 +18,14 @@ import argparse
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from crypto_options_report.cli import _snapshot_output_path
+from crypto_options_report.cli import (
+    EXIT_OK,
+    EXIT_QUALITY_BLOCKED,
+    _cmd_pull_snapshot,
+    _snapshot_output_path,
+)
 from crypto_options_report.market_data import (
     DEFAULT_QUALITY_LIMITS,
     DEFAULT_TICKER_REQUEST_BUDGET,
@@ -153,6 +159,83 @@ class SeriesCaptureNamingTests(unittest.TestCase):
 
             self.assertTrue(target.is_dir())
             self.assertEqual(Path(path).name, "eth-chain-20260726T000000.json")
+
+
+class PullSnapshotThresholdTests(unittest.TestCase):
+    @staticmethod
+    def _write_stub_snapshot(path: str, payload: dict) -> Path:
+        del payload
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}", encoding="utf-8")
+        return target
+
+    def _args(self, **kwargs) -> argparse.Namespace:
+        base = {
+            "currency": "BTC",
+            "deribit_base_url": "https://www.deribit.com",
+            "instrument_limit": DEFAULT_TICKER_REQUEST_BUDGET,
+            "output": None,
+            "output_dir": None,
+            "compact": True,
+        }
+        base.update(kwargs)
+        return argparse.Namespace(**base)
+
+    def test_partial_snapshot_with_fetch_errors_blocks_capture(self) -> None:
+        snapshot = {
+            "captured_at": CAPTURED_AT,
+            "source": "live_public_deribit",
+            "rows": [{"instrument_name": f"BTC-14AUG26-{i}-C"} for i in range(12)],
+            "fetch_errors": ["ticker: upstream timeout"],
+            "feeds": {"option_chain": {}},
+            "instrument_metadata_count": 12,
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            args = self._args(output_dir=directory)
+            with (
+                patch(
+                    "crypto_options_report.cli.fetch_deribit_option_chain_snapshot",
+                    return_value=snapshot,
+                ),
+                patch(
+                    "crypto_options_report.cli.write_snapshot_fixture",
+                    side_effect=self._write_stub_snapshot,
+                ),
+            ):
+                result = _cmd_pull_snapshot(args)
+
+        self.assertEqual(EXIT_QUALITY_BLOCKED, result)
+
+    def test_fetch_errors_above_partial_threshold_keep_capture_green(self) -> None:
+        minimum_rows = 58
+        snapshot = {
+            "captured_at": CAPTURED_AT,
+            "source": "live_public_deribit",
+            "rows": [
+                {"instrument_name": f"BTC-14AUG26-{i}-C"} for i in range(minimum_rows)
+            ],
+            "fetch_errors": ["ticker: upstream timeout"],
+            "feeds": {"option_chain": {}},
+            "instrument_metadata_count": minimum_rows,
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            args = self._args(output_dir=directory)
+            with (
+                patch(
+                    "crypto_options_report.cli.fetch_deribit_option_chain_snapshot",
+                    return_value=snapshot,
+                ),
+                patch(
+                    "crypto_options_report.cli.write_snapshot_fixture",
+                    side_effect=self._write_stub_snapshot,
+                ),
+            ):
+                result = _cmd_pull_snapshot(args)
+
+        self.assertEqual(EXIT_OK, result)
 
 
 if __name__ == "__main__":

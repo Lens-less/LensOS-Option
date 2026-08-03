@@ -3,54 +3,79 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>方法论 · LensOS Option</title>
+    <title>方法页 | LensOS Option</title>
     <link rel="stylesheet" href="./static-page.css" />
   </head>
   <body>
     <main>
       <div class="page-shell">
         <header class="page-header">
-          <a href="./index.html">返回公开站</a>
+          <a href="./index.html">返回公开首页</a>
+          <nav aria-label="语言切换">
+            <a href="./en/methodology.html">English</a>
+          </nav>
         </header>
         <div class="page-title">
-          <p>Methodology / 口径公开</p>
-          <h1>方法论</h1>
-          <p>本页说明公开站的头条指标、数据来源、样本量口径与明确不能回答的问题。</p>
+          <p>Methodology / 公开研究口径</p>
+          <h1>方法页</h1>
+          <p>这页说明公开站如何发布、如何定义头条、如何标注证据，以及哪些问题只能放在二级披露里。</p>
         </div>
         <section class="page-section">
-          <h2>VRP 定义</h2>
+          <h2>发布方式</h2>
           <p>
-            VRP = DVOL − RV30。DVOL 取 Deribit BTC DVOL 日线，RV30 取过去 30 个日历日
-            close-to-close 对数收益的 365 天年化标准差。公开站把当前 VRP 放回 1095 天滚动窗口，
-            给出经验百分位与刻度带。
+            公开版本是一个确定性的静态快照。它由捕获时刻和预计算研究工件生成，生成后只读，不在浏览器里再
+            重算市场结论。
+          </p>
+        </section>
+        <section class="page-section">
+          <h2>头条口径</h2>
+          <p>
+            公开头条默认滞后一日，只使用已经收盘的日线数据。这样可以避免同一天重复采集时，头条因为日内刷新而
+            变成两个版本。
           </p>
         </section>
         <section class="page-section">
           <h2>数据来源</h2>
           <ul>
-            <li>Deribit public API：期权链快照、DVOL 日线、公开市场状态。</li>
-            <li>BTC 标的日线历史：用于 RV30 与路径风险相关口径。</li>
-            <li>公开站只消费已发布产物，不在浏览器里二次推导缺失市场值。</li>
+            <li>Deribit 公共 API：期权链、DVOL、市场状态。</li>
+            <li>自采标的日线：用于 VRP、RV30 和历史分布。</li>
+            <li>生成的研究工件：用于候选、释放门和公开摘要。</li>
           </ul>
-        </section>
-        <section class="page-section">
-          <h2>样本量与置信度</h2>
           <p>
-            本项目显式区分独立非重叠窗口与重叠窗口。验证置信度按独立 cohort 计，不把相邻日的重叠样本当成独立证据。
+            时间对齐以捕获时钟为硬上限：标的日线按真实收盘可用时刻入库，DVOL 保留自己的观测时刻，
+            只在两者都已可得的最近共同评估日计算。DVOL 是前瞻隐含波动率，RV30 是向后看的 30 日已实现波动率；
+            两者窗口不同，页面会同时披露观测时刻、评估日与有效样本量。
           </p>
         </section>
         <section class="page-section">
-          <h2>诚实边界</h2>
+          <h2>证据分级</h2>
           <ul>
-            <li>VRP 为正不等于机会，它也可能反映即将到来的高波动。</li>
-            <li>Deribit 不发布历史期权链，部分验证只能向前累积，不能回补。</li>
-            <li>公开站永远不输出下单、仓位 sizing 或执行授权。</li>
+            <li><code>trusted</code>：已验证，可作为结论依据。</li>
+            <li><code>degraded</code>：可读但不足以支撑结论。</li>
+            <li><code>untrusted</code>：存在但校验失败。</li>
+            <li><code>missing</code>：不存在。</li>
           </ul>
         </section>
+        <section class="page-section">
+          <details>
+            <summary>八阶段工作流（折叠披露）</summary>
+            <ol>
+              <li>收集</li>
+              <li>分析</li>
+              <li>选择</li>
+              <li>入场</li>
+              <li>风险</li>
+              <li>退出</li>
+              <li>监控</li>
+              <li>复盘</li>
+            </ol>
+            <p>这部分只作为次级披露存在，不放在首页主叙事里。</p>
+          </details>
+        </section>
         <footer class="page-footer">
-          <span>LensOS Option · research only</span>
+          <span>LensOS Option / research only</span>
           <nav aria-label="页脚链接">
-            <a href="./methodology.html">方法论</a>
+            <a href="./methodology.html">方法页</a>
             <a href="./disclaimer.html">免责声明</a>
             <a href="./privacy.html">隐私政策</a>
             <a href="./terms.html">使用条款</a>

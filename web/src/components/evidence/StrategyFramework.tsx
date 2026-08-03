@@ -2,6 +2,8 @@ import type { ResearchReport } from "../../contracts";
 import {
   displayStatus,
   finiteNumber,
+  formatCutoffTime,
+  formatPublishedAge,
   friendlySource,
   humanize,
   marketDisplayState,
@@ -169,6 +171,16 @@ function formatConditionObserved(id: string, value: unknown): string {
   return "见原始数据";
 }
 
+function formatPublishedLimitHours(maxAgeSec: number | null | undefined): string {
+  if (typeof maxAgeSec !== "number" || !Number.isFinite(maxAgeSec) || maxAgeSec <= 0) {
+    return "未提供时效上限";
+  }
+  return `${(maxAgeSec / 3_600).toLocaleString("zh-CN", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })} 小时`;
+}
+
 export function StrategyFrameworkSection({
   report,
   freshness,
@@ -207,6 +219,23 @@ export function StrategyFrameworkSection({
       stage,
       status: "blocked" as const,
     }));
+  const publishedFreshnessObserved =
+    isPublished && freshness
+      ? `采集 ${formatCutoffTime(
+          report.publish_edition?.captured_at ?? report.generated_at ?? null,
+        )} · 发布 ${formatCutoffTime(report.publish_edition?.published_at ?? null)} · 评估 ${formatCutoffTime(
+          report.runtime_context?.evaluation_clock ??
+            report.publish_edition?.captured_at ??
+            report.generated_at ??
+            null,
+        )}`
+      : null;
+  const publishedFreshnessRequirement =
+    isPublished && freshness
+      ? `${formatPublishedAge(freshness.ageSec)} · 公开版在 ${formatPublishedLimitHours(
+          freshness.maxAgeSec,
+        )} 后失效`
+      : null;
 
   return (
     <section
@@ -492,10 +521,18 @@ export function StrategyFrameworkSection({
                     </strong>
                   </div>
                   <p>
-                    {isPublished ? "当次评估" : "当前"}：
-                    {formatConditionObserved(condition.id, condition.observed)}
+                    {isPublished && condition.id === "market_freshness"
+                      ? publishedFreshnessObserved
+                      : `${isPublished ? "当次评估" : "当前"}：${formatConditionObserved(
+                          condition.id,
+                          condition.observed,
+                        )}`}
                   </p>
-                  <small>要求：{condition.requirement ?? "见策略合同"}</small>
+                  <small>
+                    {isPublished && condition.id === "market_freshness"
+                      ? publishedFreshnessRequirement
+                      : `要求：${condition.requirement ?? "见策略合同"}`}
+                  </small>
                 </article>
               ))}
             </div>

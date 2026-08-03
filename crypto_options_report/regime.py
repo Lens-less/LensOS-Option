@@ -5,6 +5,7 @@ from __future__ import annotations
 from math import isfinite, log
 from typing import Any
 
+from .empirical_rank import empirical_percentile
 from .market_data import bound_snapshot_trust_evidence
 
 DEFAULT_REGIME_INPUTS = {
@@ -480,8 +481,14 @@ def _derive_rolling_regime_inputs(
     recent_anchor = prices[max(0, len(prices) - 5)]
     recent_return = log(current_price / recent_anchor)
     observed_range = (max(prices + [current_price]) - min(prices + [current_price])) / current_price
-    dvol_percentile = _empirical_percentile(current_dvol, dvol_history)
-    atm_iv_percentile = _empirical_percentile(current_atm_iv, atm_iv_history)
+    dvol_percentile = empirical_percentile(
+        current=current_dvol,
+        history=dvol_history,
+    )
+    atm_iv_percentile = empirical_percentile(
+        current=current_atm_iv,
+        history=atm_iv_history,
+    )
     dvol_change = current_dvol - dvol_history[-1]
 
     positive_carry = max(basis_rate, 0.0) * 20.0 + max(funding_rate, 0.0) * 200.0
@@ -547,10 +554,6 @@ def _exchange_event_score(events: Any) -> float | None:
         measured = [value for value in severities if value is not None]
         return _clamp01(max(measured)) if measured else None
     return 0.0
-
-
-def _empirical_percentile(current: float, history: list[float]) -> float:
-    return _clamp01(sum(value <= current for value in history) / len(history))
 
 
 def _numeric_value(

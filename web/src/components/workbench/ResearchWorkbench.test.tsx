@@ -169,6 +169,19 @@ function publishedWorkbenchReport(): ResearchReport {
   } as unknown as ResearchReport;
 }
 
+function missingDteReport(): ResearchReport {
+  const report = validatedReport();
+  const scanner = report.ev_candidate_scanner as {
+    ranked_candidates?: Array<Record<string, unknown>>;
+  };
+  const rankedCandidates = scanner.ranked_candidates ?? [];
+  rankedCandidates[1] = {
+    ...(rankedCandidates[1] ?? {}),
+    dte_days: null,
+  };
+  return report;
+}
+
 function selectRowByCreditText(creditText: string): void {
   const cell = screen.getByText(creditText);
   const rowElement = cell.closest("tr");
@@ -285,10 +298,13 @@ describe("ResearchWorkbench / safety framing", () => {
   it("labels the score as uncalibrated so a rank is not read as a verdict", () => {
     renderWorkbench(validatedReport());
 
-    expect(screen.getByText("打分状态")).toBeInTheDocument();
+    expect(screen.getByText("排序口径")).toBeInTheDocument();
     expect(
-      screen.getAllByText("UNCALIBRATED_RESEARCH_ONLY").length,
+      screen.getAllByText("研究排序值（未校准）").length,
     ).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("button", { name: "研究排序值（未校准）" }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -337,5 +353,32 @@ describe("ResearchWorkbench / no trading semantics", () => {
     fireEvent.click(rejectTierToggle);
     expect(screen.getByText("$162.65")).toBeInTheDocument();
     expect(screen.getAllByText("已拒绝").length).toBeGreaterThan(0);
+  });
+});
+
+describe("ResearchWorkbench / keyboard and sparse data", () => {
+  it("supports keyboard row navigation and enter-to-open on the screener table", () => {
+    renderWorkbench(validatedReport());
+
+    const rows = document.querySelectorAll<HTMLTableRowElement>(
+      ".candidate-screener-table tbody tr",
+    );
+    expect(rows).toHaveLength(2);
+    rows[0]?.focus();
+
+    fireEvent.keyDown(rows[0] as HTMLTableRowElement, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows[1]);
+
+    fireEvent.keyDown(rows[1] as HTMLTableRowElement, { key: "Enter" });
+    expect(
+      screen.getByRole("heading", { name: "BTC-7AUG26-71000-C:naked" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders missing DTE as unavailable without breaking rows that still have data", () => {
+    renderWorkbench(missingDteReport());
+
+    expect(screen.getByText("13.9 天")).toBeInTheDocument();
+    expect(screen.getByText("不可用")).toBeInTheDocument();
   });
 });

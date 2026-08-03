@@ -30,6 +30,7 @@ dist/
 web/node_modules/
 web/.vite/
 web/coverage/
+web/dist-public/
 # Local design exploration output, not product source.
 design-previews/
 *.log

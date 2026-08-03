@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,7 @@ EXIT_HARD_ERROR = 1
 # Each tested candidate replays the whole path set once per period slice, so the
 # default is a handful rather than the whole eligible table.
 DEFAULT_ROBUSTNESS_CANDIDATES = 5
+PARTIAL_SNAPSHOT_MIN_ROW_RATIO = 0.60
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,6 +149,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="series artifact JSON path",
     )
     publish.add_argument(
+        "--publication-history",
+        required=True,
+        help="durable publication receipt history JSON path",
+    )
+    publish.add_argument(
         "--out",
         required=True,
         help="output directory; must not already contain files",
@@ -156,10 +163,16 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="RFC3339 publication timestamp used for deterministic output",
     )
+    publish.add_argument(
+        "--site-origin",
+        required=True,
+        help="canonical absolute HTTPS origin used for discovery and share metadata",
+    )
     publish.add_argument("--git-sha", help="optional git SHA recorded in the manifest")
     publish.add_argument(
         "--web-build",
-        help="optional prebuilt evidence bundle directory; defaults to static/evidence",
+        required=True,
+        help="prebuilt public-only bundle directory (for example web/dist-public)",
     )
     publish.add_argument("--compact", action="store_true", help="emit compact JSON")
 
@@ -445,8 +458,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dvol_history=args.dvol_history,
                 signal_artifact=args.signal_artifact,
                 series_artifact=args.series_artifact,
+                publication_history=args.publication_history,
                 out=args.out,
                 published_at=args.published_at,
+                site_origin=args.site_origin,
                 git_sha=args.git_sha,
                 web_build=args.web_build,
             )
@@ -538,19 +553,28 @@ def _cmd_pull_snapshot(args: argparse.Namespace) -> int:
         include_feed_graph=True,
     )
     path = write_snapshot_fixture(_snapshot_output_path(args, snapshot), snapshot)
+    requested_limit = validate_ticker_request_limit(args.instrument_limit)
+    row_count = len(snapshot.get("rows") or [])
+    fetch_error_count = len(snapshot.get("fetch_errors") or [])
+    partial_row_threshold = max(1, ceil(requested_limit * PARTIAL_SNAPSHOT_MIN_ROW_RATIO))
+    partial_capture_blocked = fetch_error_count > 0 and row_count < partial_row_threshold
     payload = {
         "schema_version": "snapshot_capture.v1",
         "path": str(path),
         "captured_at": snapshot.get("captured_at"),
         "source": snapshot.get("source"),
-        "row_count": len(snapshot.get("rows") or []),
-        "fetch_errors": len(snapshot.get("fetch_errors") or []),
+        "row_count": row_count,
+        "fetch_errors": fetch_error_count,
         "feeds": list((snapshot.get("feeds") or {}).keys()),
         "instrument_metadata_count": snapshot.get("instrument_metadata_count"),
+        "partial_row_threshold": partial_row_threshold,
+        "partial_capture_blocked": partial_capture_blocked,
         "research_only": True,
     }
     _emit_json(payload, compact=args.compact)
-    if snapshot.get("fetch_errors") and not snapshot.get("rows"):
+    if (
+        snapshot.get("fetch_errors") and not snapshot.get("rows")
+    ) or partial_capture_blocked:
         return EXIT_QUALITY_BLOCKED
     return EXIT_OK
 

@@ -15,11 +15,25 @@ function formatPoints(value: number | null): string {
   return value === null ? "不可用" : `${value.toFixed(1)} pt`;
 }
 
-function percentileLabel(value: number | null): string {
+function percentileLabel(
+  value: number | null,
+  fallback = "不可用",
+): string {
   if (value === null) {
-    return "不可用";
+    return fallback;
   }
   return `P${Math.round(value * 100)}`;
+}
+
+function formatWindowLabel(windowDays: number | null): string {
+  if (windowDays === null) {
+    return "历史窗口";
+  }
+  const years = windowDays / 365;
+  return `约 ${years.toLocaleString("zh-CN", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })} 年（${windowDays.toLocaleString("zh-CN")} 天）窗口`;
 }
 
 function bandTone(band: string | null | undefined): "danger" | "warning" | "safe" {
@@ -41,8 +55,10 @@ function isValidatedVrpStatus(status: string | undefined): boolean {
 
 function VrpSeriesChart({
   points,
+  windowLabel,
 }: {
   points: VrpStatusPoint[];
+  windowLabel: string;
 }): React.JSX.Element | null {
   const values = points
     .map((point) => finite(point.vrp_percent_points))
@@ -69,9 +85,9 @@ function VrpSeriesChart({
         className="vrp-series-chart"
         viewBox="0 0 600 200"
         role="img"
-        aria-label="VRP 三年时序"
+        aria-label={`VRP ${windowLabel}时序`}
       >
-        <title>VRP 三年时序</title>
+        <title>{`VRP ${windowLabel}时序`}</title>
         <rect x="24" y="24" width="552" height="146" fill="#f4f4f4" />
         <line x1="24" y1="170" x2="576" y2="170" stroke="#8d8d8d" />
         <line x1="24" y1="24" x2="24" y2="170" stroke="#8d8d8d" />
@@ -105,7 +121,7 @@ function VrpSeriesChart({
                 <td>{formatPoints(finite(point.vrp_percent_points))}</td>
                 <td>{formatPercent(finite(point.dvol_percent), 1)}</td>
                 <td>{formatPercent(finite(point.rv30_percent), 1)}</td>
-                <td>{percentileLabel(finite(point.percentile))}</td>
+                <td>{percentileLabel(finite(point.percentile), "")}</td>
               </tr>
             ))}
           </tbody>
@@ -128,6 +144,8 @@ export function VrpOverview({
   const currentDvol = finite(vrp?.current_dvol_percent);
   const currentRv30 = finite(vrp?.current_rv30_percent);
   const percentile = finite(vrp?.percentile);
+  const windowDays = finite(vrp?.window_days);
+  const windowLabel = formatWindowLabel(windowDays);
   const currentBand = vrp?.band;
   const series = (vrp?.series ?? []).filter(
     (point) => finite(point.vrp_percent_points) !== null,
@@ -186,9 +204,11 @@ export function VrpOverview({
           </div>
           <div className="vrp-scale" data-tone={bandTone(currentBand)}>
             <div className="vrp-scale-copy">
-              <span>三年经验百分位</span>
-              <strong>{percentileLabel(percentile)}</strong>
-              <small>{currentBand ?? "未分带"}</small>
+              <span>{windowLabel}经验百分位</span>
+              <strong aria-label={percentile === null ? "百分位不可用" : undefined}>
+                {percentileLabel(percentile, "")}
+              </strong>
+              <small>{currentBand ?? ""}</small>
             </div>
             <ol aria-label="VRP 刻度带">
               {["P90", "P70", "P30", "P10"].map((item) => (
@@ -196,7 +216,10 @@ export function VrpOverview({
               ))}
             </ol>
           </div>
-          <VrpSeriesChart points={series} />
+          <VrpSeriesChart points={series} windowLabel={windowLabel} />
+          <p className="section-note">
+            图中 DVOL 代表 forward-implied volatility，RV30 代表 trailing-realized volatility。
+          </p>
         </div>
       ) : (
         <div className="vrp-unavailable">

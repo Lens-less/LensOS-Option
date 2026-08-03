@@ -19,6 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .empirical_rank import empirical_percentile, vrp_band_for_percentile
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     MAX_MARKET_SNAPSHOT_BYTES,
@@ -81,37 +82,81 @@ def fetch_deribit_dvol_history(
     captured = captured_at or utc_timestamp()
     end_ms = parse_timestamp_ms(captured)
     start_ms = max(0, end_ms - days * _MILLISECONDS_PER_DAY)
-    payload = _get_json(
-        f"{safe_base}/api/v2/public/get_volatility_index_data",
-        {
-            "currency": base_currency,
-            "resolution": resolution,
-            "start_timestamp": start_ms,
-            "end_timestamp": end_ms,
-        },
-        timeout=timeout,
-    )
-    result = _jsonrpc_result(payload, endpoint="get_volatility_index_data")
-    data_rows = result.get("data") if isinstance(result, dict) else result
-    if not isinstance(data_rows, list) or not data_rows:
-        raise ValueError("empty volatility index data")
+    request_start_date = datetime.fromtimestamp(start_ms / 1000, tz=UTC).date()
+    request_end_date = datetime.fromtimestamp(end_ms / 1000, tz=UTC).date()
 
-    observations: list[dict[str, Any]] = []
-    previous_ms: int | None = None
-    for row in data_rows:
-        timestamp_ms, close = _parse_dvol_row(row)
-        if previous_ms is not None and timestamp_ms <= previous_ms:
-            raise ValueError("dvol history must be strictly increasing in time")
-        previous_ms = timestamp_ms
-        observations.append(
-            {
+    params: dict[str, Any] = {
+        "currency": base_currency,
+        "resolution": resolution,
+        "start_timestamp": start_ms,
+        "end_timestamp": end_ms,
+    }
+    observed_rows: dict[int, dict[str, Any]] = {}
+    previous_page_end_ms = end_ms
+
+    while True:
+        payload = _get_json(
+            f"{safe_base}/api/v2/public/get_volatility_index_data",
+            params,
+            timeout=timeout,
+        )
+        result = _jsonrpc_result(payload, endpoint="get_volatility_index_data")
+        data_rows = result.get("data") if isinstance(result, dict) else result
+        if not isinstance(data_rows, list) or not data_rows:
+            raise ValueError("empty volatility index data")
+
+        for row in data_rows:
+            timestamp_ms, close = _parse_dvol_row(row)
+            observed_rows[timestamp_ms] = {
                 "timestamp_ms": timestamp_ms,
                 "observed_at": _timestamp_from_ms(timestamp_ms),
                 "close": close,
             }
-        )
 
-    coverage = _coverage_from_observations(observations)
+        continuation = result.get("continuation") if isinstance(result, dict) else None
+        observations = sorted(observed_rows.values(), key=lambda item: item["timestamp_ms"])
+        trimmed = [
+            row
+            for row in observations
+            if request_start_date <= date.fromisoformat(row["observed_at"][:10]) <= request_end_date
+        ]
+        if trimmed and date.fromisoformat(trimmed[0]["observed_at"][:10]) <= request_start_date:
+            observations = trimmed
+            break
+        if continuation in (None, ""):
+            observations = trimmed
+            break
+        next_end_ms = _coerce_timestamp_ms(continuation)
+        if next_end_ms >= previous_page_end_ms:
+            raise ValueError("dvol history continuation must strictly decrease end_timestamp")
+        params["end_timestamp"] = next_end_ms
+        previous_page_end_ms = next_end_ms
+
+    if not observations:
+        raise ValueError("empty volatility index data")
+    if (
+        date.fromisoformat(observations[0]["observed_at"][:10]) > request_start_date
+        or date.fromisoformat(observations[-1]["observed_at"][:10]) < request_end_date
+    ):
+        raise ValueError("requested dvol history window is not fully covered")
+
+    previous_ms: int | None = None
+    observed_dates: set[str] = set()
+    for row in observations:
+        timestamp_ms = row["timestamp_ms"]
+        if previous_ms is not None and timestamp_ms <= previous_ms:
+            raise ValueError("dvol history must be strictly increasing in time")
+        previous_ms = timestamp_ms
+        observed_date = row["observed_at"][:10]
+        if observed_date in observed_dates:
+            raise ValueError("dvol history must contain one observation per UTC day")
+        observed_dates.add(observed_date)
+
+    coverage = _coverage_from_observations(
+        observations,
+        window_start=request_start_date,
+        window_end=request_end_date,
+    )
     return {
         "schema_version": DVOL_HISTORY_SCHEMA_VERSION,
         "captured_at": captured,
@@ -155,6 +200,7 @@ def build_vrp_status(
         "current": _empty_current(),
         "time_series": [],
         "missing_days": [],
+        "missing_evidence": [],
         "remediation": _remediation(
             _remediation_command(
                 "dvol",
@@ -181,10 +227,9 @@ def build_vrp_status(
             ),
         }
     try:
-        evaluation_date = datetime.fromtimestamp(
+        evaluation_date = _settlement_evaluation_date(
             parse_timestamp_ms(generated_at) / 1000,
-            tz=UTC,
-        ).date()
+        )
     except (OSError, OverflowError, TypeError, ValueError):
         return {**base, "reason_codes": ["INVALID_EVALUATION_CLOCK"]}
 
@@ -237,6 +282,14 @@ def build_vrp_status(
         value_key="close",
         through_date=evaluation_date,
     )
+    dvol_observed_at_by_date = _observed_at_by_date(
+        dvol_payload["observations"],
+        through_date=evaluation_date,
+    )
+    underlying_observed_at_by_date = _observed_at_by_date(
+        underlying_payload["observations"],
+        through_date=evaluation_date,
+    )
     if not dvol_by_date or not underlying_by_date:
         return {**base, "reason_codes": ["NO_HISTORY_AT_EVALUATION_CLOCK"]}
     overlap_start = max(
@@ -263,7 +316,7 @@ def build_vrp_status(
             ),
         }
 
-    missing_days = _combined_missing_days(
+    source_missing_days = _combined_missing_days(
         overlap_start,
         overlap_end,
         dvol_by_date,
@@ -273,20 +326,44 @@ def build_vrp_status(
     )
 
     raw_points: list[dict[str, Any]] = []
-    current_date = overlap_start
-    while current_date <= overlap_end:
+    missing_evidence: list[dict[str, Any]] = []
+    first_underlying_date = date.fromisoformat(min(underlying_by_date.keys()))
+    current_date = max(overlap_start, first_underlying_date + timedelta(days=30))
+    while current_date <= evaluation_date:
         current_key = current_date.isoformat()
         dvol_value = dvol_by_date.get(current_key)
+        missing_underlying_days = _missing_underlying_rv30_days(
+            underlying_by_date,
+            current_date,
+        )
+        missing_reason_codes = []
         if dvol_value is None:
+            missing_reason_codes.append("MISSING_DVOL_OBSERVATION")
+        if missing_underlying_days:
+            missing_reason_codes.append("INCOMPLETE_UNDERLYING_RV30_WINDOW")
+        if missing_reason_codes:
+            missing_evidence.append(
+                {
+                    "date": current_key,
+                    "reason_code": missing_reason_codes[0],
+                    "reason_codes": missing_reason_codes,
+                    "missing_underlying_days": missing_underlying_days,
+                }
+            )
             current_date += timedelta(days=1)
             continue
         rv30 = _realized_vol_30_for_date(underlying_by_date, current_date)
-        if rv30 is None:
-            current_date += timedelta(days=1)
-            continue
+        assert rv30 is not None
+        dvol_observed_at = dvol_observed_at_by_date.get(current_key)
+        underlying_observed_at = underlying_observed_at_by_date.get(current_key)
+        assert dvol_observed_at is not None
+        assert underlying_observed_at is not None
         raw_points.append(
             {
                 "date": current_key,
+                "dvol_observed_at": dvol_observed_at,
+                "underlying_observed_at": underlying_observed_at,
+                "evaluation_at": underlying_observed_at,
                 "dvol_percent_points": round(dvol_value, 6),
                 "rv30_percent_points": round(rv30, 6),
                 "vrp_percent_points": round(dvol_value - rv30, 6),
@@ -296,11 +373,17 @@ def build_vrp_status(
         )
         current_date += timedelta(days=1)
 
+    missing_days = sorted(
+        set(source_missing_days)
+        | {item["date"] for item in missing_evidence}
+    )
+
     if not raw_points:
         return {
             **base,
             "reason_codes": ["INSUFFICIENT_ALIGNED_HISTORY"],
             "missing_days": missing_days,
+            "missing_evidence": missing_evidence,
             "remediation": _remediation(
                 _remediation_command(
                     "dvol", dvol_payload["currency"], max(window_days, 1095)
@@ -322,16 +405,17 @@ def build_vrp_status(
             for item in raw_points[: index + 1]
             if date.fromisoformat(item["date"]) >= window_start
         ]
-        percentile = _empirical_percentile(
+        percentile_summary = _percentile_band_for_point(
             current=point["vrp_percent_points"],
             history=window_values,
+            minimum_sample_count=minimum_series_sample_count,
         )
         enriched_points.append(
             {
                 **point,
-                "percentile": percentile,
-                "percentile_sample_count": len(window_values),
-                "band": _band_for_percentile(percentile),
+                "percentile": percentile_summary["percentile"],
+                "percentile_sample_count": percentile_summary["sample_count"],
+                "band": percentile_summary["band"],
                 "window_day_span": window_days,
             }
         )
@@ -344,11 +428,32 @@ def build_vrp_status(
             "reason_codes": ["INSUFFICIENT_VRP_HISTORY"],
             "time_series": enriched_points,
             "missing_days": missing_days,
+            "missing_evidence": missing_evidence,
             "series_sample_count": len(enriched_points),
             "remediation": _remediation(
                 _remediation_command(
                     "dvol", dvol_payload["currency"], max(window_days, 1095)
                 )
+            ),
+        }
+
+    if enriched_points[-1]["date"] != evaluation_date.isoformat():
+        return {
+            **base,
+            "reason_codes": ["STALE_VRP_EVALUATION_DATE"],
+            "time_series": enriched_points,
+            "missing_days": missing_days,
+            "missing_evidence": missing_evidence,
+            "series_sample_count": len(enriched_points),
+            "remediation": _remediation(
+                _remediation_command(
+                    "dvol", dvol_payload["currency"], max(window_days, 1095)
+                ),
+                _remediation_command(
+                    "underlying",
+                    underlying_payload["currency"],
+                    max(window_days, 1095),
+                ),
             ),
         }
 
@@ -367,6 +472,7 @@ def build_vrp_status(
         "current": current,
         "time_series": enriched_points,
         "missing_days": missing_days,
+        "missing_evidence": missing_evidence,
         "series_sample_count": len(enriched_points),
         "remediation": _remediation(
             _remediation_command(
@@ -388,6 +494,22 @@ def _validated_dvol_history(payload: dict[str, Any]) -> dict[str, Any]:
     observations = payload.get("observations")
     if not isinstance(observations, list) or len(observations) < 1:
         raise ValueError("dvol history fixture must contain observations")
+    requested_days = payload.get("requested_days")
+    if (
+        not isinstance(requested_days, int)
+        or isinstance(requested_days, bool)
+        or requested_days <= 0
+        or requested_days > MAX_DVOL_HISTORY_DAYS
+    ):
+        raise ValueError("dvol history requested_days is invalid")
+    try:
+        captured_date = datetime.fromtimestamp(
+            parse_timestamp_ms(str(payload.get("captured_at") or "")) / 1000,
+            tz=UTC,
+        ).date()
+    except (OSError, OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("dvol history captured_at is invalid") from exc
+    requested_start = captured_date - timedelta(days=requested_days)
 
     previous_ms: int | None = None
     observed_dates: set[str] = set()
@@ -412,8 +534,18 @@ def _validated_dvol_history(payload: dict[str, Any]) -> dict[str, Any]:
         if normalized is None or normalized <= 0:
             raise ValueError("dvol history close must be a positive finite number")
 
+    if (
+        requested_start.isoformat() not in observed_dates
+        or captured_date.isoformat() not in observed_dates
+    ):
+        raise ValueError("requested dvol history window is not fully covered")
+
     payload = dict(payload)
-    payload["coverage"] = _coverage_from_observations(observations)
+    payload["coverage"] = _coverage_from_observations(
+        observations,
+        window_start=requested_start,
+        window_end=captured_date,
+    )
     payload["observation_count"] = len(observations)
     payload["first_observed_at"] = observations[0]["observed_at"]
     payload["last_observed_at"] = observations[-1]["observed_at"]
@@ -460,6 +592,7 @@ def _validate_underlying_history_for_vrp(history: Any) -> dict[str, Any]:
             "currency": currency,
         }
     previous_ms: int | None = None
+    observed_dates: set[str] = set()
     for row in observations:
         if not isinstance(row, dict):
             return {
@@ -481,6 +614,21 @@ def _validate_underlying_history_for_vrp(history: Any) -> dict[str, Any]:
                 "reason_code": "INVALID_UNDERLYING_HISTORY",
                 "currency": currency,
             }
+        observed_at = row.get("observed_at")
+        if not isinstance(observed_at, str) or observed_at != _timestamp_from_ms(timestamp_ms):
+            return {
+                "history": None,
+                "reason_code": "INVALID_UNDERLYING_HISTORY",
+                "currency": currency,
+            }
+        observed_date = observed_at[:10]
+        if observed_date in observed_dates:
+            return {
+                "history": None,
+                "reason_code": "INVALID_UNDERLYING_HISTORY",
+                "currency": currency,
+            }
+        observed_dates.add(observed_date)
         previous_ms = timestamp_ms
     return {"history": history, "reason_code": None, "currency": currency}
 
@@ -500,6 +648,22 @@ def _values_by_date(
         if observed_date <= through_date:
             values[observed_date.isoformat()] = float(row[value_key])
     return values
+
+
+def _observed_at_by_date(
+    observations: list[dict[str, Any]],
+    *,
+    through_date: date,
+) -> dict[str, str]:
+    observed_at_by_date: dict[str, str] = {}
+    for row in observations:
+        observed_at = str(row.get("observed_at") or "")
+        if not observed_at.endswith("Z"):
+            continue
+        observed_date = date.fromisoformat(observed_at[:10])
+        if observed_date <= through_date:
+            observed_at_by_date[observed_date.isoformat()] = observed_at
+    return observed_at_by_date
 
 
 def _combined_missing_days(
@@ -524,44 +688,64 @@ def _combined_missing_days(
     return sorted(missing)
 
 
+def _missing_underlying_rv30_days(
+    underlying_by_date: dict[str, float],
+    current_date: date,
+) -> list[str]:
+    return [
+        key
+        for offset in range(30, -1, -1)
+        if (key := (current_date - timedelta(days=offset)).isoformat())
+        not in underlying_by_date
+    ]
+
+
 def _realized_vol_30_for_date(
     underlying_by_date: dict[str, float], current_date: date
 ) -> float | None:
+    if _missing_underlying_rv30_days(underlying_by_date, current_date):
+        return None
     closes: list[float] = []
     for offset in range(30, -1, -1):
         key = (current_date - timedelta(days=offset)).isoformat()
-        close = underlying_by_date.get(key)
-        if close is None:
-            return None
-        closes.append(close)
+        closes.append(underlying_by_date[key])
     returns = [math.log(closes[index + 1] / closes[index]) for index in range(30)]
     volatility = annualized_volatility(returns)
     return volatility * 100.0 if volatility is not None else None
 
 
-def _empirical_percentile(*, current: float, history: list[float]) -> float:
-    count = len(history)
-    if count <= 0:
-        return 0.0
-    less_or_equal = sum(1 for value in history if value <= current)
-    return round(less_or_equal / count, 6)
+def _percentile_band_for_point(
+    *,
+    current: float,
+    history: list[float],
+    minimum_sample_count: int,
+) -> dict[str, Any]:
+    sample_count = len(history)
+    if sample_count < minimum_sample_count:
+        return {
+            "percentile": None,
+            "sample_count": sample_count,
+            "band": None,
+        }
+    percentile = empirical_percentile(current=current, history=history)
+    return {
+        "percentile": percentile,
+        "sample_count": sample_count,
+        "band": _band_for_percentile(percentile),
+    }
 
 
 def _band_for_percentile(percentile: float) -> str:
-    if percentile >= 0.90:
-        return "extremely_expensive"
-    if percentile >= 0.70:
-        return "expensive"
-    if percentile <= 0.10:
-        return "extremely_thin"
-    if percentile <= 0.30:
-        return "thin"
-    return "neutral"
+    """Backward-compatible private seam; thresholds live in empirical_rank."""
+    return vrp_band_for_percentile(percentile)
 
 
 def _empty_current() -> dict[str, Any]:
     return {
         "date": None,
+        "dvol_observed_at": None,
+        "underlying_observed_at": None,
+        "evaluation_at": None,
         "dvol_percent_points": None,
         "rv30_percent_points": None,
         "vrp_percent_points": None,
@@ -662,10 +846,15 @@ def _finite_number(value: Any) -> float | None:
     return number
 
 
-def _coverage_from_observations(observations: list[dict[str, Any]]) -> dict[str, Any]:
+def _coverage_from_observations(
+    observations: list[dict[str, Any]],
+    *,
+    window_start: date | None = None,
+    window_end: date | None = None,
+) -> dict[str, Any]:
     dates = [date.fromisoformat(str(row["observed_at"])[:10]) for row in observations]
-    first = min(dates)
-    last = max(dates)
+    first = window_start or min(dates)
+    last = window_end or max(dates)
     expected_day_count = (last - first).days + 1
     observed_keys = {item.isoformat() for item in dates}
     missing_days: list[str] = []
@@ -675,7 +864,7 @@ def _coverage_from_observations(observations: list[dict[str, Any]]) -> dict[str,
         if key not in observed_keys:
             missing_days.append(key)
         current += timedelta(days=1)
-    observed_day_count = len(observations)
+    observed_day_count = sum(first <= item <= last for item in set(dates))
     return {
         "expected_day_count": expected_day_count,
         "observed_day_count": observed_day_count,
@@ -683,6 +872,13 @@ def _coverage_from_observations(observations: list[dict[str, Any]]) -> dict[str,
         "coverage_ratio": observed_day_count / expected_day_count,
         "missing_days": missing_days,
     }
+
+
+def _settlement_evaluation_date(timestamp_seconds: float) -> date:
+    evaluation = datetime.fromtimestamp(timestamp_seconds, tz=UTC)
+    if evaluation.hour < 8:
+        return evaluation.date() - timedelta(days=1)
+    return evaluation.date()
 
 
 def _get_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
