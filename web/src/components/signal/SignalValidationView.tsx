@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 
+import {
+  isArtifactRecord,
+  matchesExpectedArtifactCapture,
+} from "../artifactCapture";
 import { money, ratio, signed } from "../candidate/format";
 import { DivergingBars } from "../viz/DivergingBars";
 import type { DivergingRow } from "../viz/DivergingBars";
@@ -7,6 +11,8 @@ import { VIZ } from "../viz/tokens";
 
 interface SignalArtifact {
   schema_version?: string;
+  captured_at?: string;
+  generated_at?: string;
   status?: string;
   reason_code?: string;
   detail?: string;
@@ -19,6 +25,12 @@ interface SignalArtifact {
   collinearity?: Record<string, unknown>;
   summary?: Record<string, unknown>;
   pre_registration?: Record<string, unknown>;
+}
+
+interface LoadedSignalArtifact {
+  artifact: SignalArtifact;
+  expectedCapturedAt?: string;
+  url: string;
 }
 
 function num(value: unknown): number | null {
@@ -421,28 +433,55 @@ function MeasuredSections({
   );
 }
 
-/** Loads the artifact the engine serves, keeping the previous render on refetch. */
-export function useSignalArtifact(url = "/research/signal"): SignalArtifact | null {
-  const [artifact, setArtifact] = useState<SignalArtifact | null>(null);
+/** Loads one capture-bound artifact and never renders an older URL while refetching. */
+export function useSignalArtifact(
+  url: string | null = "/research/signal",
+  expectedCapturedAt?: string,
+): SignalArtifact | null {
+  const [loaded, setLoaded] = useState<LoadedSignalArtifact | null>(null);
   useEffect(() => {
+    if (!url) {
+      return;
+    }
     let cancelled = false;
-    void fetch(url)
+    void fetch(url, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    })
       .then((response) => (response.ok ? response.json() : null))
       .then((payload) => {
         if (!cancelled) {
-          setArtifact(payload ?? { status: "not_configured", detail: "" });
+          const artifact =
+            isArtifactRecord(payload) &&
+            matchesExpectedArtifactCapture(payload, expectedCapturedAt)
+              ? (payload as SignalArtifact)
+              : {
+                  status: "not_configured",
+                  detail: expectedCapturedAt
+                    ? "信号产物与当前公开版的数据截止时间不一致，已停止展示。"
+                    : "",
+                };
+          setLoaded({ artifact, expectedCapturedAt, url });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setArtifact({ status: "not_configured", detail: "本地引擎不可达。" });
+          setLoaded({
+            artifact: { status: "not_configured", detail: "本地引擎不可达。" },
+            expectedCapturedAt,
+            url,
+          });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [url]);
-  return artifact;
+  }, [expectedCapturedAt, url]);
+  return url &&
+    loaded?.url === url &&
+    loaded.expectedCapturedAt === expectedCapturedAt
+    ? loaded.artifact
+    : null;
 }
 
 export const SIGNAL_VIEW_ACCENT = VIZ.subject;

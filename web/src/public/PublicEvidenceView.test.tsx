@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ResearchReport, VrpStatusPoint } from "../contracts";
@@ -79,6 +79,90 @@ function summary(
 }
 
 describe("PublicEvidenceView public truth labels", () => {
+  it("shows sanitized exchange-lock evidence and its narrow source", () => {
+    const partialLock = report();
+    partialLock.event_status = {
+      event_score: 0.8,
+      exchange_lock_state: "partial",
+      macro_calendar_covered: false,
+      reason_code: "EXCHANGE_PARTIAL_LOCK",
+      scope: "exchange_native_only",
+      source: "deribit_public_status",
+      source_status: "available",
+    };
+
+    render(
+      <PublicEvidenceView
+        freshness={freshness}
+        report={partialLock}
+        summary={null}
+      />,
+    );
+
+    const evidence = screen.getByRole("region", {
+      name: "公开事件源与交易所锁定",
+    });
+    expect(within(evidence).getByText("0.80")).toBeInTheDocument();
+    expect(within(evidence).getByText("部分锁定（阻断）")).toBeInTheDocument();
+    expect(within(evidence).getByText("EXCHANGE_PARTIAL_LOCK")).toBeInTheDocument();
+    expect(
+      within(evidence).getByText(
+        "Deribit public/status（仅交易所锁定状态，不含宏观事件日历）",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("renders unknown public reason codes instead of silently dropping them", () => {
+    const unknownReason = report();
+    unknownReason.reason_codes = ["UNKNOWN_PUBLIC_BLOCKER"];
+
+    render(
+      <PublicEvidenceView
+        freshness={freshness}
+        report={unknownReason}
+        summary={null}
+      />,
+    );
+
+    expect(screen.getByText("UNKNOWN_PUBLIC_BLOCKER")).toBeInTheDocument();
+    expect(screen.getByText("未收录的阻断原因")).toBeInTheDocument();
+    expect(screen.getByText(/机器码仍会原样展示/)).toBeInTheDocument();
+  });
+
+  it("uses the report's VRP minimum and explains quarantined quotes", () => {
+    const constrained = report();
+    constrained.vrp_status = {
+      minimum_series_sample_count: 1_200,
+      reason_code: "INSUFFICIENT_VRP_HISTORY",
+      sample_count: 365,
+      status: "insufficient_history",
+    };
+    constrained.data_status!.quality_gate = {
+      passed: true,
+      summary: {
+        invalid_quotes: 2,
+        total_quotes: 10,
+        valid_quotes: 8,
+      },
+    };
+    constrained.strategy_research = {
+      schema_version: "strategy_research.v1",
+      analysis: { market: { spot_usd: 63_139.06 } },
+    };
+
+    render(
+      <PublicEvidenceView
+        freshness={freshness}
+        report={constrained}
+        summary={null}
+      />,
+    );
+
+    expect(screen.getAllByText(/365 \/ 1,200/)).toHaveLength(2);
+    expect(screen.getByText(/2 条未通过质量门的报价已隔离/)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("最少 1000");
+  });
+
   it("shows the daily change under the headline without inventing a comparison", () => {
     const { rerender } = render(
       <PublicEvidenceView

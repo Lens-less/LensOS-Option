@@ -1,3 +1,5 @@
+import type { ExchangeLockState, ResearchReport } from "../../contracts";
+
 /**
  * Plain-language readings of the machine reason codes.
  *
@@ -80,7 +82,7 @@ export const REASON_CODE_READINGS: Record<string, ReasonCodeReading> = {
   INSUFFICIENT_VRP_HISTORY: {
     title: "VRP 样本不足",
     detail:
-      "VRP 还没有累计到最少 1000 个有效读数。公开页保留不可用状态，不展示头条数字。",
+      "VRP 还没有累计到报告声明的最少有效读数。页面保留不可用状态，不展示头条数字。",
     remedy: DVOL_HISTORY_REMEDY,
   },
   PUBLISHED_EDITION_STALE: {
@@ -172,14 +174,137 @@ export const REASON_CODE_READINGS: Record<string, ReasonCodeReading> = {
     title: "买卖价差过宽",
     detail: "以中价衡量的价差比例超过阈值，可成交性存疑。",
   },
+  EVENTS_MISSING: {
+    title: "交易所事件源缺失",
+    detail:
+      "报告没有拿到 Deribit public/status 的交易所锁定状态；缺失不会被解释成 0，事件门保持阻断。",
+  },
+  EVENTS_FEED_STALE: {
+    title: "交易所事件源已过期",
+    detail:
+      "Deribit public/status 的观察时间超过新鲜度上限；旧的无锁定状态不能继续当作当前证据。",
+  },
+  EVENTS_FEED_MALFORMED: {
+    title: "交易所事件源格式异常",
+    detail:
+      "Deribit public/status 响应缺少锁定字段或集合，已按不可验证处理，不从异常数据推断状态。",
+  },
+  EVENT_SOURCE_UNAVAILABLE: {
+    title: "交易所事件证据不可用",
+    detail:
+      "事件来源、范围或新鲜度未同时通过验证；事件门保持阻断，且不会把缺失值显示为 0。",
+  },
+  EXCHANGE_LOCK_STATE_UNAVAILABLE: {
+    title: "交易所锁定状态不可用",
+    detail:
+      "事件源存在，但报告没有可验证的锁定分；在状态明确前按阻断处理。",
+  },
+  EXCHANGE_NO_ACTIVE_LOCKS: {
+    title: "交易所未报告锁定",
+    detail:
+      "当次 Deribit public/status 未报告交易所、币种或指数锁定。该源不包含宏观事件日历，不能据此宣称没有宏观事件。",
+  },
+  EXCHANGE_PARTIAL_LOCK: {
+    title: "交易所存在部分锁定",
+    detail:
+      "Deribit public/status 报告币种或指数锁定；事件分为 0.80，研究门按阻断处理。",
+  },
+  EXCHANGE_FULL_LOCK: {
+    title: "交易所处于全局锁定",
+    detail:
+      "Deribit public/status 报告全交易所锁定；事件分为 1.00，研究门按阻断处理。",
+  },
+  EVENT_SCORE_NOT_EXCHANGE_LOCK_STATE: {
+    title: "事件分无法解释为交易所锁定状态",
+    detail:
+      "事件分不是公开契约允许的 0、0.80 或 1.00；页面拒绝猜测其含义并保持阻断。",
+  },
 };
 
 export function readReasonCode(code: string): ReasonCodeReading {
   return (
     REASON_CODE_READINGS[code] ?? {
-      title: code,
+      title: "未收录的阻断原因",
       detail:
-        "这是一个尚未收录人话解释的机器码。它的含义以引擎输出为准。",
+        "这是一个尚未收录人话解释的机器码。机器码仍会原样展示，页面不会静默忽略或自行猜测。",
     }
   );
+}
+
+export interface ExchangeEventEvidenceReading {
+  blocked: boolean;
+  detail: string;
+  reasonCode: string;
+  scoreLabel: string;
+  sourceLabel: string;
+  state: ExchangeLockState;
+  stateLabel: string;
+}
+
+function finiteEventScore(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function resolveExchangeEventEvidence(
+  report: ResearchReport,
+): ExchangeEventEvidenceReading {
+  const explicit = report.event_status;
+  const feed = report.data_status?.feed_coverage?.feeds?.events;
+  const source =
+    explicit?.source ??
+    (feed?.source_endpoint === "public/status" ? "deribit_public_status" : null);
+  const sourceStatus = explicit?.source_status ?? feed?.status ?? null;
+  const scope = explicit?.scope ?? feed?.scope ?? null;
+  const freshnessStatus = explicit ? "fresh" : (feed?.freshness_status ?? null);
+  const sourceIsCurrent =
+    source === "deribit_public_status" &&
+    sourceStatus === "available" &&
+    scope === "exchange_native_only" &&
+    freshnessStatus === "fresh";
+  const rawScore =
+    explicit?.event_score ??
+    report.strategy_research?.analysis?.market?.event_score;
+  const eventScore = sourceIsCurrent ? finiteEventScore(rawScore) : null;
+  let state: ExchangeLockState = "unknown";
+  let reasonCode =
+    explicit?.reason_code ?? feed?.reason_code ?? "EVENT_SOURCE_UNAVAILABLE";
+
+  if (sourceIsCurrent && eventScore === 0) {
+    state = "normal";
+    reasonCode = "EXCHANGE_NO_ACTIVE_LOCKS";
+  } else if (sourceIsCurrent && eventScore === 0.8) {
+    state = "partial";
+    reasonCode = "EXCHANGE_PARTIAL_LOCK";
+  } else if (sourceIsCurrent && eventScore === 1) {
+    state = "full";
+    reasonCode = "EXCHANGE_FULL_LOCK";
+  } else if (sourceIsCurrent && eventScore === null) {
+    reasonCode = explicit?.reason_code ?? "EXCHANGE_LOCK_STATE_UNAVAILABLE";
+  } else if (sourceIsCurrent) {
+    reasonCode = "EVENT_SCORE_NOT_EXCHANGE_LOCK_STATE";
+  }
+
+  const reading = readReasonCode(reasonCode);
+  const stateLabels: Record<ExchangeLockState, string> = {
+    unknown: "未知（按阻断处理）",
+    normal: "正常（无交易所锁定）",
+    partial: "部分锁定（阻断）",
+    full: "全局锁定（阻断）",
+  };
+
+  return {
+    blocked: state !== "normal",
+    detail: reading.detail,
+    reasonCode,
+    scoreLabel:
+      state === "unknown" || eventScore === null
+        ? "不可用"
+        : eventScore.toFixed(2),
+    sourceLabel:
+      source === "deribit_public_status"
+        ? "Deribit public/status（仅交易所锁定状态，不含宏观事件日历）"
+        : "事件来源不可验证（宏观日历覆盖也不可验证）",
+    state,
+    stateLabel: stateLabels[state],
+  };
 }

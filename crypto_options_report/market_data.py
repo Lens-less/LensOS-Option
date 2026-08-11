@@ -229,6 +229,14 @@ def default_http_fixture_roots() -> list[Path]:
     ]
 
 
+def _validate_snapshot_fixture_rows(rows: Any) -> None:
+    if not isinstance(rows, list):
+        raise ValueError("snapshot fixture rows must be a list of JSON objects")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("snapshot fixture rows must be a list of JSON objects")
+
+
 def load_snapshot_fixture(
     path: str | Path,
     *,
@@ -248,6 +256,7 @@ def load_snapshot_fixture(
     payload.pop(_BOUND_TRUST_EVIDENCE_KEY, None)
     if "rows" not in payload:
         raise ValueError("snapshot fixture is missing rows")
+    _validate_snapshot_fixture_rows(payload["rows"])
     payload.setdefault("source", f"fixture:{fixture_path.name}")
     payload.setdefault("currency", "BTC")
     if "captured_at" not in payload:
@@ -263,6 +272,36 @@ def load_snapshot_fixture(
             snapshot_sha256=snapshot_payload_sha256(payload),
         )
     return payload
+
+
+def snapshot_exchange_lock_reason(snapshot: dict[str, Any]) -> str | None:
+    """Return the blocking exchange-lock reason for this snapshot's currency.
+
+    Quote-shape validation and exchange operability are separate contracts. A
+    locked snapshot can still contain syntactically valid quotes, but it must
+    not enter historical signal or persistence measurements as an ordinary
+    market observation.
+    """
+    feeds = snapshot.get("feeds")
+    events = feeds.get("events") if isinstance(feeds, dict) else None
+    if not isinstance(events, dict):
+        return None
+    if events.get("exchange_locked") is True:
+        return "EXCHANGE_FULL_LOCK"
+
+    currency = str(snapshot.get("currency") or "").strip().upper()
+    locked_currencies = events.get("locked_currencies")
+    if currency and isinstance(locked_currencies, list) and any(
+        str(item).strip().upper() == currency for item in locked_currencies
+    ):
+        return "EXCHANGE_PARTIAL_LOCK"
+
+    locked_indices = events.get("locked_indices")
+    if currency and isinstance(locked_indices, list) and any(
+        str(item).strip().upper().startswith(currency) for item in locked_indices
+    ):
+        return "EXCHANGE_PARTIAL_LOCK"
+    return None
 
 
 def snapshot_trust_state_path(snapshot_path: str | Path) -> Path:

@@ -50,7 +50,11 @@ from itertools import pairwise
 from typing import Any
 
 from .edge_score import find_atm_reference, normalize_premium_to_usd
-from .market_data import build_market_data_status, parse_timestamp_ms
+from .market_data import (
+    build_market_data_status,
+    parse_timestamp_ms,
+    snapshot_exchange_lock_reason,
+)
 from .pnl import (
     delivery_fee_inverse,
     delivery_fee_linear,
@@ -221,6 +225,13 @@ def build_signal_validation_report(
             )
             continue
 
+        exchange_lock_reason = snapshot_exchange_lock_reason(snapshot)
+        if exchange_lock_reason is not None:
+            excluded.append(
+                {"captured_at": captured_at, "reason_code": exchange_lock_reason}
+            )
+            continue
+
         data_status = build_market_data_status(snapshot, now_ms=evaluation_now_ms)
         if data_status.get("status") != "validated":
             excluded.append(
@@ -294,11 +305,7 @@ def build_signal_validation_report(
             "reason_codes": reason_codes,
             "sample": sample,
             "signals": {},
-            "summary": {
-                "signals_measured": 0,
-                "signals_with_detectable_ic": 0,
-                "best_signal": None,
-            },
+            "summary": _summary({}),
         }
 
     signals = {
@@ -369,6 +376,12 @@ def build_signal_preflight_report(
         except (ValueError, TypeError):
             excluded.append(
                 {"captured_at": captured_at, "reason_code": "UNPARSEABLE_CAPTURED_AT"}
+            )
+            continue
+        exchange_lock_reason = snapshot_exchange_lock_reason(snapshot)
+        if exchange_lock_reason is not None:
+            excluded.append(
+                {"captured_at": captured_at, "reason_code": exchange_lock_reason}
             )
             continue
         data_status = build_market_data_status(snapshot, now_ms=evaluation_now_ms)
@@ -566,11 +579,7 @@ def _blocked(
             "excluded_snapshots": list(excluded or []),
         },
         "signals": {},
-        "summary": {
-            "signals_measured": 0,
-            "signals_with_detectable_ic": 0,
-            "best_signal": None,
-        },
+        "summary": _summary({}),
     }
 
 

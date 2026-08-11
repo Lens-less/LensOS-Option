@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
+import {
+  isArtifactRecord,
+  matchesExpectedArtifactCapture,
+} from "../artifactCapture";
 import { money, ratio, signed } from "../candidate/format";
 import { ResidualHeatmap } from "../viz/ResidualHeatmap";
 import type { HeatmapRow } from "../viz/ResidualHeatmap";
@@ -29,6 +33,8 @@ interface SeriesInstrument {
 }
 
 interface SeriesArtifact {
+  captured_at?: string;
+  generated_at?: string;
   status?: string;
   detail?: string;
   reason_codes?: string[];
@@ -38,6 +44,12 @@ interface SeriesArtifact {
   instruments?: SeriesInstrument[];
   truncated_instruments?: number;
   cannot_tell?: string[];
+}
+
+interface LoadedSeriesArtifact {
+  artifact: SeriesArtifact;
+  expectedCapturedAt?: string;
+  url: string;
 }
 
 function num(value: unknown): number | null {
@@ -261,26 +273,53 @@ function InstrumentDetail({
   );
 }
 
-/** Loads the series artifact the engine serves. */
-export function useSeriesArtifact(url = "/research/series"): SeriesArtifact | null {
-  const [artifact, setArtifact] = useState<SeriesArtifact | null>(null);
+/** Loads one capture-bound artifact and never renders an older URL while refetching. */
+export function useSeriesArtifact(
+  url: string | null = "/research/series",
+  expectedCapturedAt?: string,
+): SeriesArtifact | null {
+  const [loaded, setLoaded] = useState<LoadedSeriesArtifact | null>(null);
   useEffect(() => {
+    if (!url) {
+      return;
+    }
     let cancelled = false;
-    void fetch(url)
+    void fetch(url, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    })
       .then((response) => (response.ok ? response.json() : null))
       .then((payload) => {
         if (!cancelled) {
-          setArtifact(payload ?? { status: "not_configured" });
+          const artifact =
+            isArtifactRecord(payload) &&
+            matchesExpectedArtifactCapture(payload, expectedCapturedAt)
+              ? (payload as SeriesArtifact)
+              : {
+                  status: "not_configured",
+                  detail: expectedCapturedAt
+                    ? "序列产物与当前公开版的数据截止时间不一致，已停止展示。"
+                    : undefined,
+                };
+          setLoaded({ artifact, expectedCapturedAt, url });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setArtifact({ status: "not_configured", detail: "本地引擎不可达。" });
+          setLoaded({
+            artifact: { status: "not_configured", detail: "本地引擎不可达。" },
+            expectedCapturedAt,
+            url,
+          });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [url]);
-  return artifact;
+  }, [expectedCapturedAt, url]);
+  return url &&
+    loaded?.url === url &&
+    loaded.expectedCapturedAt === expectedCapturedAt
+    ? loaded.artifact
+    : null;
 }

@@ -201,6 +201,8 @@ export function SidePanelApp({
 
       <div className="panel-chip-row">
         <span className="panel-chip panel-chip-readonly">READ-ONLY</span>
+        <span className="panel-chip panel-chip-readonly">RESEARCH_ONLY</span>
+        <span className="panel-chip panel-chip-readonly">NO_TRADE</span>
       </div>
 
       <SidePanelStatusSections
@@ -244,7 +246,8 @@ export function SidePanelApp({
 
       <footer className="panel-footer">
         <p>
-          READ-ONLY · RESEARCH_ONLY · 风险与退出为未校准研究模板，不构成交易建议。
+          READ-ONLY · RESEARCH_ONLY · NO_TRADE ·
+          风险与退出为未校准研究模板，不构成交易建议或下单授权。
         </p>
         <a
           className="panel-link-button"

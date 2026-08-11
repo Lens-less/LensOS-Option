@@ -753,7 +753,10 @@ class SignalValidationFailClosedTests(unittest.TestCase):
             "INSUFFICIENT_INDEPENDENT_EXPIRY_COHORTS", report["reason_codes"]
         )
         self.assertEqual(report["signals"], {})
-        self.assertIsNone(report["summary"]["best_signal"])
+        self.assertNotIn("best_signal", report["summary"])
+        self.assertIsNone(report["summary"]["best_exploratory_signal"])
+        self.assertEqual(report["summary"]["pre_registered_axis"], PRE_REGISTERED_AXIS)
+        self.assertIs(report["summary"]["promotion_eligible"], False)
 
     def test_excludes_snapshots_whose_market_data_does_not_validate(self) -> None:
         snapshots, history = _build_series(richness_reaches_quote=True)
@@ -773,6 +776,43 @@ class SignalValidationFailClosedTests(unittest.TestCase):
         self.assertEqual(
             report["sample"]["validated_snapshot_count"], len(snapshots) - 1
         )
+
+    def test_excludes_exchange_locked_snapshots_from_measurement_and_preflight(
+        self,
+    ) -> None:
+        snapshots, history = _build_series(richness_reaches_quote=True)
+        locked = {
+            **snapshots[0],
+            "feeds": {
+                **snapshots[0]["feeds"],
+                "events": {
+                    "exchange_locked": True,
+                    "locked_currencies": ["BTC"],
+                    "locked_indices": [],
+                },
+            },
+        }
+        series = [locked, *snapshots[1:]]
+
+        for builder in (build_signal_validation_report, build_signal_preflight_report):
+            with self.subTest(builder=builder.__name__):
+                report = builder(
+                    snapshots=series,
+                    underlying_history=history,
+                    generated_at="2026-12-01T00:00:00Z",
+                )
+                excluded = (
+                    report["sample"]["excluded_snapshots"]
+                    if "sample" in report
+                    else report["excluded_snapshots"]
+                )
+                self.assertIn(
+                    {
+                        "captured_at": locked["captured_at"],
+                        "reason_code": "EXCHANGE_FULL_LOCK",
+                    },
+                    excluded,
+                )
 
     def test_never_emits_a_trade_or_sizing_surface(self) -> None:
         snapshots, history = _build_series(richness_reaches_quote=True)

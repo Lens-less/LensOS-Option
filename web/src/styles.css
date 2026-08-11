@@ -2185,7 +2185,7 @@ p {
     min-width: 0;
   }
 
-  .text-link {
+  .masthead-actions .text-link {
     display: none;
   }
 
@@ -3924,12 +3924,12 @@ p {
   border: 0;
 }
 
-/* The Chrome side panel lives permanently at this width, and the masthead
-   used to clip its own source label and break READ-ONLY across two lines. */
-@media (max-width: 860px) {
+/* Compact layouts keep every evidence action available without letting the
+   source label or long reload button widen the page beyond the viewport. */
+@media (max-width: 899px) {
   .spine-masthead {
-    grid-template-columns: 1fr auto;
-    grid-template-areas: "brand actions" "views views";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "brand" "actions" "views";
     row-gap: 0;
     padding-top: 8px;
   }
@@ -3940,6 +3940,28 @@ p {
 
   .spine-actions {
     grid-area: actions;
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px;
+  }
+
+  .spine-actions .source-indicator {
+    max-width: none;
+    padding: 0;
+  }
+
+  .spine-actions .text-link {
+    display: inline-flex;
+    padding: 0 8px;
+    white-space: nowrap;
+  }
+
+  .spine-actions .refresh-button {
+    min-width: 0;
+    padding: 0 8px;
+    white-space: nowrap;
   }
 
   .spine-views {

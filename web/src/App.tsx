@@ -62,6 +62,10 @@ function LoadingState(): React.JSX.Element {
           <p className="section-kicker">research_report.v1</p>
           <h1>正在读取市场研究</h1>
           <p>正在核验 Deribit 快照、波动率曲面与候选研究；不会展示推断值。</p>
+          <div className="error-boundary">
+            <span>执行边界</span>
+            <strong>RESEARCH_ONLY · NO_TRADE</strong>
+          </div>
           <div className="loading-rule" aria-hidden="true" />
         </section>
       </main>

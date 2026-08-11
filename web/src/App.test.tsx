@@ -730,7 +730,8 @@ const insufficientVrpReport: ResearchReport = {
 describe("EvidenceConsole", () => {
   beforeEach(() => {
     window.history.pushState(window.history.state, "", "/");
-    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-02T09:00:00Z"));
   });
 
   afterEach(() => {
@@ -1184,6 +1185,9 @@ describe("EvidenceConsole", () => {
     render(<App loadReport={loadReport} />);
 
     expect(screen.getByRole("status")).toHaveTextContent("正在读取市场研究");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "RESEARCH_ONLY · NO_TRADE",
+    );
     expect(await screen.findByRole("alert")).toHaveTextContent("研究数据不可用");
     expect(screen.getByRole("alert")).toHaveTextContent(
       "RESEARCH_ONLY · NO_TRADE",

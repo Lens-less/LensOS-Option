@@ -33,6 +33,10 @@ function PublicLoadingState(): React.JSX.Element {
           <p className="section-kicker">public_research_report.v1</p>
           <h1>正在读取公开研究</h1>
           <p>正在校验公开报告、曲面证据、候选研究与信号验证；不会补齐内部控制层数据。</p>
+          <div className="error-boundary">
+            <span>运行边界</span>
+            <strong>RESEARCH_ONLY · NO_TRADE</strong>
+          </div>
           <div className="loading-rule" aria-hidden="true" />
         </section>
       </main>
@@ -77,8 +81,26 @@ export function PublicApp(): React.JSX.Element {
   const [state, setState] = useState<AppState>({ status: "loading" });
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [view, setView] = useState<PublicView>(() => readViewFromLocation());
-  const signalArtifact = useSignalArtifact("./research/signal");
-  const seriesArtifact = useSeriesArtifact("./research/series");
+  const loadedPublication = state.status === "ready" ? state.loaded : null;
+  const artifactCapturedAt =
+    loadedPublication?.report.publish_edition?.captured_at ?? undefined;
+  const artifactPublishedAt =
+    loadedPublication?.report.publish_edition?.published_at ?? undefined;
+  const artifactIdentity =
+    loadedPublication && artifactCapturedAt && artifactPublishedAt
+      ? `${artifactCapturedAt}|${artifactPublishedAt}|${loadedPublication.receivedAtMs}`
+      : null;
+  const artifactQuery = artifactIdentity
+    ? `?edition=${encodeURIComponent(artifactIdentity)}`
+    : "";
+  const signalArtifact = useSignalArtifact(
+    artifactIdentity ? `./research/signal${artifactQuery}` : null,
+    artifactCapturedAt,
+  );
+  const seriesArtifact = useSeriesArtifact(
+    artifactIdentity ? `./research/series${artifactQuery}` : null,
+    artifactCapturedAt,
+  );
   const requestSequence = useRef(0);
 
   useEffect(() => {
@@ -127,6 +149,27 @@ export function PublicApp(): React.JSX.Element {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (
+        document.visibilityState === "visible" &&
+        state.status === "ready" &&
+        !state.refreshing &&
+        selectPublicFreshness(
+          state.loaded.report,
+          state.loaded.receivedAtMs,
+          Date.now(),
+        ).phase !== "current"
+      ) {
+        void refresh();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [refresh, state]);
 
   if (state.status === "loading") {
     return <PublicLoadingState />;

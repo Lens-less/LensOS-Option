@@ -1493,6 +1493,7 @@ try {
             }
         }
     }
+    $analysisTimestamp = [string] $snapshotResult.details.captured_at
 
     $underlyingArgs = @($underlyingTool.prefix_args + @(
             '--currency', $Currency,
@@ -1537,6 +1538,9 @@ try {
             '--output', $seriesHistoryPath,
             '--compact'
         ))
+    if (-not [string]::IsNullOrWhiteSpace($analysisTimestamp)) {
+        $seriesArgs += @('--generated-at', $analysisTimestamp)
+    }
     Invoke-Stage -Name 'series_history' -Command (Format-ExternalCommand -Executable $snapshotTool.display -Arguments $seriesArgs) -Action {
         $response = Invoke-CheckedJsonCommand -Executable $snapshotTool.executable -Arguments $seriesArgs -Context 'series-history'
         return [ordered]@{
@@ -1557,7 +1561,6 @@ try {
             '--output', $signalPreflightPath,
             '--compact'
         ))
-    $analysisTimestamp = [string] $snapshotResult.details.captured_at
     if (-not [string]::IsNullOrWhiteSpace($analysisTimestamp)) {
         $signalArgs += @('--generated-at', $analysisTimestamp)
     }

@@ -72,11 +72,20 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
         working-directory: web
+      - name: Audit production npm dependencies against the official registry
+        run: npm audit --omit=dev --registry=https://registry.npmjs.org --audit-level=high
+        working-directory: web
       - run: npm run lint
         working-directory: web
       - run: npm test
         working-directory: web
       - run: npm run build
+        working-directory: web
+      - name: Build static public site
+        run: npm run build:public
+        working-directory: web
+      - name: Verify public bundle excludes private surfaces
+        run: npm run test:public-bundle
         working-directory: web
       - run: npm run build:extension
         working-directory: web

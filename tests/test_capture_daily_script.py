@@ -142,6 +142,16 @@ class CaptureDailyContractTests(unittest.TestCase):
             with self.subTest(stage=stage):
                 self.assertRegex(source, rf"-Name '{stage}'")
 
+        series_arguments = source[
+            source.index("$seriesArgs =") : source.index(
+                "Invoke-Stage -Name 'series_history'"
+            )
+        ]
+        self.assertIn(
+            "$seriesArgs += @('--generated-at', $analysisTimestamp)",
+            series_arguments,
+        )
+
     def test_capture_script_creates_required_directories_and_redacts_webhook(self) -> None:
         source = self.SCRIPT.read_text(encoding="utf-8")
 

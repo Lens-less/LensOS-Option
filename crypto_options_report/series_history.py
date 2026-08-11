@@ -32,7 +32,11 @@ import math
 from typing import Any
 
 from .edge_score import normalize_premium_to_usd
-from .market_data import build_market_data_status, parse_timestamp_ms
+from .market_data import (
+    build_market_data_status,
+    parse_timestamp_ms,
+    snapshot_exchange_lock_reason,
+)
 from .surface import build_vol_surface_and_candidate_research
 
 SERIES_HISTORY_SCHEMA_VERSION = "instrument_series_history.v1"
@@ -83,6 +87,13 @@ def build_series_history_report(
         except (ValueError, TypeError):
             excluded.append(
                 {"captured_at": captured_at, "reason_code": "UNPARSEABLE_CAPTURED_AT"}
+            )
+            continue
+
+        exchange_lock_reason = snapshot_exchange_lock_reason(snapshot)
+        if exchange_lock_reason is not None:
+            excluded.append(
+                {"captured_at": captured_at, "reason_code": exchange_lock_reason}
             )
             continue
 

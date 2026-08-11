@@ -10,6 +10,10 @@ import {
 } from "./reportModel";
 import type { Freshness } from "./reportModel";
 import {
+  readReasonCode,
+  resolveExchangeEventEvidence,
+} from "../shell/reasonCodes";
+import {
   formatDecimal,
   formatExpiry,
   formatPercent,
@@ -181,6 +185,54 @@ function formatPublishedLimitHours(maxAgeSec: number | null | undefined): string
   })} 小时`;
 }
 
+function ExchangeEventEvidence({
+  report,
+  stale,
+}: {
+  report: ResearchReport;
+  stale: boolean;
+}): React.JSX.Element {
+  const reading = resolveExchangeEventEvidence(report);
+  const staleReading = readReasonCode("PUBLISHED_EDITION_STALE");
+  const reasonCode = stale ? "PUBLISHED_EDITION_STALE" : reading.reasonCode;
+
+  return (
+    <section
+      aria-label="事件源与交易所锁定"
+      className="entry-contract"
+      role="region"
+    >
+      <header className="workflow-subheading compact">
+        <div>
+          <span>Event evidence / 事件证据</span>
+          <h3>事件源与交易所锁定</h3>
+        </div>
+        <strong data-status={stale || reading.blocked ? "block" : "pass"}>
+          {stale ? "已过期（按阻断处理）" : reading.stateLabel}
+        </strong>
+      </header>
+      <div className="condition-grid">
+        <article data-status={stale || reading.blocked ? "block" : "pass"}>
+          <div>
+            <span>事件分</span>
+            <strong>{stale ? "已收起" : reading.scoreLabel}</strong>
+          </div>
+          <p>{reading.sourceLabel}</p>
+          <small>只覆盖交易所原生锁定状态，不替代宏观事件日历。</small>
+        </article>
+        <article data-status={stale || reading.blocked ? "block" : "pass"}>
+          <div>
+            <span>判定原因</span>
+            <code>{reasonCode}</code>
+          </div>
+          <p>{stale ? staleReading.detail : reading.detail}</p>
+          <small>缺失、异常或非契约分值一律按阻断处理。</small>
+        </article>
+      </div>
+    </section>
+  );
+}
+
 export function StrategyFrameworkSection({
   report,
   freshness,
@@ -298,6 +350,11 @@ export function StrategyFrameworkSection({
           </li>
         ))}
       </ol>
+
+      <ExchangeEventEvidence
+        report={report}
+        stale={displayState === "stale"}
+      />
 
       {displayState === "stale" ? (
         <div className="strategy-empty published-stop-state" role="status">

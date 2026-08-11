@@ -8,6 +8,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
+from math import isfinite
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape as xml_escape
@@ -36,7 +37,6 @@ PUBLICATION_STATUS_SCHEMA = "public_status.v1"
 PUBLICATION_THERMO_SCHEMA = "public_thermo.v1"
 PUBLISH_CADENCE = "daily"
 PUBLISH_INTERVAL = timedelta(days=1)
-MIN_VALIDATED_VRP_SAMPLE_COUNT = 1000
 RECENT_THERMO_WINDOW_DAYS = 90
 PUBLIC_SITE_TITLE = "\u0042\u0054\u0043\u0020\u671f\u6743\u5356\u65b9\u6ea2\u4ef7\u6301\u7eed\u89c2\u5bdf\u53f0"
 PUBLIC_SITE_DESCRIPTION = (
@@ -836,6 +836,160 @@ def _project_series_artifact(value: dict[str, Any]) -> dict[str, Any]:
     return projected
 
 
+def _artifact_date(value: Any, *, field: str) -> date:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"publication blocked: {field} must be an ISO date")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"publication blocked: {field} must be an ISO date"
+        ) from exc
+
+
+def _has_artifact_value(value: Any) -> bool:
+    return value is not None and value != ""
+
+
+def _require_artifact_timestamp_at_or_before(
+    value: Any,
+    *,
+    captured_dt: datetime,
+    description: str,
+    field: str,
+) -> None:
+    observed_dt = _parse_timestamp(value, field=f"{description}.{field}")
+    if observed_dt > captured_dt:
+        raise ValueError(
+            f"publication blocked: {description}.{field} is after the snapshot cutoff"
+        )
+
+
+def _require_artifact_date_at_or_before(
+    value: Any,
+    *,
+    captured_dt: datetime,
+    description: str,
+    field: str,
+) -> None:
+    if _artifact_date(value, field=f"{description}.{field}") > captured_dt.date():
+        raise ValueError(
+            f"publication blocked: {description}.{field} is after the snapshot cutoff"
+        )
+
+
+def _validate_artifact_capture_alignment(
+    payload: dict[str, Any],
+    *,
+    captured_dt: datetime,
+    description: str,
+) -> None:
+    clock_fields = [
+        field
+        for field in ("captured_at", "generated_at")
+        if _has_artifact_value(payload.get(field))
+    ]
+    if not clock_fields:
+        raise ValueError(
+            f"publication blocked: {description} must declare captured_at or generated_at"
+        )
+    for field in clock_fields:
+        artifact_dt = _parse_timestamp(
+            payload[field],
+            field=f"{description}.{field}",
+        )
+        if artifact_dt != captured_dt:
+            raise ValueError(
+                f"publication blocked: {description}.{field} must equal snapshot.captured_at"
+            )
+
+    if description == "signal artifact":
+        excluded = list(payload.get("excluded_snapshots") or [])
+        sample = payload.get("sample")
+        if isinstance(sample, dict):
+            excluded.extend(sample.get("excluded_snapshots") or [])
+        for index, item in enumerate(excluded):
+            row = dict(item or {})
+            if _has_artifact_value(row.get("captured_at")):
+                _require_artifact_timestamp_at_or_before(
+                    row["captured_at"],
+                    captured_dt=captured_dt,
+                    description=description,
+                    field=f"excluded_snapshots[{index}].captured_at",
+                )
+        for index, item in enumerate(payload.get("cohorts") or []):
+            row = dict(item or {})
+            for field in ("first_capture_date", "last_capture_date"):
+                if _has_artifact_value(row.get(field)):
+                    _require_artifact_date_at_or_before(
+                        row[field],
+                        captured_dt=captured_dt,
+                        description=description,
+                        field=f"cohorts[{index}].{field}",
+                    )
+        for signal_name, measurement in (payload.get("signals") or {}).items():
+            row = dict(measurement or {})
+            for index, per_date in enumerate(row.get("per_date") or []):
+                per_date_row = dict(per_date or {})
+                if _has_artifact_value(per_date_row.get("snapshot_date")):
+                    _require_artifact_date_at_or_before(
+                        per_date_row["snapshot_date"],
+                        captured_dt=captured_dt,
+                        description=description,
+                        field=(
+                            f"signals.{signal_name}.per_date[{index}].snapshot_date"
+                        ),
+                    )
+        return
+
+    for index, value in enumerate(payload.get("capture_dates") or []):
+        _require_artifact_date_at_or_before(
+            value,
+            captured_dt=captured_dt,
+            description=description,
+            field=f"capture_dates[{index}]",
+        )
+    for index, item in enumerate(payload.get("excluded_captures") or []):
+        row = dict(item or {})
+        if _has_artifact_value(row.get("captured_at")):
+            _require_artifact_timestamp_at_or_before(
+                row["captured_at"],
+                captured_dt=captured_dt,
+                description=description,
+                field=f"excluded_captures[{index}].captured_at",
+            )
+    for instrument_index, item in enumerate(payload.get("instruments") or []):
+        row = dict(item or {})
+        latest = dict(row.get("latest") or {})
+        if _has_artifact_value(latest.get("date")):
+            _require_artifact_date_at_or_before(
+                latest["date"],
+                captured_dt=captured_dt,
+                description=description,
+                field=f"instruments[{instrument_index}].latest.date",
+            )
+        for point_index, point in enumerate(row.get("points") or []):
+            point_row = dict(point or {})
+            if _has_artifact_value(point_row.get("date")):
+                _require_artifact_date_at_or_before(
+                    point_row["date"],
+                    captured_dt=captured_dt,
+                    description=description,
+                    field=(
+                        f"instruments[{instrument_index}].points[{point_index}].date"
+                    ),
+                )
+    for index, item in enumerate(payload.get("points") or []):
+        row = dict(item or {})
+        if _has_artifact_value(row.get("observed_at")):
+            _require_artifact_timestamp_at_or_before(
+                row["observed_at"],
+                captured_dt=captured_dt,
+                description=description,
+                field=f"points[{index}].observed_at",
+            )
+
+
 def _build_change_payload(vrp_status: dict[str, Any]) -> dict[str, Any]:
     series = list(vrp_status.get("series") or [])
     if len(series) < 2:
@@ -1101,13 +1255,23 @@ def publish_site(
     )
     _validate_publication_payload(signal_payload, description="signal artifact")
     _validate_publication_payload(series_payload, description="series artifact")
-    public_signal_artifact = _project_signal_artifact(signal_payload)
-    public_series_artifact = _project_series_artifact(series_payload)
     git_sha_value = _validate_git_sha(git_sha)
     git_provenance = _build_git_provenance(git_sha_value)
 
     captured_at = str(snapshot_payload.get("captured_at") or "")
     captured_dt = _parse_timestamp(captured_at, field="snapshot.captured_at")
+    _validate_artifact_capture_alignment(
+        signal_payload,
+        captured_dt=captured_dt,
+        description="signal artifact",
+    )
+    _validate_artifact_capture_alignment(
+        series_payload,
+        captured_dt=captured_dt,
+        description="series artifact",
+    )
+    public_signal_artifact = _project_signal_artifact(signal_payload)
+    public_series_artifact = _project_series_artifact(series_payload)
     underlying_payload = _trim_history_to_capture_clock(
         underlying_payload,
         captured_dt=captured_dt,
@@ -1146,7 +1310,12 @@ def publish_site(
 
     raw_vrp = build_vrp_status(dvol_payload, underlying_payload, _timestamp(captured_dt))
     vrp_sample_count = int(raw_vrp.get("series_sample_count") or 0)
-    if raw_vrp.get("status") != "validated" or vrp_sample_count < MIN_VALIDATED_VRP_SAMPLE_COUNT:
+    vrp_minimum_sample_count = int(raw_vrp.get("minimum_series_sample_count") or 0)
+    if (
+        raw_vrp.get("status") != "validated"
+        or vrp_minimum_sample_count <= 0
+        or vrp_sample_count < vrp_minimum_sample_count
+    ):
         raise ValueError(
             "publication blocked: VRP status is "
             f"{raw_vrp.get('status') or 'unavailable'}"
@@ -1368,6 +1537,7 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
         "effective_mode": report.get("effective_mode"),
         "risk_state": report.get("risk_state"),
         "reason_codes": list(report.get("reason_codes") or []),
+        "event_status": _project_exchange_event_status(report),
         "runtime_context": _project_runtime_context(report.get("runtime_context")),
         "publish_edition": _project_publish_edition(report.get("publish_edition")),
         "vrp_status": _project_public_vrp_status(report.get("vrp_status")),
@@ -1394,6 +1564,86 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
         "full_system_surface": _project_full_system_surface(
             report.get("full_system_surface")
         ),
+    }
+
+
+def _project_exchange_event_status(report: dict[str, Any]) -> dict[str, Any]:
+    data_status = dict(report.get("data_status") or {})
+    feed_coverage = dict(data_status.get("feed_coverage") or {})
+    feeds = dict(feed_coverage.get("feeds") or {})
+    events = dict(feeds.get("events") or {})
+    market = dict(
+        ((report.get("strategy_research") or {}).get("analysis") or {}).get("market")
+        or {}
+    )
+    source_endpoint = events.get("source_endpoint")
+    source = (
+        "deribit_public_status" if source_endpoint == "public/status" else None
+    )
+    source_status_value = events.get("status")
+    source_status = source_status_value if isinstance(source_status_value, str) else None
+    freshness_status_value = events.get("freshness_status")
+    freshness_status = (
+        freshness_status_value if isinstance(freshness_status_value, str) else None
+    )
+    scope_value = events.get("scope")
+    scope = scope_value if isinstance(scope_value, str) else None
+    source_is_current = (
+        source is not None
+        and source_status == "available"
+        and freshness_status == "fresh"
+        and scope == "exchange_native_only"
+    )
+    raw_score = market.get("event_score")
+    event_score = (
+        float(raw_score)
+        if source_is_current
+        and isinstance(raw_score, (int, float))
+        and not isinstance(raw_score, bool)
+        and isfinite(float(raw_score))
+        else None
+    )
+
+    if not source_is_current:
+        reason_code_value = events.get("reason_code")
+        reason_code = (
+            reason_code_value
+            if isinstance(reason_code_value, str) and reason_code_value
+            else None
+        )
+        if not reason_code:
+            if source_status == "missing":
+                reason_code = "EVENTS_MISSING"
+            elif freshness_status == "stale":
+                reason_code = "EVENTS_FEED_STALE"
+            else:
+                reason_code = "EVENT_SOURCE_UNAVAILABLE"
+        exchange_lock_state = "unknown"
+        event_score = None
+    elif event_score is None:
+        exchange_lock_state = "unknown"
+        reason_code = "EXCHANGE_LOCK_STATE_UNAVAILABLE"
+    elif event_score == 0.0:
+        exchange_lock_state = "normal"
+        reason_code = "EXCHANGE_NO_ACTIVE_LOCKS"
+    elif event_score == 0.8:
+        exchange_lock_state = "partial"
+        reason_code = "EXCHANGE_PARTIAL_LOCK"
+    elif event_score == 1.0:
+        exchange_lock_state = "full"
+        reason_code = "EXCHANGE_FULL_LOCK"
+    else:
+        exchange_lock_state = "unknown"
+        reason_code = "EVENT_SCORE_NOT_EXCHANGE_LOCK_STATE"
+
+    return {
+        "source": source,
+        "source_status": source_status,
+        "scope": scope,
+        "macro_calendar_covered": False,
+        "event_score": event_score,
+        "exchange_lock_state": exchange_lock_state,
+        "reason_code": reason_code,
     }
 
 
@@ -2295,7 +2545,8 @@ def _build_manifest(
             "history_alignment": (
                 "Underlying and DVOL observations are trimmed to the snapshot "
                 "captured_at clock before 08:00Z settlement-aligned evaluation "
-                "and hashing."
+                "and hashing. Signal and series artifact clocks must equal that "
+                "snapshot clock, and their observed capture fields may not exceed it."
             ),
         },
     }
@@ -2561,6 +2812,29 @@ def _trim_history_to_capture_clock(
     trimmed_payload["observation_count"] = len(trimmed)
     trimmed_payload["first_observed_at"] = trimmed[0].get("observed_at")
     trimmed_payload["last_observed_at"] = trimmed[-1].get("observed_at")
+    payload_captured_at = trimmed_payload.get("captured_at")
+    if isinstance(payload_captured_at, str) and payload_captured_at:
+        payload_captured_dt = _parse_timestamp(
+            payload_captured_at,
+            field=f"{label} captured_at",
+        )
+        if payload_captured_dt > captured_dt:
+            trimmed_payload["captured_at"] = _timestamp(captured_dt)
+            requested_days = trimmed_payload.get("requested_days")
+            if isinstance(requested_days, int) and not isinstance(requested_days, bool):
+                first_date = date.fromisoformat(str(trimmed[0]["observed_at"])[:10])
+                capture_date = captured_dt.date()
+                available_day_span = max(0, (capture_date - first_date).days)
+                if trimmed_payload.get("schema_version") == "dvol_history.v1":
+                    trimmed_payload["requested_days"] = max(
+                        1,
+                        min(requested_days, available_day_span),
+                    )
+                elif trimmed_payload.get("schema_version") == "underlying_price_history.v1":
+                    trimmed_payload["requested_days"] = max(
+                        1,
+                        min(requested_days, available_day_span + 1),
+                    )
     coverage = dict(trimmed_payload.get("coverage") or {})
     if coverage:
         observed_dates = {
@@ -2662,6 +2936,18 @@ def _rewrite_index_html(
         count=1,
         flags=re.S,
     )
+    document_meta = ""
+    if not re.search(r'<meta\s+name="description"\b', rewritten):
+        document_meta += f'    <meta name="description" content="{description}">\n'
+    if not re.search(r'<link\s+rel="canonical"\b', rewritten):
+        document_meta += f'    <link rel="canonical" href="{page_url}">\n'
+    if not re.search(r'<meta\s+name="robots"\b', rewritten):
+        document_meta += (
+            '    <meta name="robots" '
+            'content="index,follow,max-image-preview:large">\n'
+        )
+    if document_meta:
+        rewritten = rewritten.replace("</head>", f"{document_meta}</head>", 1)
     meta_block = (
         f'    <meta property="og:title" content="{title}">\n'
         f'    <meta property="og:description" content="{description}">\n'
@@ -2683,6 +2969,12 @@ def _rewrite_index_html(
         rewritten = rewritten.replace("</head>", f"{meta_block}</head>", 1)
     rewritten = re.sub(
         r'(<meta\s+property="og:url"\s+content=")(.*?)(">)',
+        rf"\g<1>{page_url}\g<3>",
+        rewritten,
+        count=1,
+    )
+    rewritten = re.sub(
+        r'(<link\s+rel="canonical"\s+href=")(.*?)(".*?>)',
         rf"\g<1>{page_url}\g<3>",
         rewritten,
         count=1,

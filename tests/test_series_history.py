@@ -149,6 +149,34 @@ class OrderingTests(unittest.TestCase):
 
 
 class FailClosedTests(unittest.TestCase):
+    def test_exchange_locked_capture_is_excluded_from_the_series(self) -> None:
+        snapshots, _ = _build_series(richness_reaches_quote=True)
+        locked = {
+            **snapshots[0],
+            "feeds": {
+                **snapshots[0]["feeds"],
+                "events": {
+                    "exchange_locked": True,
+                    "locked_currencies": ["BTC"],
+                    "locked_indices": [],
+                },
+            },
+        }
+
+        report = build_series_history_report(
+            snapshots=[locked, *snapshots[1:]],
+            generated_at="2026-07-27T00:00:00Z",
+        )
+
+        self.assertIn(
+            {
+                "captured_at": locked["captured_at"],
+                "reason_code": "EXCHANGE_FULL_LOCK",
+            },
+            report["excluded_captures"],
+        )
+        self.assertNotIn(locked["captured_at"][:10], report["capture_dates"])
+
     def test_a_single_capture_cannot_make_a_series(self) -> None:
         snapshots, _ = _build_series(richness_reaches_quote=True)
 

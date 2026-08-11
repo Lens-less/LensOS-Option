@@ -1,5 +1,5 @@
 export const APP_INDEX_HREF = "./index.html";
-export const RAW_REPORT_HREF = "../research/report";
+export const RAW_REPORT_HREF = "./research/report";
 export const STATUS_PAGE_HREF = "./status.html";
 
 export const FOOTER_LINKS = [

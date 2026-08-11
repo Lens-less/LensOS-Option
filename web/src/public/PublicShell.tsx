@@ -1,11 +1,8 @@
 import { useEffect, useState } from "react";
 
+import { SiteFooter } from "../components/shell/SiteFooter";
 import type { ResearchReport } from "../contracts";
-import {
-  APP_INDEX_HREF,
-  FOOTER_LINKS,
-  RAW_REPORT_HREF,
-} from "../publicPaths";
+import { APP_INDEX_HREF, RAW_REPORT_HREF } from "../publicPaths";
 import {
   formatCutoffTime,
   formatDurationHours,
@@ -172,7 +169,7 @@ export function PublicShell({
         <nav aria-label="五幕叙事" className="spine-views">
           {FIVE_ACT_LINKS.map((item) => (
             <a
-              aria-current={activeNarrative === item.id ? "page" : undefined}
+              aria-current={activeNarrative === item.id ? "location" : undefined}
               href={item.href}
               key={item.id}
             >
@@ -252,20 +249,14 @@ export function PublicShell({
         children
       )}
 
-      <footer className="page-footer">
-        <div className="page-footer-copy">
-          <span>LensOS Option · research only</span>
-          <p>公开站仅供研究与信息用途。页面不连接下单、自动动作或内部控制层。</p>
-        </div>
-        <nav aria-label="页脚链接" className="page-footer-links">
-          <a href={`${APP_INDEX_HREF}?view=series`}>历史残差验证</a>
-          {FOOTER_LINKS.map((link) => (
-            <a href={link.href} key={link.href}>
-              {link.label}
-            </a>
-          ))}
-        </nav>
-      </footer>
+      <SiteFooter
+        leadingLinks={[
+          {
+            href: `${APP_INDEX_HREF}?view=series`,
+            label: "历史残差验证",
+          },
+        ]}
+      />
     </div>
   );
 }

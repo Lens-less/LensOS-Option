@@ -1,9 +1,34 @@
+export interface EventFeedCoverage {
+  freshness_status?: string | null;
+  reason_code?: string | null;
+  scope?: string | null;
+  source_endpoint?: string | null;
+  status?: string | null;
+}
+
+export type ExchangeLockState = "unknown" | "normal" | "partial" | "full";
+
+export interface ExchangeEventStatus {
+  source?: "deribit_public_status" | string | null;
+  source_status?: string | null;
+  scope?: string | null;
+  macro_calendar_covered?: boolean;
+  event_score?: number | null;
+  exchange_lock_state?: ExchangeLockState;
+  reason_code?: string | null;
+}
+
 export interface EvidenceDataStatus {
   status?: string;
   source?: string;
   validated?: boolean;
   reason_code?: string | null;
   market_data_age_sec?: number | null;
+  feed_coverage?: {
+    feeds?: {
+      events?: EventFeedCoverage | null;
+    };
+  };
   collection_scope?: {
     selected_instrument_count?: number;
     upstream_instrument_count?: number;
@@ -349,6 +374,9 @@ export interface ReleaseGate {
   status?: string;
   satisfied?: boolean;
   evidence_class?: string | null;
+  evidence_state?: string | null;
+  configurable?: boolean;
+  execution_allowed?: boolean;
   reason_code?: string | null;
   reason_codes?: string[];
 }
@@ -531,6 +559,7 @@ export interface VrpStatus {
 export interface ResearchReport {
   schema_version: "research_report.v1";
   runtime_context?: RuntimeContext;
+  event_status?: ExchangeEventStatus;
   publish_edition?: PublishEdition;
   vrp_status?: VrpStatus;
   /**

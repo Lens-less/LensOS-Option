@@ -24,6 +24,7 @@ from crypto_options_report.historical import (
 )
 from crypto_options_report.market_data import (
     build_market_data_status,
+    load_snapshot_fixture,
     normalize_market_snapshot,
     parse_timestamp_ms,
     validate_deribit_base_url,
@@ -319,6 +320,56 @@ class DataQualityRemediationTests(unittest.TestCase):
 
         self.assertTrue(options["live_deribit"])
         self.assertEqual(HTTP_MAX_INSTRUMENT_LIMIT, options["instrument_limit"])
+
+    def test_snapshot_fixture_startup_preflight_rejects_non_object_rows(self):
+        invalid_rows_cases = (
+            {"oops": "not a list"},
+            "not-a-list",
+            ["not-an-object"],
+            [{"instrument_name": "BTC-25JUL26-90000-C"}, []],
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_path = Path(temp_dir) / "snapshot.json"
+            for rows in invalid_rows_cases:
+                with self.subTest(rows=rows):
+                    fixture_path.write_text(
+                        json.dumps(
+                            {
+                                "captured_at": "2026-07-07T00:01:30Z",
+                                "rows": rows,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "rows must be a list of JSON objects",
+                    ):
+                        RuntimeConfig(
+                            profile="production",
+                            snapshot_fixture=str(fixture_path),
+                        ).validate()
+
+    def test_snapshot_fixture_loader_preserves_empty_rows_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_path = Path(temp_dir) / "empty-snapshot.json"
+            fixture_path.write_text(
+                json.dumps(
+                    {
+                        "captured_at": "2026-07-07T00:01:30Z",
+                        "rows": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            snapshot = load_snapshot_fixture(fixture_path)
+
+        self.assertEqual([], snapshot["rows"])
+        self.assertEqual("fixture:empty-snapshot.json", snapshot["source"])
+        self.assertEqual("BTC", snapshot["currency"])
 
     def _base_snapshot(self):
         return json.loads((FIXTURES / "deribit_btc_option_chain_snapshot.json").read_text())

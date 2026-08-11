@@ -391,19 +391,19 @@ class BuildVrpStatusTests(unittest.TestCase):
 
     def test_percentile_boundaries_map_to_registered_bands(self):
         cases = [
-            ([1, 2, 3, 4, 5, 6, 7, 8, 10, 9], 0.9, "extremely_expensive"),
-            ([1, 2, 3, 4, 5, 6, 8, 9, 10, 7], 0.7, "expensive"),
-            ([1, 2, 4, 5, 6, 7, 8, 9, 10, 3], 0.3, "thin"),
-            ([2, 3, 4, 5, 6, 7, 8, 9, 10, 1], 0.1, "extremely_thin"),
+            ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 9], 0.9, "extremely_expensive"),
+            ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 7], 0.7, "expensive"),
+            ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 3], 0.3, "thin"),
+            ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1], 0.1, "extremely_thin"),
         ]
 
         for values, percentile, band in cases:
             with self.subTest(percentile=percentile):
                 report = build_vrp_status(
                     dvol_history=_dvol_history([50.0] * 30 + values),
-                    underlying_history=_underlying_history([100.0] * 40),
-                    generated_at="2024-03-11T08:00:00Z",
-                    window_days=10,
+                    underlying_history=_underlying_history([100.0] * 41),
+                    generated_at="2024-03-12T08:00:00Z",
+                    window_days=11,
                     minimum_series_sample_count=1,
                 )
 
@@ -558,6 +558,27 @@ class BuildVrpStatusTests(unittest.TestCase):
 
     def test_percentiles_stay_null_until_minimum_window_sample_count(self):
         report = build_vrp_status(
+            dvol_history=_dvol_history([40.0 + float(index) for index in range(131)]),
+            underlying_history=_underlying_history([100.0] * 131),
+            generated_at="2024-06-10T08:00:00Z",
+            window_days=130,
+            minimum_series_sample_count=100,
+        )
+
+        self.assertEqual("validated", report["status"])
+        self.assertEqual(101, len(report["time_series"]))
+        self.assertTrue(
+            all(
+                point["percentile"] is None and point["band"] is None
+                for point in report["time_series"][:100]
+            )
+        )
+        self.assertEqual(100, report["time_series"][-1]["percentile_sample_count"])
+        self.assertIsNotNone(report["time_series"][-1]["percentile"])
+        self.assertIsNotNone(report["time_series"][-1]["band"])
+
+    def test_exactly_minimum_raw_points_cannot_publish_without_prior_comparisons(self):
+        report = build_vrp_status(
             dvol_history=_dvol_history([40.0 + float(index) for index in range(130)]),
             underlying_history=_underlying_history([100.0] * 130),
             generated_at="2024-06-09T08:00:00Z",
@@ -565,17 +586,27 @@ class BuildVrpStatusTests(unittest.TestCase):
             minimum_series_sample_count=100,
         )
 
-        self.assertEqual("validated", report["status"])
-        self.assertEqual(100, len(report["time_series"]))
-        self.assertTrue(
-            all(
-                point["percentile"] is None and point["band"] is None
-                for point in report["time_series"][:99]
-            )
+        self.assertEqual("insufficient_history", report["status"])
+        self.assertEqual(["INSUFFICIENT_VRP_HISTORY"], report["reason_codes"])
+        self.assertIsNone(report["current"]["vrp_percent_points"])
+        self.assertEqual(99, report["time_series"][-1]["percentile_sample_count"])
+        self.assertIsNone(report["time_series"][-1]["percentile"])
+
+    def test_percentile_compares_current_value_to_prior_points_only(self):
+        report = build_vrp_status(
+            dvol_history=_dvol_history([50.0] * 30 + [60.0, 40.0]),
+            underlying_history=_underlying_history([100.0] * 32),
+            generated_at="2024-03-03T08:00:00Z",
+            window_days=2,
+            minimum_series_sample_count=1,
         )
-        self.assertEqual(100, report["time_series"][-1]["percentile_sample_count"])
-        self.assertIsNotNone(report["time_series"][-1]["percentile"])
-        self.assertIsNotNone(report["time_series"][-1]["band"])
+
+        self.assertEqual("validated", report["status"])
+        self.assertIsNone(report["time_series"][0]["percentile"])
+        self.assertEqual(0, report["time_series"][0]["percentile_sample_count"])
+        self.assertEqual(0.0, report["current"]["percentile"])
+        self.assertEqual(1, report["current"]["percentile_sample_count"])
+        self.assertEqual("extremely_thin", report["current"]["band"])
 
     def test_current_rv30_uses_365_day_sample_vol_and_percent_units(self):
         closes = [
@@ -612,22 +643,22 @@ class BuildVrpStatusTests(unittest.TestCase):
             119.4,
         ]
         report = build_vrp_status(
-            dvol_history=_dvol_history([60.0] * len(closes)),
-            underlying_history=_underlying_history(closes),
-            generated_at="2024-03-02T08:00:00Z",
-            window_days=1,
+            dvol_history=_dvol_history([60.0] * (len(closes) + 1)),
+            underlying_history=_underlying_history([closes[0]] + closes),
+            generated_at="2024-03-03T08:00:00Z",
+            window_days=2,
             minimum_series_sample_count=1,
         )
 
         self.assertEqual("validated", report["status"])
         self.assertAlmostEqual(19.981882, report["current"]["rv30_percent_points"], places=6)
         self.assertAlmostEqual(40.018118, report["current"]["vrp_percent_points"], places=6)
-        self.assertEqual("2024-03-02T00:00:00Z", report["current"]["dvol_observed_at"])
+        self.assertEqual("2024-03-03T00:00:00Z", report["current"]["dvol_observed_at"])
         self.assertEqual(
-            "2024-03-02T08:00:00Z",
+            "2024-03-03T08:00:00Z",
             report["current"]["underlying_observed_at"],
         )
-        self.assertEqual("2024-03-02T08:00:00Z", report["current"]["evaluation_at"])
+        self.assertEqual("2024-03-03T08:00:00Z", report["current"]["evaluation_at"])
 
     def test_large_series_keeps_full_three_year_window_sample_count(self):
         dvol_values = [40.0 + float(index % 20) for index in range(1130)]
@@ -639,7 +670,7 @@ class BuildVrpStatusTests(unittest.TestCase):
 
         self.assertEqual("validated", report["status"])
         self.assertGreaterEqual(len(report["time_series"]), 1000)
-        self.assertEqual(1095, report["current"]["percentile_sample_count"])
+        self.assertEqual(1094, report["current"]["percentile_sample_count"])
         self.assertEqual(30, report["current"]["rv_sample_count"])
         self.assertEqual(1000, report["minimum_series_sample_count"])
 

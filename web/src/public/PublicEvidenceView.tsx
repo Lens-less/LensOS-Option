@@ -23,6 +23,10 @@ import {
   type PublicFreshness,
 } from "./publicModel";
 import type { PublicReleaseSummary } from "./loadPublicReport";
+import {
+  readPublicReasonCode,
+  resolvePublicExchangeEventEvidence,
+} from "./publicReasonCodes";
 
 const FRESHNESS_LABELS = {
   current: "当前",
@@ -30,20 +34,6 @@ const FRESHNESS_LABELS = {
   expired: "已失效",
   unavailable: "不可用",
 } as const;
-
-const PUBLIC_REASON_COPY: Record<
-  string,
-  { detail: string; title: string }
-> = {
-  INSUFFICIENT_VRP_HISTORY: {
-    detail: "VRP 历史样本还不足 1000 个有效读数，头条数字保持隐藏，只展示补齐进度。",
-    title: "VRP 样本不足",
-  },
-  MISSING_DVOL_HISTORY: {
-    detail: "缺少可复算的 DVOL 历史，页面不会把空值显示成 0，也不会推断缺失指标。",
-    title: "缺少 DVOL 历史",
-  },
-};
 
 function formatPoints(value: number | null): string {
   return value === null ? "不可用" : `${value.toFixed(1)} pt`;
@@ -139,21 +129,32 @@ function isValidatedVrpStatus(status: string | undefined): boolean {
   return status === "validated" || status === "available";
 }
 
-function PublicReasonNotice({ code }: { code: string }): React.JSX.Element | null {
-  const reading = PUBLIC_REASON_COPY[code];
-  if (!reading) {
+function PublicReasonNotice({
+  codes,
+  detailOverrides = {},
+}: {
+  codes: string[];
+  detailOverrides?: Record<string, string>;
+}): React.JSX.Element | null {
+  const uniqueCodes = [...new Set(codes.filter(Boolean))];
+  if (uniqueCodes.length === 0) {
     return null;
   }
   return (
-    <section className="reason-notice" aria-label="阻断原因">
+    <section className="reason-notice" aria-label="原因代码说明">
       <ul>
-        <li>
-          <div className="reason-notice-head">
-            <strong>{reading.title}</strong>
-            <code className="reason-notice-code">{code}</code>
-          </div>
-          <p>{reading.detail}</p>
-        </li>
+        {uniqueCodes.map((code) => {
+          const reading = readPublicReasonCode(code);
+          return (
+            <li key={code}>
+              <div className="reason-notice-head">
+                <strong>{reading.title}</strong>
+                <code className="reason-notice-code">{code}</code>
+              </div>
+              <p>{detailOverrides[code] ?? reading.detail}</p>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
@@ -248,7 +249,7 @@ function PublicVrpOverview({
     sampleCount !== undefined &&
     minimumSampleCount !== null &&
     minimumSampleCount !== undefined
-      ? `当前仅累积 ${sampleCount} / ${minimumSampleCount} 个有效 VRP 读数，头条数字保持隐藏。`
+      ? `当前仅累积 ${sampleCount.toLocaleString("zh-CN")} / ${minimumSampleCount.toLocaleString("zh-CN")} 个有效 VRP 读数，头条数字保持隐藏。`
       : "VRP 有效样本还不够，头条数字保持隐藏，只提供补齐进度。";
 
   return (
@@ -310,7 +311,14 @@ function PublicVrpOverview({
                 : "缺少可复算的 DVOL 历史或 VRP 时序，页面不会显示 0 或占位数。"}
             </p>
           </div>
-          <PublicReasonNotice code={unavailableCode} />
+          <PublicReasonNotice
+            codes={[unavailableCode]}
+            detailOverrides={
+              isInsufficientHistory
+                ? { INSUFFICIENT_VRP_HISTORY: insufficientHistoryDetail }
+                : undefined
+            }
+          />
         </div>
       )}
     </section>
@@ -371,12 +379,19 @@ function PublicMarketBrief({
     displayState === "available" && facts.underlyingPrice !== null;
   const candidateTotal =
     (facts.nakedCandidates ?? 0) + (facts.spreadCandidates ?? 0);
+  const invalidQuotes = finiteNumber(
+    report.data_status?.quality_gate?.summary?.invalid_quotes,
+  );
+  const quarantineCopy =
+    invalidQuotes !== null && invalidQuotes > 0
+      ? `；${invalidQuotes.toLocaleString("zh-CN")} 条未通过质量门的报价已隔离，不进入研究计算。`
+      : "。";
   const narrative =
     displayState === "stale"
       ? "这版公开稿已超过发布时效上限，所有当前市场数字视图已统一收起，等待下一版发布。"
       : !hasMarketEvidence
         ? "当前没有可验证的市场快照，价格、DVOL、曲面与候选不会被估算或补齐。"
-        : `${facts.validQuotes ?? "—"} 条报价通过质量门；${facts.eligibleExpiries ?? "—"} 个到期曲面可进入候选研究。`;
+        : `${facts.validQuotes ?? "—"} 条报价通过质量门；${facts.eligibleExpiries ?? "—"} 个到期曲面可进入候选研究${quarantineCopy}`;
   const visibleCandidates = hasMarketEvidence ? candidates.slice(0, 4) : [];
   const age =
     freshness.ageSec === null ? "距今时间不可验证" : formatPublishedAge(freshness.ageSec);
@@ -836,6 +851,65 @@ function PublicCandidateResearch({
   );
 }
 
+function PublicExchangeEventEvidence({
+  displayState,
+  report,
+}: {
+  displayState: "available" | "quality_blocked" | "stale";
+  report: ResearchReport;
+}): React.JSX.Element {
+  const reading = resolvePublicExchangeEventEvidence(report);
+  const isStale = displayState === "stale";
+  const isQualityBlocked = displayState === "quality_blocked";
+  const reasonCode = isStale
+    ? "PUBLISHED_EDITION_STALE"
+    : isQualityBlocked
+      ? (report.data_status?.reason_code ?? "EVENT_SOURCE_UNAVAILABLE")
+      : reading.reasonCode;
+  const reason = readPublicReasonCode(reasonCode);
+  const stateLabel = isStale
+    ? "已过期（按阻断处理）"
+    : isQualityBlocked
+      ? "报告被阻断（状态不发布）"
+      : reading.stateLabel;
+  const scoreLabel = isStale ? "已收起" : isQualityBlocked ? "不可用" : reading.scoreLabel;
+  const blocked = displayState !== "available" || reading.blocked;
+
+  return (
+    <section
+      aria-label="公开事件源与交易所锁定"
+      className="entry-contract"
+      role="region"
+    >
+      <header className="workflow-subheading compact">
+        <div>
+          <span>Event evidence / 公开证据</span>
+          <h3>事件源与交易所锁定</h3>
+        </div>
+        <strong data-status={blocked ? "block" : "pass"}>{stateLabel}</strong>
+      </header>
+      <div className="condition-grid">
+        <article data-status={blocked ? "block" : "pass"}>
+          <div>
+            <span>事件分</span>
+            <strong>{scoreLabel}</strong>
+          </div>
+          <p>{reading.sourceLabel}</p>
+          <small>该来源只覆盖交易所锁定状态，不覆盖宏观事件日历。</small>
+        </article>
+        <article data-status={blocked ? "block" : "pass"}>
+          <div>
+            <span>判定原因</span>
+            <code>{reasonCode}</code>
+          </div>
+          <p>{displayState === "available" ? reading.detail : reason.detail}</p>
+          <small>缺失、过期、异常或非契约分值一律按阻断处理。</small>
+        </article>
+      </div>
+    </section>
+  );
+}
+
 function PublicStrategySection({
   freshness,
   report,
@@ -887,6 +961,11 @@ function PublicStrategySection({
           <p>只读 · 不生成仓位 · 不生成订单</p>
         </div>
       </header>
+
+      <PublicExchangeEventEvidence
+        displayState={displayState}
+        report={report}
+      />
 
       {displayState === "stale" ? (
         <div className="strategy-empty published-stop-state" role="status">
@@ -1051,10 +1130,12 @@ function PublicBoundarySection({
         </dl>
       </section>
 
+      <PublicReasonNotice codes={report.reason_codes ?? []} />
+
       <div className="blocked-output-note">
         <div>
           <strong>公开 bundle 只保留研究叙事与公开证据。</strong>
-          <p>内部 dashboard、控制层字段与内部 reason-code 不进入公开构建。</p>
+          <p>内部 dashboard 与控制层字段不进入公开构建；公开原因码保留脱敏解释。</p>
         </div>
         <p>数据截止：{formatCutoffTime(report.publish_edition?.captured_at ?? report.generated_at ?? null)}</p>
       </div>

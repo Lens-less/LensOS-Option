@@ -16,11 +16,13 @@ from crypto_options_report.market_data import (
     load_snapshot_fixture,
 )
 from crypto_options_report.publication import (
+    _build_public_report,
     _build_release_gates_from_disk,
     _load_manifest_verification,
     _trim_history_to_capture_clock,
     publish_site,
 )
+from crypto_options_report.vrp import build_vrp_status
 
 ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_FIXTURE = ROOT / "tests" / "fixtures" / "deribit_btc_option_chain_snapshot.json"
@@ -320,6 +322,87 @@ def _build_publication_history_fixture(published_at: str) -> dict[str, object]:
 
 
 class PublicationTests(unittest.TestCase):
+    def test_public_report_projects_fail_closed_exchange_event_evidence(self) -> None:
+        base_report = {
+            "schema_version": "research_report.v1",
+            "runtime_context": {"evaluation_clock": "2026-08-03T00:00:00Z"},
+            "data_status": {
+                "feed_coverage": {
+                    "feeds": {
+                        "events": {
+                            "freshness_status": "fresh",
+                            "reason_code": None,
+                            "scope": "exchange_native_only",
+                            "source_endpoint": "public/status",
+                            "status": "available",
+                        }
+                    }
+                }
+            },
+        }
+        cases = (
+            (None, "unknown", "EXCHANGE_LOCK_STATE_UNAVAILABLE"),
+            (0.0, "normal", "EXCHANGE_NO_ACTIVE_LOCKS"),
+            (0.8, "partial", "EXCHANGE_PARTIAL_LOCK"),
+            (1.0, "full", "EXCHANGE_FULL_LOCK"),
+        )
+
+        for event_score, expected_state, expected_reason in cases:
+            with self.subTest(event_score=event_score):
+                report = _deep_copy(base_report)
+                report["strategy_research"] = {
+                    "analysis": {"market": {"event_score": event_score}}
+                }
+
+                public_report = _build_public_report(report)
+
+                self.assertEqual(
+                    {
+                        "event_score": event_score,
+                        "exchange_lock_state": expected_state,
+                        "macro_calendar_covered": False,
+                        "reason_code": expected_reason,
+                        "scope": "exchange_native_only",
+                        "source": "deribit_public_status",
+                        "source_status": "available",
+                    },
+                    public_report["event_status"],
+                )
+
+        missing_report = _deep_copy(base_report)
+        missing_report["data_status"]["feed_coverage"]["feeds"]["events"] = {
+            "freshness_status": "unknown",
+            "reason_code": "EVENTS_MISSING",
+            "scope": None,
+            "source_endpoint": None,
+            "status": "missing",
+        }
+        missing_report["strategy_research"] = {
+            "analysis": {"market": {"event_score": 0.0}}
+        }
+
+        missing = _build_public_report(missing_report)["event_status"]
+
+        self.assertEqual("unknown", missing["exchange_lock_state"])
+        self.assertEqual("EVENTS_MISSING", missing["reason_code"])
+        self.assertIsNone(missing["event_score"])
+        self.assertIsNone(missing["source"])
+
+        malformed_report = _deep_copy(base_report)
+        malformed_report["data_status"]["feed_coverage"]["feeds"]["events"] = {
+            "freshness_status": {"internal": "fresh"},
+            "reason_code": {"internal": "EVENTS_MISSING"},
+            "scope": {"internal": "exchange_native_only"},
+            "source_endpoint": "public/status",
+            "status": {"internal": "available"},
+        }
+
+        malformed = _build_public_report(malformed_report)["event_status"]
+
+        self.assertIsNone(malformed["source_status"])
+        self.assertIsNone(malformed["scope"])
+        self.assertEqual("EVENT_SOURCE_UNAVAILABLE", malformed["reason_code"])
+
     def test_history_cutoff_uses_exact_capture_clock_and_recomputes_coverage(self) -> None:
         payload = {
             "coverage": {
@@ -354,6 +437,40 @@ class PublicationTests(unittest.TestCase):
             },
             trimmed["coverage"],
         )
+
+    def test_history_cutoff_rebases_later_capture_metadata_for_vrp(self) -> None:
+        snapshot_captured_at = "2026-07-07T00:01:00Z"
+        history_captured_at = _timestamp(
+            _parse_timestamp(snapshot_captured_at) + timedelta(days=5)
+        )
+        underlying = _build_underlying_history_fixture(
+            history_captured_at,
+            day_count=1201,
+        )
+        dvol = _build_dvol_history_fixture(underlying)
+        captured_dt = _parse_timestamp(snapshot_captured_at)
+
+        trimmed_underlying = _trim_history_to_capture_clock(
+            underlying,
+            captured_dt=captured_dt,
+            label="underlying history",
+        )
+        trimmed_dvol = _trim_history_to_capture_clock(
+            dvol,
+            captured_dt=captured_dt,
+            label="DVOL history",
+        )
+        status = build_vrp_status(
+            trimmed_dvol,
+            trimmed_underlying,
+            snapshot_captured_at,
+        )
+
+        self.assertEqual(snapshot_captured_at, trimmed_underlying["captured_at"])
+        self.assertEqual(snapshot_captured_at, trimmed_dvol["captured_at"])
+        self.assertEqual(1195, trimmed_dvol["requested_days"])
+        self.assertEqual("validated", status["status"])
+        self.assertEqual("2026-07-06", status["current"]["date"])
 
     def _write_json(self, path: Path, payload: object) -> Path:
         path.write_text(canonical_json_text(payload), encoding="utf-8")
@@ -429,7 +546,7 @@ class PublicationTests(unittest.TestCase):
         (destination / "assets").mkdir(parents=True)
         (destination / "index.html").write_text(
             "<!doctype html><html lang=\"zh-CN\"><head>"
-            "<meta charset=\"UTF-8\"><meta name=\"description\" content=\"public\">"
+            "<meta charset=\"UTF-8\">"
             "<title>Public</title><link rel=\"stylesheet\" href=\"./assets/app.css\">"
             "</head><body><div id=\"root\"></div>"
             "<script type=\"module\" src=\"./assets/app.js\"></script></body></html>\n",
@@ -597,6 +714,15 @@ class PublicationTests(unittest.TestCase):
                 f'<meta property="og:url" content="{SITE_ORIGIN}/">',
                 index_html,
             )
+            self.assertIn('<meta name="description" content="', index_html)
+            self.assertIn(
+                f'<link rel="canonical" href="{SITE_ORIGIN}/">',
+                index_html,
+            )
+            self.assertIn(
+                '<meta name="robots" content="index,follow,max-image-preview:large">',
+                index_html,
+            )
             self.assertIn(
                 f'<meta property="og:image" content="{SITE_ORIGIN}/og-card.png">',
                 index_html,
@@ -623,6 +749,10 @@ class PublicationTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
             self.assertIn(
                 f'<meta property="og:url" content="{SITE_ORIGIN}/editions/{edition_date}/">',
+                edition_index,
+            )
+            self.assertIn(
+                f'<link rel="canonical" href="{SITE_ORIGIN}/editions/{edition_date}/">',
                 edition_index,
             )
             self.assertTrue(
@@ -966,6 +1096,7 @@ class PublicationTests(unittest.TestCase):
                     "data_status",
                     "data_trust",
                     "effective_mode",
+                    "event_status",
                     "ev_candidate_scanner",
                     "full_system_surface",
                     "generated_at",
@@ -982,6 +1113,20 @@ class PublicationTests(unittest.TestCase):
                 },
                 set(report),
             )
+            self.assertEqual(
+                {
+                    "event_score",
+                    "exchange_lock_state",
+                    "macro_calendar_covered",
+                    "reason_code",
+                    "scope",
+                    "source",
+                    "source_status",
+                },
+                set(report["event_status"]),
+            )
+            self.assertNotIn("source_endpoint", report["event_status"])
+            self.assertFalse(report["event_status"]["macro_calendar_covered"])
             for key in (
                 "account_status",
                 "combination_risk",
@@ -1062,6 +1207,39 @@ class PublicationTests(unittest.TestCase):
                     payload = json.loads(path.read_text(encoding="utf-8"))
                     self.assertFalse(_contains_forbidden_key(payload, forbidden))
 
+    def test_publish_accepts_the_blocked_signal_summary_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tempdir = Path(tmp)
+            snapshot = load_snapshot_fixture(str(SNAPSHOT_FIXTURE))
+            signal = _build_signal_artifact(snapshot["captured_at"])
+            signal["status"] = "blocked"
+            signal["reason_codes"] = ["INSUFFICIENT_SIGNAL_OBSERVATIONS"]
+            signal["summary"] = {
+                "signals_measured": 0,
+                "signals_with_detectable_ic": 0,
+                "best_exploratory_signal": None,
+                "pre_registered_axis": "smile_residual_z",
+                "pre_registered_axis_verdict": None,
+                "promotion_eligible": False,
+                "promotion_eligibility_basis": (
+                    "pre_registered_axis_only; see docs/model-promotion.md"
+                ),
+            }
+
+            output_dir, _ = self._publish(
+                tempdir,
+                signal_payload=signal,
+                out_name="blocked-signal-contract",
+            )
+
+            published = json.loads(
+                (output_dir / "research" / "signal").read_text(encoding="utf-8")
+            )
+            summary = published["summary"]
+            self.assertNotIn("best_signal", summary)
+            self.assertIsNone(summary["best_exploratory_signal"])
+            self.assertIs(summary["promotion_eligible"], False)
+
     def test_publish_preflights_forwarded_artifact_privacy_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tempdir = Path(tmp)
@@ -1104,6 +1282,53 @@ class PublicationTests(unittest.TestCase):
             output_dir = tempdir / "series-unexpected-field"
             self.assertTrue(output_dir.is_dir())
             self.assertEqual([], list(output_dir.rglob("*")))
+
+    def test_publish_rejects_signal_or_series_data_after_the_snapshot_cutoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tempdir = Path(tmp)
+            snapshot = load_snapshot_fixture(str(SNAPSHOT_FIXTURE))
+            captured_dt = _parse_timestamp(snapshot["captured_at"])
+
+            future_signal = _build_signal_artifact(snapshot["captured_at"])
+            future_signal["generated_at"] = _timestamp(
+                captured_dt + timedelta(seconds=1)
+            )
+            with self.assertRaisesRegex(ValueError, "signal artifact.*snapshot.captured_at"):
+                self._publish(
+                    tempdir,
+                    signal_payload=future_signal,
+                    out_name="future-signal",
+                )
+
+            future_signal_row = _build_signal_artifact(snapshot["captured_at"])
+            future_signal_row["signals"] = {
+                "smile_residual_z": {
+                    "per_date": [
+                        {
+                            "snapshot_date": (
+                                captured_dt + timedelta(days=1)
+                            ).date().isoformat()
+                        }
+                    ]
+                }
+            }
+            with self.assertRaisesRegex(ValueError, "signal artifact.*snapshot cutoff"):
+                self._publish(
+                    tempdir,
+                    signal_payload=future_signal_row,
+                    out_name="future-signal-row",
+                )
+
+            future_series = _build_series_artifact(snapshot["captured_at"])
+            future_series["points"][-1]["observed_at"] = _timestamp(
+                captured_dt + timedelta(days=1)
+            )
+            with self.assertRaisesRegex(ValueError, "series artifact.*snapshot cutoff"):
+                self._publish(
+                    tempdir,
+                    series_payload=future_series,
+                    out_name="future-series",
+                )
 
     def test_publish_rejects_bundle_tokens_and_non_sha_git_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

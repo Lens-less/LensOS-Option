@@ -402,7 +402,7 @@ def build_vrp_status(
         window_start = point_date - timedelta(days=window_days - 1)
         window_values = [
             item["vrp_percent_points"]
-            for item in raw_points[: index + 1]
+            for item in raw_points[:index]
             if date.fromisoformat(item["date"]) >= window_start
         ]
         percentile_summary = _percentile_band_for_point(
@@ -420,7 +420,7 @@ def build_vrp_status(
             }
         )
 
-    if len(enriched_points) < minimum_series_sample_count:
+    if enriched_points[-1]["percentile"] is None:
         return {
             **base,
             "status": "insufficient_history",
