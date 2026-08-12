@@ -17,9 +17,17 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "数据可信度仍在积累",
     "detail": "连续观测尚未达到提升门槛；不会提前宣称数据源已受信任。"
   },
+  DATA_TRUST_PROMOTION_PENDING: {
+    "title": "数据可信证据仍在积累",
+    "detail": "连续观测尚未达到可信提升门槛；公开页面不会提前把该数据源标记为可信。"
+  },
   DATA_TRUST_THRESHOLD_EVIDENCE_MISSING: {
     "title": "可信提升门槛无法验证",
     "detail": "报告缺少可信提升所需的门槛证据；页面保持保守状态，不把该数据源标记为可信。"
+  },
+  DEFINED_RISK_STRUCTURE_PREFERRED: {
+    "title": "优先采用风险有界结构",
+    "detail": "研究框架优先保留最大亏损可定义的价差结构，不把裸露尾部风险包装成候选优势。"
   },
   DTE_EVIDENCE_CONFLICT: {
     "title": "候选期限证据无法验证",
@@ -61,6 +69,26 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "交易所存在部分锁定",
     "detail": "Deribit public/status 报告币种或指数锁定；事件分为 0.80，研究门按阻断处理。"
   },
+  EXECUTION_DISABLED_BY_PRODUCT_DEFINITION: {
+    "title": "公开产物不包含执行授权",
+    "detail": "该产物按产品定义保持仅研究状态；发布就绪不等于获得下单或执行权限。"
+  },
+  EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED: {
+    "title": "外部发布授权尚未完成",
+    "detail": "研究运行时不能自行授予外部发布权限；在独立授权证据完成前，发布门保持 NO-GO。"
+  },
+  INSUFFICIENT_CAPTURE_DATES: {
+    "title": "跨日序列的采集日期不足",
+    "detail": "有效采集日期尚不足以判断同一合约的持续性；缺失日期不会被插值或当作零。"
+  },
+  INSUFFICIENT_INDEPENDENT_EXPIRY_COHORTS: {
+    "title": "独立到期 cohort 数量不足",
+    "detail": "可结算的独立到期 cohort 尚未达到预登记门槛；重复快照不会被冒充为独立样本。"
+  },
+  INSUFFICIENT_SIGNAL_OBSERVATIONS: {
+    "title": "信号观测数量不足",
+    "detail": "有效观测尚未达到发布统计量所需的最低样本数；信号结论保持阻断。"
+  },
   INSUFFICIENT_VRP_HISTORY: {
     "title": "VRP 样本不足",
     "detail": "VRP 有效读数少于报告声明的最低样本数，头条数字保持不可用。"
@@ -73,13 +101,37 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "市场快照未通过质量门禁",
     "detail": "公开快照未通过质量门禁；价格、波动率和事件状态不会从失败数据中推断。"
   },
+  MARKET_DATA_NOT_VALIDATED: {
+    "title": "市场快照尚未验证",
+    "detail": "该快照没有通过完整数据验证，因此不会进入公开信号或跨日序列样本。"
+  },
   MARKET_TRUST_THRESHOLD_EVIDENCE_MISSING: {
     "title": "市场可信门槛无法复核",
     "detail": "可信状态缺少门槛元数据，页面不会把它解释为已验证的数据源。"
   },
+  MISSING_CAPTURED_AT: {
+    "title": "快照缺少采集时间",
+    "detail": "没有可验证的采集时间就无法归属观察日或到期 cohort；该快照已从样本中排除。"
+  },
+  MISSING_FIT_RESIDUAL: {
+    "title": "缺少曲面拟合残差",
+    "detail": "该观测没有可复核的拟合残差，无法进入预登记信号测量。"
+  },
+  MISSING_GREEKS: {
+    "title": "缺少 Greeks 证据",
+    "detail": "该观测缺少信号归一化所需的 Greeks；系统不会自行补算后纳入样本。"
+  },
   MISSING_DVOL_HISTORY: {
     "title": "缺少 DVOL 历史",
     "detail": "VRP 需要连续 DVOL 历史；缺失值不会显示成 0。"
+  },
+  MISSING_UNDERLYING_HISTORY: {
+    "title": "缺少标的历史序列",
+    "detail": "没有标的历史就无法计算结算结果或滚动已实现波动率；信号验证保持阻断。"
+  },
+  MISSING_UNDERLYING_PRICE: {
+    "title": "缺少标的价格",
+    "detail": "该观测没有可验证的标的价格，无法统一期权金额口径或计算 moneyness。"
   },
   MISSING_VALIDATED_MARKET_DATA: {
     "title": "没有可验证的市场快照",
@@ -89,21 +141,45 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "缺少已验证的路径风险证据",
     "detail": "历史路径证据不足；页面不会把相对排序伪装成绝对预期价值。"
   },
+  NAKED_PERMISSION_FALSE: {
+    "title": "裸卖权限保持关闭",
+    "detail": "当前研究权限不允许无保护的裸卖结构；相关结构只作为被拒绝的对照，不构成建议。"
+  },
   NO_ELIGIBLE_CANDIDATES: {
     "title": "本次没有合格研究候选",
     "detail": "没有合约同时满足期限、delta、报价、流动性和信用门槛；这不是故障。"
+  },
+  NON_POSITIVE_BID: {
+    "title": "买价不是正数",
+    "detail": "该期权没有正的可成交买价，不能构成卖方信用或有效信号观测。"
   },
   NO_OPEN_POSITIONS: {
     "title": "没有可评估的持仓",
     "detail": "公开研究不接入私人持仓；本项只是明确的空状态。"
   },
+  NO_VALIDATED_CAPTURES: {
+    "title": "没有通过验证的跨日采集",
+    "detail": "当前采集集合中没有可进入跨日序列的有效快照；页面不会从失败快照拼接趋势。"
+  },
+  NO_VALIDATED_SNAPSHOTS: {
+    "title": "没有通过验证的信号快照",
+    "detail": "当前样本中没有通过市场数据门禁的快照，信号统计量保持不可用。"
+  },
   NO_VALIDATED_PATH_RISK: {
     "title": "候选缺少路径风险证据",
     "detail": "该候选没有足够的持有期历史或未进入计算配额，因此不发布 EV。"
   },
+  PREMIUM_UNIT_UNKNOWN: {
+    "title": "权利金单位无法验证",
+    "detail": "权利金计价单位不明确，无法安全换算为统一金额口径；该观测已排除。"
+  },
   PUBLISHED_EDITION_STALE: {
     "title": "公开版已超过发布时效",
     "detail": "这份公开报告已超过展示时效；当前市场数字与事件状态均按阻断处理。"
+  },
+  REGIME_CURRENT_FEEDS_INCOMPLETE: {
+    "title": "当前市场状态输入不完整",
+    "detail": "Regime 判断所需的当前数据源尚未齐全；公开结论保持保守，不从缺失输入推断状态。"
   },
   REGIME_MIN_OBSERVATIONS_NOT_MET: {
     "title": "市场状态观测数不足",
@@ -121,9 +197,21 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "市场状态证据尚未提升",
     "detail": "状态证据仍是研究级，不能用于放开任何执行权限。"
   },
+  RESEARCH_PUBLICATION_EVIDENCE_INCOMPLETE: {
+    "title": "研究发布证据尚不完整",
+    "detail": "必需证据未齐全时，公开表面不会宣称研究产物已经具备发布条件。"
+  },
+  SIGNAL_HAS_NO_CROSS_SECTIONAL_VARIATION: {
+    "title": "信号缺少横截面差异",
+    "detail": "同一观察日内的信号值没有足够差异，无法计算有意义的横截面排序相关性。"
+  },
   SURFACE_QUALITY_FAIL: {
     "title": "波动率曲面未通过质量检查",
     "detail": "拟合或无套利检查失败；页面不会把拟合误差报告成优势。"
+  },
+  SURFACE_NOT_ELIGIBLE: {
+    "title": "波动率曲面不具备测量资格",
+    "detail": "该到期曲面没有通过拟合与质量条件，因此不进入公开信号样本。"
   },
   TRUST_EVIDENCE_NOT_OBSERVED: {
     "title": "数据可信度尚未形成观测证据",
@@ -132,6 +220,14 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
   TRUST_PROMOTION_MINIMUMS_MISSING: {
     "title": "可信提升最低门槛缺失",
     "detail": "可信证据不完整，不能验证是否达到 6 次连续通过与 60 秒观察要求。"
+  },
+  UNBOUNDED_TAIL_LOSS: {
+    "title": "尾部亏损没有上界",
+    "detail": "该结构在极端行情下缺少可验证的最大亏损上限，因此被保留为拒绝理由而不是研究候选。"
+  },
+  UNPARSEABLE_CAPTURED_AT: {
+    "title": "采集时间无法解析",
+    "detail": "快照的采集时间格式损坏，无法可靠归属观察日；该快照已从样本中排除。"
   },
   UNCALIBRATED_SCORE_MODEL: {
     "title": "打分模型未校准",

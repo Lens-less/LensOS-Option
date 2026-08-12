@@ -10,11 +10,13 @@ permissions:
 
 jobs:
   test:
+    env:
+      PIP_CONSTRAINT: ${{ github.workspace }}/constraints.txt
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -22,21 +24,24 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[dev]"
+          cache-dependency-path: |
+            pyproject.toml
+            constraints.txt
+      - run: python -m pip install --upgrade -c constraints.txt pip setuptools
+      - run: python -m pip install --no-build-isolation -c constraints.txt -e ".[dev]"
       - run: python -m ruff check crypto_options_report tools tests
       - run: python -m compileall -q crypto_options_report tools
       - run: node --version
       - run: python -m pytest -q
       - run: python -m crypto_options_report.api --smoke
       - run: python -m crypto_options_report.account_snapshot_sidecar --help
-      - run: python -m pip wheel --no-deps . -w dist
+      - run: python -m pip wheel --no-build-isolation --no-deps . -w dist
       - name: Verify built wheel on Linux
         if: runner.os == 'Linux'
         shell: bash
         run: |
           python -m venv wheel-venv
-          wheel-venv/bin/python -m pip install --no-deps dist/*.whl
+          wheel-venv/bin/python -m pip install --no-deps -c constraints.txt dist/*.whl
           wheel-venv/bin/python -m pip check
           wheel-venv/bin/crypto-options-report --help >/dev/null
           wheel-venv/bin/crypto-options-report-api --smoke >/dev/null
@@ -48,14 +53,14 @@ jobs:
         run: |
           python -m venv wheel-venv
           $wheel = (Get-ChildItem -LiteralPath dist -Filter *.whl -File -ErrorAction Stop).FullName
-          wheel-venv\Scripts\python.exe -m pip install --no-deps $wheel
+          wheel-venv\Scripts\python.exe -m pip install --no-deps -c constraints.txt $wheel
           wheel-venv\Scripts\python.exe -m pip check
           wheel-venv\Scripts\crypto-options-report.exe --help | Out-Null
           wheel-venv\Scripts\crypto-options-report-api.exe --smoke | Out-Null
           wheel-venv\Scripts\crypto-options-snapshot-sidecar.exe --help | Out-Null
           wheel-venv\Scripts\crypto-options-account-snapshot-sidecar.exe --help | Out-Null
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: runner.os == 'Linux' && matrix.python-version == '3.13'
+        if: runner.os == 'Linux' && matrix.python-version == '3.14'
         with:
           name: python-wheel
           path: dist/*.whl
@@ -67,7 +72,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.2"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci

@@ -37,6 +37,22 @@
       "detail": "连续观测尚未达到提升门槛；不会提前宣称数据源已受信任。"
     }
   },
+  "DATA_TRUST_PROMOTION_PENDING": {
+    "shell": {
+      "title": "数据可信提升尚未完成",
+      "detail": "连续通过次数或观察时长尚未达到策略门槛；当前证据保持未提升状态。"
+    },
+    "public": {
+      "title": "数据可信证据仍在积累",
+      "detail": "连续观测尚未达到可信提升门槛；公开页面不会提前把该数据源标记为可信。"
+    },
+    "report": {
+      "label": "数据可信提升尚未完成",
+      "action": "系统继续积累连续通过次数与观察时长，达到门槛前保持研究阻断。",
+      "ownerLabel": "系统持续观察",
+      "queue": "system"
+    }
+  },
   "DATA_TRUST_THRESHOLD_EVIDENCE_MISSING": {
     "shell": {
       "title": "可信提升门槛证据缺失",
@@ -51,6 +67,12 @@
       "action": "系统继续采集包含完整 6 次连续通过与 60 秒观察门槛的证据。",
       "ownerLabel": "系统持续观察",
       "queue": "system"
+    }
+  },
+  "DEFINED_RISK_STRUCTURE_PREFERRED": {
+    "public": {
+      "title": "优先采用风险有界结构",
+      "detail": "研究框架优先保留最大亏损可定义的价差结构，不把裸露尾部风险包装成候选优势。"
     }
   },
   "DELTA_OUT_OF_RANGE": {
@@ -165,6 +187,22 @@
       "detail": "Deribit public/status 报告币种或指数锁定；事件分为 0.80，研究门按阻断处理。"
     }
   },
+  "EXECUTION_DISABLED_BY_PRODUCT_DEFINITION": {
+    "shell": {
+      "title": "执行能力不在产品定义内",
+      "detail": "运行时被硬编码为仅研究；任何配置都不能解锁仓位规模、订单生成或执行。"
+    },
+    "public": {
+      "title": "公开产物不包含执行授权",
+      "detail": "该产物按产品定义保持仅研究状态；发布就绪不等于获得下单或执行权限。"
+    },
+    "report": {
+      "label": "执行能力由产品定义禁用",
+      "action": "保持 RESEARCH_ONLY 边界；不得把发布就绪解释为执行授权。",
+      "ownerLabel": "系统边界",
+      "queue": "system"
+    }
+  },
   "EXTERNAL_APPROVAL_PENDING": {
     "report": {
       "label": "外部人工审批尚未记录",
@@ -174,6 +212,10 @@
     }
   },
   "EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED": {
+    "public": {
+      "title": "外部发布授权尚未完成",
+      "detail": "研究运行时不能自行授予外部发布权限；在独立授权证据完成前，发布门保持 NO-GO。"
+    },
     "report": {
       "label": "缺少独立发布复核",
       "action": "由独立责任人完成发布复核；本研究运行时不能自行授权。",
@@ -185,6 +227,24 @@
     "shell": {
       "title": "用现货指数替代了远期",
       "detail": "该到期日没有远期报价，改用了现货。这会平移每个行权价的 moneyness，把基差表现成「贵」，因此该分量降级为需留意。"
+    }
+  },
+  "INSUFFICIENT_CAPTURE_DATES": {
+    "public": {
+      "title": "跨日序列的采集日期不足",
+      "detail": "有效采集日期尚不足以判断同一合约的持续性；缺失日期不会被插值或当作零。"
+    }
+  },
+  "INSUFFICIENT_INDEPENDENT_EXPIRY_COHORTS": {
+    "public": {
+      "title": "独立到期 cohort 数量不足",
+      "detail": "可结算的独立到期 cohort 尚未达到预登记门槛；重复快照不会被冒充为独立样本。"
+    }
+  },
+  "INSUFFICIENT_SIGNAL_OBSERVATIONS": {
+    "public": {
+      "title": "信号观测数量不足",
+      "detail": "有效观测尚未达到发布统计量所需的最低样本数；信号结论保持阻断。"
     }
   },
   "INSUFFICIENT_VRP_HISTORY": {
@@ -227,6 +287,12 @@
     "public": {
       "title": "市场快照未通过质量门禁",
       "detail": "公开快照未通过质量门禁；价格、波动率和事件状态不会从失败数据中推断。"
+    }
+  },
+  "MARKET_DATA_NOT_VALIDATED": {
+    "public": {
+      "title": "市场快照尚未验证",
+      "detail": "该快照没有通过完整数据验证，因此不会进入公开信号或跨日序列样本。"
     }
   },
   "MARKET_TRUST_THRESHOLD_EVIDENCE_MISSING": {
@@ -281,10 +347,28 @@
       "queue": "system"
     }
   },
+  "MISSING_CAPTURED_AT": {
+    "public": {
+      "title": "快照缺少采集时间",
+      "detail": "没有可验证的采集时间就无法归属观察日或到期 cohort；该快照已从样本中排除。"
+    }
+  },
   "MISSING_CANDIDATE_GREEKS": {
     "shell": {
       "title": "候选缺少希腊值",
       "detail": "delta 或 vega 缺失。它们是损失分布的输入，代入占位数会让压力成本变成占位数的产物，因此该候选的 EV 不可用。"
+    }
+  },
+  "MISSING_FIT_RESIDUAL": {
+    "public": {
+      "title": "缺少曲面拟合残差",
+      "detail": "该观测没有可复核的拟合残差，无法进入预登记信号测量。"
+    }
+  },
+  "MISSING_GREEKS": {
+    "public": {
+      "title": "缺少 Greeks 证据",
+      "detail": "该观测缺少信号归一化所需的 Greeks；系统不会自行补算后纳入样本。"
     }
   },
   "MISSING_DVOL_HISTORY": {
@@ -323,6 +407,18 @@
       "action": "系统持续累计 Paper 观察并生成对账记录。",
       "ownerLabel": "系统持续观察",
       "queue": "system"
+    }
+  },
+  "MISSING_UNDERLYING_HISTORY": {
+    "public": {
+      "title": "缺少标的历史序列",
+      "detail": "没有标的历史就无法计算结算结果或滚动已实现波动率；信号验证保持阻断。"
+    }
+  },
+  "MISSING_UNDERLYING_PRICE": {
+    "public": {
+      "title": "缺少标的价格",
+      "detail": "该观测没有可验证的标的价格，无法统一期权金额口径或计算 moneyness。"
     }
   },
   "MISSING_VALIDATED_MARKET_DATA": {
@@ -373,6 +469,12 @@
       "queue": "operator"
     }
   },
+  "NAKED_PERMISSION_FALSE": {
+    "public": {
+      "title": "裸卖权限保持关闭",
+      "detail": "当前研究权限不允许无保护的裸卖结构；相关结构只作为被拒绝的对照，不构成建议。"
+    }
+  },
   "NO_ELIGIBLE_CANDIDATES": {
     "shell": {
       "title": "本次快照没有合格候选",
@@ -383,10 +485,28 @@
       "detail": "没有合约同时满足期限、delta、报价、流动性和信用门槛；这不是故障。"
     }
   },
+  "NON_POSITIVE_BID": {
+    "public": {
+      "title": "买价不是正数",
+      "detail": "该期权没有正的可成交买价，不能构成卖方信用或有效信号观测。"
+    }
+  },
   "NO_OPEN_POSITIONS": {
     "public": {
       "title": "没有可评估的持仓",
       "detail": "公开研究不接入私人持仓；本项只是明确的空状态。"
+    }
+  },
+  "NO_VALIDATED_CAPTURES": {
+    "public": {
+      "title": "没有通过验证的跨日采集",
+      "detail": "当前采集集合中没有可进入跨日序列的有效快照；页面不会从失败快照拼接趋势。"
+    }
+  },
+  "NO_VALIDATED_SNAPSHOTS": {
+    "public": {
+      "title": "没有通过验证的信号快照",
+      "detail": "当前样本中没有通过市场数据门禁的快照，信号统计量保持不可用。"
     }
   },
   "NO_VALIDATED_PATH_RISK": {
@@ -415,6 +535,12 @@
       "detail": "流动性不足以支撑研究结论。"
     }
   },
+  "PREMIUM_UNIT_UNKNOWN": {
+    "public": {
+      "title": "权利金单位无法验证",
+      "detail": "权利金计价单位不明确，无法安全换算为统一金额口径；该观测已排除。"
+    }
+  },
   "PUBLISHED_EDITION_STALE": {
     "shell": {
       "title": "公开版已超过发布时效上限",
@@ -429,6 +555,22 @@
     "shell": {
       "title": "报价过旧",
       "detail": "该合约的报价时间戳超过了允许的滞后。"
+    }
+  },
+  "REGIME_CURRENT_FEEDS_INCOMPLETE": {
+    "shell": {
+      "title": "当前 Regime 输入源不完整",
+      "detail": "本次状态判断缺少一个或多个必需的当前市场数据源，因此不会提升 Regime 可信度。"
+    },
+    "public": {
+      "title": "当前市场状态输入不完整",
+      "detail": "Regime 判断所需的当前数据源尚未齐全；公开结论保持保守，不从缺失输入推断状态。"
+    },
+    "report": {
+      "label": "Regime 当前输入源不完整",
+      "action": "系统等待必需市场源恢复并重新完成状态判断。",
+      "ownerLabel": "系统持续观察",
+      "queue": "system"
     }
   },
   "REGIME_MIN_OBSERVATIONS_NOT_MET": {
@@ -479,6 +621,22 @@
       "queue": "system"
     }
   },
+  "RESEARCH_PUBLICATION_EVIDENCE_INCOMPLETE": {
+    "shell": {
+      "title": "研究发布证据尚不完整",
+      "detail": "研究产物仍缺少一个或多个发布所需证明，因此发布就绪状态保持阻断。"
+    },
+    "public": {
+      "title": "研究发布证据尚不完整",
+      "detail": "必需证据未齐全时，公开表面不会宣称研究产物已经具备发布条件。"
+    },
+    "report": {
+      "label": "研究发布证据不完整",
+      "action": "补齐缺失的发布前提并重新生成可复核的研究发布证据包。",
+      "ownerLabel": "系统发布门禁",
+      "queue": "system"
+    }
+  },
   "RESIDUAL_SCALE_UNAVAILABLE": {
     "shell": {
       "title": "无法计算残差尺度",
@@ -495,6 +653,12 @@
       "action": "账户证据就绪后，系统发起只读组合模拟。",
       "ownerLabel": "系统负责",
       "queue": "system"
+    }
+  },
+  "SIGNAL_HAS_NO_CROSS_SECTIONAL_VARIATION": {
+    "public": {
+      "title": "信号缺少横截面差异",
+      "detail": "同一观察日内的信号值没有足够差异，无法计算有意义的横截面排序相关性。"
     }
   },
   "SPREAD_RATIO_TOO_WIDE": {
@@ -517,6 +681,12 @@
     "public": {
       "title": "波动率曲面未通过质量检查",
       "detail": "拟合或无套利检查失败；页面不会把拟合误差报告成优势。"
+    }
+  },
+  "SURFACE_NOT_ELIGIBLE": {
+    "public": {
+      "title": "波动率曲面不具备测量资格",
+      "detail": "该到期曲面没有通过拟合与质量条件，因此不进入公开信号样本。"
     }
   },
   "SUSPECT_PRICE_DIVERGENCE": {
@@ -557,6 +727,18 @@
     "shell": {
       "title": "该结构亏损无上界",
       "detail": "由候选自身的腿判定：净卖出 call 的结构在上行方向没有保护，因此没有可定义的最大亏损，风险回报比也就无从计算。"
+    }
+  },
+  "UNBOUNDED_TAIL_LOSS": {
+    "public": {
+      "title": "尾部亏损没有上界",
+      "detail": "该结构在极端行情下缺少可验证的最大亏损上限，因此被保留为拒绝理由而不是研究候选。"
+    }
+  },
+  "UNPARSEABLE_CAPTURED_AT": {
+    "public": {
+      "title": "采集时间无法解析",
+      "detail": "快照的采集时间格式损坏，无法可靠归属观察日；该快照已从样本中排除。"
     }
   },
   "UNCALIBRATED_SCORE_MODEL": {

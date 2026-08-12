@@ -293,8 +293,8 @@ class PublicFeedGraphRuntimeTests(unittest.TestCase):
         evidence = status["trust_evidence"]
 
         self.assertEqual("collecting", evidence["status"])
-        self.assertEqual(6, evidence["minimum_consecutive_passes"])
-        self.assertEqual(60, evidence["minimum_observation_seconds"])
+        self.assertIsNone(evidence["minimum_consecutive_passes"])
+        self.assertIsNone(evidence["minimum_observation_seconds"])
         self.assertEqual(0, evidence["consecutive_passes"])
         self.assertIn("TRUST_EVIDENCE_NOT_OBSERVED", evidence["reason_codes"])
 
@@ -333,6 +333,54 @@ class PublicFeedGraphRuntimeTests(unittest.TestCase):
             now_ms=parse_timestamp_ms(snapshot["captured_at"]),
         )
         self.assertEqual("promoted", status["trust_evidence"]["status"])
+
+    def test_bound_sidecar_with_malformed_thresholds_cannot_promote(self):
+        previous = None
+        base_ms = parse_timestamp_ms(CAPTURED_AT)
+        for offset_seconds in range(0, 70, 10):
+            snapshot = _complete_live_snapshot(base_ms + offset_seconds * 1000)
+            evidence = advance_trust_evidence(
+                snapshot,
+                previous_snapshot=previous,
+            )
+            snapshot["trust_evidence"] = evidence
+            previous = snapshot
+
+        self.assertEqual("promoted", evidence["status"])
+        malformed_evidence = {
+            **evidence,
+            "minimum_consecutive_passes": "6",
+            "minimum_observation_seconds": True,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            key_dir = Path(tmp) / "keys"
+            data_dir.mkdir()
+            key_dir.mkdir()
+            path = data_dir / "snapshot.json"
+            auth_key = key_dir / "sidecar.key"
+            auth_key.write_bytes(b"k" * 32)
+            write_snapshot_fixture(path, snapshot)
+            write_snapshot_trust_state(
+                path,
+                malformed_evidence,
+                expected_snapshot=snapshot,
+                auth_key_file=auth_key,
+            )
+            loaded = load_snapshot_fixture(path, auth_key_file=auth_key)
+
+        status = build_market_data_status(
+            loaded,
+            now_ms=parse_timestamp_ms(snapshot["captured_at"]),
+        )
+        verified = status["trust_evidence"]
+        self.assertEqual("collecting", verified["status"])
+        self.assertIsNone(verified["minimum_consecutive_passes"])
+        self.assertIsNone(verified["minimum_observation_seconds"])
+        self.assertIn(
+            "TRUST_PROMOTION_MINIMUMS_MISSING",
+            verified["reason_codes"],
+        )
 
     def test_legacy_fixture_without_evidence_remains_compatible_and_collecting(self):
         snapshot = json.loads(

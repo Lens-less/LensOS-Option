@@ -174,13 +174,11 @@ class AnalysisRunContractTests(unittest.TestCase):
             "DATA_TRUST_THRESHOLD_EVIDENCE_MISSING",
             report["data_trust"]["reason_codes"],
         )
-        self.assertEqual(
-            6,
-            report["data_status"]["trust_evidence"]["minimum_consecutive_passes"],
+        self.assertIsNone(
+            report["data_status"]["trust_evidence"]["minimum_consecutive_passes"]
         )
-        self.assertEqual(
-            60,
-            report["data_status"]["trust_evidence"]["minimum_observation_seconds"],
+        self.assertIsNone(
+            report["data_status"]["trust_evidence"]["minimum_observation_seconds"]
         )
 
     def test_mandate_cannot_elevate_research_only(self):
@@ -221,7 +219,7 @@ class AnalysisRunContractTests(unittest.TestCase):
             record.entry_admission_decisions[0].status,
         )
         self.assertIn(
-            "DATA_TRUST_OBSERVATION_COLLECTING",
+            "DATA_TRUST_THRESHOLD_EVIDENCE_MISSING",
             record.global_reason_codes,
         )
 

@@ -1795,6 +1795,20 @@ class PublishWorkflowContractTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, workflow)
 
+    def test_publish_workflow_uses_shared_constraints_without_build_isolation(self) -> None:
+        workflow = self.WORKFLOW.read_text(encoding="utf-8")
+
+        fragments = (
+            "PIP_CONSTRAINT: ${{ github.workspace }}/product/constraints.txt",
+            "product/constraints.txt",
+            "Install shared Python constraints",
+            "python -m pip install --upgrade -c constraints.txt pip setuptools",
+            "python -m pip install --no-build-isolation -c constraints.txt -e .",
+        )
+        for fragment in fragments:
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, workflow)
+
     def test_publish_workflow_has_one_fail_closed_admission_contract(self) -> None:
         workflow = self.WORKFLOW.read_text(encoding="utf-8")
 

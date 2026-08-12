@@ -1113,16 +1113,15 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             )
             return False
         if write_request:
-            if origin and not same_origin:
-                self._write_json(
-                    HTTPStatus.FORBIDDEN,
-                    {"error": "cross_origin_request_rejected"},
+            if not same_origin and not valid_bearer:
+                error = (
+                    "cross_origin_request_rejected"
+                    if origin
+                    else "same_origin_or_bearer_required_for_write"
                 )
-                return False
-            if origin is None and not valid_bearer:
                 self._write_json(
                     HTTPStatus.FORBIDDEN,
-                    {"error": "same_origin_or_bearer_required_for_write"},
+                    {"error": error},
                 )
                 return False
         return True

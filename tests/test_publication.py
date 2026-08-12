@@ -594,6 +594,129 @@ class PublicationTests(unittest.TestCase):
         )
         self.assertEqual(0, public_report["ev_candidate_scanner"]["rejected_count"])
 
+    def test_public_report_blocks_playbook_candidate_when_dte_evidence_conflicts(
+        self,
+    ) -> None:
+        source_report = {
+            "schema_version": "research_report.v1",
+            "reason_codes": ["KEEP_EXISTING_REASON"],
+            "runtime_context": {"evaluation_clock": "2026-08-03T00:00:00Z"},
+            "strategy_research": {
+                "playbook": {
+                    "structure": "CALL_CREDIT_SPREAD",
+                    "candidate": {
+                        "candidate_id": "playbook-conflict",
+                        "expiry_date": "2026-08-29",
+                        "dte_days": 8.0,
+                        "sell_leg": "BTC-29AUG26-120000-C",
+                        "buy_leg": "BTC-29AUG26-125000-C",
+                    },
+                    "economics": {
+                        "premium_currency": "BTC",
+                        "credit_usd_shadow": 420.0,
+                    },
+                    "entry_contract": {
+                        "status": "ready",
+                        "conditions": [],
+                    },
+                    "exit_contract": {
+                        "policy_status": "defined",
+                        "time_management": {},
+                    },
+                }
+            },
+        }
+
+        public_report = _build_public_report(source_report)
+
+        self.assertEqual(
+            ["KEEP_EXISTING_REASON", "DTE_EVIDENCE_CONFLICT"],
+            public_report["reason_codes"],
+        )
+        self.assertIsNone(public_report["strategy_research"]["playbook"])
+
+    def test_public_report_treats_missing_expiry_metadata_as_unavailable_not_conflict(
+        self,
+    ) -> None:
+        source_report = {
+            "schema_version": "research_report.v1",
+            "reason_codes": ["KEEP_EXISTING_REASON"],
+            "runtime_context": {"evaluation_clock": "2026-08-03T00:00:00Z"},
+            "strategy_research": {
+                "analysis": {
+                    "volatility": {
+                        "front_expiry": {},
+                        "next_expiry": {
+                            "atm_fitted_iv_percent": 54.2,
+                            "candidate_eligible": False,
+                        },
+                    }
+                }
+            },
+        }
+
+        public_report = _build_public_report(source_report)
+        volatility = public_report["strategy_research"]["analysis"]["volatility"]
+
+        self.assertEqual(["KEEP_EXISTING_REASON"], public_report["reason_codes"])
+        self.assertIsNone(volatility["front_expiry"]["dte_days"])
+        self.assertIsNone(volatility["next_expiry"]["dte_days"])
+
+    def test_public_report_does_not_treat_malformed_expiry_metadata_as_missing(
+        self,
+    ) -> None:
+        source_report = {
+            "schema_version": "research_report.v1",
+            "reason_codes": [],
+            "runtime_context": {"evaluation_clock": "2026-08-03T00:00:00Z"},
+            "strategy_research": {
+                "analysis": {
+                    "volatility": {
+                        "front_expiry": {"expiry_date": 0},
+                        "next_expiry": {},
+                    }
+                }
+            },
+        }
+
+        public_report = _build_public_report(source_report)
+
+        self.assertEqual(["DTE_EVIDENCE_CONFLICT"], public_report["reason_codes"])
+        self.assertIsNone(
+            public_report["strategy_research"]["analysis"]["volatility"][
+                "front_expiry"
+            ]["dte_days"]
+        )
+
+    def test_public_report_does_not_publish_conflicting_expiry_summary_dte(
+        self,
+    ) -> None:
+        source_report = {
+            "schema_version": "research_report.v1",
+            "reason_codes": [],
+            "runtime_context": {"evaluation_clock": "2026-08-03T00:00:00Z"},
+            "strategy_research": {
+                "analysis": {
+                    "volatility": {
+                        "front_expiry": {
+                            "expiry_date": "2026-08-29",
+                            "dte_days": 8.0,
+                        },
+                        "next_expiry": {},
+                    }
+                }
+            },
+        }
+
+        public_report = _build_public_report(source_report)
+
+        self.assertEqual(["DTE_EVIDENCE_CONFLICT"], public_report["reason_codes"])
+        self.assertIsNone(
+            public_report["strategy_research"]["analysis"]["volatility"][
+                "front_expiry"
+            ]["dte_days"]
+        )
+
     def test_history_cutoff_uses_exact_capture_clock_and_recomputes_coverage(self) -> None:
         payload = {
             "coverage": {
@@ -1430,6 +1553,24 @@ class PublicationTests(unittest.TestCase):
             self.assertNotIn("best_signal", summary)
             self.assertIsNone(summary["best_exploratory_signal"])
             self.assertIs(summary["promotion_eligible"], False)
+
+    def test_publish_blocks_uncataloged_reason_code_in_public_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tempdir = Path(tmp)
+            snapshot = load_snapshot_fixture(str(SNAPSHOT_FIXTURE))
+            signal = _build_signal_artifact(snapshot["captured_at"])
+            signal["status"] = "blocked"
+            signal["reason_codes"] = ["SYNTHETIC_REASON_UNREGISTERED"]
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "SYNTHETIC_REASON_UNREGISTERED",
+            ):
+                self._publish(
+                    tempdir,
+                    signal_payload=signal,
+                    out_name="uncataloged-reason-code",
+                )
 
     def test_publish_preflights_forwarded_artifact_privacy_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

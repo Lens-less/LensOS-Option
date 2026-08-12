@@ -9,6 +9,9 @@ from tempfile import TemporaryDirectory
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+DOCKERFILE = ROOT / "Dockerfile"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+CONSTRAINTS = ROOT / "constraints.txt"
 
 
 def test_wheel_declares_public_legal_pages_and_both_license_files() -> None:
@@ -33,6 +36,43 @@ def test_direct_setup_contract_declares_its_build_backend_as_a_test_tool() -> No
     optional_dependencies = config["project"]["optional-dependencies"]
     assert "setuptools>=77" in optional_dependencies["test"]
     assert "setuptools>=77" in optional_dependencies["dev"]
+
+
+def test_packaging_metadata_declares_python_3_14_support() -> None:
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "Programming Language :: Python :: 3.14" in config["project"]["classifiers"]
+
+
+def test_shared_constraints_pin_the_toolchain_used_by_ci_and_the_wheel_builds() -> None:
+    constraints = CONSTRAINTS.read_text(encoding="utf-8")
+    ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+
+    for requirement in (
+        "pip==25.2",
+        "pytest==9.0.3",
+        'colorama==0.4.6 ; sys_platform == "win32"',
+        "iniconfig==2.3.0",
+        "packaging==26.0",
+        "pluggy==1.6.0",
+        "Pygments==2.20.0",
+        "ruff==0.16.0",
+        "setuptools==80.10.2",
+    ):
+        assert requirement in constraints
+
+    assert "PIP_CONSTRAINT: ${{ github.workspace }}/constraints.txt" in ci_workflow
+    assert (
+        "python -m pip install --upgrade -c constraints.txt pip setuptools"
+        in ci_workflow
+    )
+    assert 'python -m pip install --no-build-isolation -c constraints.txt -e ".[dev]"' in ci_workflow
+    assert "python -m pip wheel --no-build-isolation --no-deps . -w dist" in ci_workflow
+    assert "wheel-venv/bin/python -m pip install --no-deps -c constraints.txt dist/*.whl" in ci_workflow
+    assert "wheel-venv\\Scripts\\python.exe -m pip install --no-deps -c constraints.txt $wheel" in ci_workflow
+    assert "pip install" not in dockerfile
+    assert "COPY --chown=app:app crypto_options_report ./crypto_options_report" in dockerfile
 
 
 def _run_build_py(build_lib: Path) -> subprocess.CompletedProcess[str]:

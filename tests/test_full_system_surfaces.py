@@ -511,6 +511,40 @@ class FullSystemSurfaceTests(unittest.TestCase):
         self.assertEqual(403, status)
         self.assertIn("origin", json.loads(body)["error"])
 
+    def test_post_with_empty_origin_is_forbidden_without_bearer(self):
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=RuntimeConfig(profile="development"),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        connection = http.client.HTTPConnection(
+            "127.0.0.1",
+            server.server_port,
+            timeout=5,
+        )
+        try:
+            payload = json.dumps(
+                {"schema_version": "backtest_run_request.v1"}
+            ).encode("utf-8")
+            connection.putrequest("POST", "/backtest/run")
+            connection.putheader("Content-Type", "application/json")
+            connection.putheader("Content-Length", str(len(payload)))
+            connection.putheader("Idempotency-Key", "empty-origin")
+            connection.putheader("Origin", "")
+            connection.endheaders(payload)
+            response = connection.getresponse()
+            body = response.read().decode("utf-8")
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(403, response.status)
+        self.assertIn("origin", json.loads(body)["error"])
+
     def test_delete_without_origin_is_forbidden_without_bearer(self):
         status, _, body = self._request(
             "DELETE",

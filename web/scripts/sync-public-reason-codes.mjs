@@ -11,6 +11,13 @@ const outputPath = resolve(
   "public",
   "publicReasonCodes.generated.ts",
 );
+const pythonCatalogPath = resolve(
+  webDir,
+  "..",
+  "crypto_options_report",
+  "resources",
+  "reason_code_catalog.json",
+);
 
 const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
 
@@ -32,3 +39,17 @@ ${entries.join("\n")}
 `;
 
 writeFileSync(outputPath, output, "utf8");
+writeFileSync(
+  pythonCatalogPath,
+  `${JSON.stringify(
+    {
+      schema_version: "public_reason_code_copy_catalog.v1",
+      codes: Object.entries(catalog).flatMap(([code, entry]) =>
+        entry.public ? [code] : [],
+      ),
+    },
+    null,
+    2,
+  )}\n`,
+  "utf8",
+);

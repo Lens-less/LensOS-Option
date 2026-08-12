@@ -100,6 +100,15 @@ _UNIX_ABSOLUTE_PATH_RE = re.compile(
 )
 _GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 DTE_EVIDENCE_CONFLICT = "DTE_EVIDENCE_CONFLICT"
+_PUBLIC_REASON_CODE_CATALOG_PATH = (
+    Path(__file__).with_name("resources") / "reason_code_catalog.json"
+)
+_PUBLISHED_PRIVATE_REASON_CODES = frozenset(
+    {
+        "MISSING_ACCOUNT_API_SNAPSHOT",
+        "SIMULATION_NOT_REQUESTED",
+    }
+)
 
 _SIGNAL_CONFIG_FIELDS = {
     "bucket_count",
@@ -1128,6 +1137,19 @@ def _write_publication_outputs(
     edition_slug: str,
     copy_bundle: bool,
 ) -> None:
+    _assert_public_reason_codes_cataloged(
+        {
+            "research_report": public_report,
+            "research_signal": public_signal_artifact,
+            "research_series": public_series_artifact,
+            "summary": summary,
+            "thermo": thermo,
+            "candidates": candidates,
+            "signal": signal,
+            "health": health,
+            "status": status_payload,
+        }
+    )
     if copy_bundle:
         _copy_web_bundle(
             build_root,
@@ -1530,7 +1552,11 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
     evaluation_clock = str(
         ((report.get("runtime_context") or {}).get("evaluation_clock")) or ""
     )
-    publication_reason_codes = list(report.get("reason_codes") or [])
+    published = bool((report.get("runtime_context") or {}).get("mode") == "published")
+    publication_reason_codes = _project_public_reason_codes(
+        report.get("reason_codes"),
+        published=published,
+    )
     candidate_research = _project_candidate_research(
         report.get("candidate_research"),
         evaluation_clock=evaluation_clock,
@@ -1538,7 +1564,7 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
     )
     strategy_research = _project_strategy_research(
         report.get("strategy_research"),
-        published=bool((report.get("runtime_context") or {}).get("mode") == "published"),
+        published=published,
         evaluation_clock=evaluation_clock,
         publication_reason_codes=publication_reason_codes,
     )
@@ -1568,7 +1594,10 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
         "candidate_research": candidate_research,
         "strategy_research": strategy_research,
         "ev_candidate_scanner": ev_candidate_scanner,
-        "mode_gate": _project_mode_gate(report.get("mode_gate")),
+        "mode_gate": _project_mode_gate(
+            report.get("mode_gate"),
+            published=published,
+        ),
         "full_system_surface": _project_full_system_surface(
             report.get("full_system_surface")
         ),
@@ -1862,17 +1891,22 @@ def _resolve_public_candidate_dte_days(
     return explicit, None
 
 
-def _project_public_candidate_dte_days(
+def _project_public_optional_dte_days(
     candidate: dict[str, Any],
     *,
     evaluation_clock: str,
     publication_reason_codes: list[str] | None = None,
 ) -> float | None:
+    expiry_date = candidate.get("expiry_date")
+    if candidate.get("dte_days") is None and expiry_date in (None, ""):
+        return None
     dte_days, reason_code = _resolve_public_candidate_dte_days(
         candidate,
         evaluation_clock=evaluation_clock,
     )
-    _append_public_reason_code(publication_reason_codes, reason_code or "")
+    if reason_code:
+        _append_public_reason_code(publication_reason_codes, reason_code)
+        return None
     return dte_days
 
 
@@ -2159,7 +2193,7 @@ def _project_strategy_research(
                 ),
                 "front_expiry": {
                     "expiry_date": front_expiry.get("expiry_date"),
-                    "dte_days": _project_public_candidate_dte_days(
+                    "dte_days": _project_public_optional_dte_days(
                         front_expiry,
                         evaluation_clock=evaluation_clock,
                         publication_reason_codes=publication_reason_codes,
@@ -2171,7 +2205,7 @@ def _project_strategy_research(
                 },
                 "next_expiry": {
                     "expiry_date": next_expiry.get("expiry_date"),
-                    "dte_days": _project_public_candidate_dte_days(
+                    "dte_days": _project_public_optional_dte_days(
                         next_expiry,
                         evaluation_clock=evaluation_clock,
                         publication_reason_codes=publication_reason_codes,
@@ -2234,24 +2268,28 @@ def _project_playbook(
             for item in conditions
             if item.get("id") != "account_gate"
         ]
+    dte_days, reason_code = _resolve_public_candidate_dte_days(
+        candidate,
+        evaluation_clock=evaluation_clock,
+    )
+    if reason_code:
+        _append_public_reason_code(publication_reason_codes, reason_code)
+        return None
+    candidate_projection = {
+        "candidate_id": candidate.get("candidate_id"),
+        "expiry_date": candidate.get("expiry_date"),
+        "dte_days": dte_days,
+        "sell_leg": candidate.get("sell_leg"),
+        "buy_leg": candidate.get("buy_leg"),
+        "sell_strike_usd": candidate.get("sell_strike_usd"),
+        "buy_strike_usd": candidate.get("buy_strike_usd"),
+        "model_delta": candidate.get("model_delta"),
+        "risk_neutral_p_itm": candidate.get("risk_neutral_p_itm"),
+        "surface_fit_quality": candidate.get("surface_fit_quality"),
+    }
     return {
         "structure": playbook.get("structure"),
-        "candidate": {
-            "candidate_id": candidate.get("candidate_id"),
-            "expiry_date": candidate.get("expiry_date"),
-            "dte_days": _project_public_candidate_dte_days(
-                candidate,
-                evaluation_clock=evaluation_clock,
-                publication_reason_codes=publication_reason_codes,
-            ),
-            "sell_leg": candidate.get("sell_leg"),
-            "buy_leg": candidate.get("buy_leg"),
-            "sell_strike_usd": candidate.get("sell_strike_usd"),
-            "buy_strike_usd": candidate.get("buy_strike_usd"),
-            "model_delta": candidate.get("model_delta"),
-            "risk_neutral_p_itm": candidate.get("risk_neutral_p_itm"),
-            "surface_fit_quality": candidate.get("surface_fit_quality"),
-        },
+        "candidate": candidate_projection,
         "economics": {
             "premium_currency": economics.get("premium_currency"),
             "credit_coin": economics.get("credit_coin"),
@@ -2388,15 +2426,70 @@ def _project_ev_candidate_scanner(
     }
 
 
-def _project_mode_gate(value: Any) -> dict[str, Any]:
+def _project_mode_gate(
+    value: Any,
+    *,
+    published: bool,
+) -> dict[str, Any]:
     gate = dict(value or {})
     return {
         "trade_recommendation_allowed": gate.get("trade_recommendation_allowed"),
         "recommended_size_allowed": gate.get("recommended_size_allowed"),
         "order_instructions_allowed": gate.get("order_instructions_allowed"),
         "paper_manual_candidates_allowed": gate.get("paper_manual_candidates_allowed"),
-        "reason_codes": list(gate.get("reason_codes") or []),
+        "reason_codes": _project_public_reason_codes(
+            gate.get("reason_codes"),
+            published=published,
+        ),
     }
+
+
+def _project_public_reason_codes(value: Any, *, published: bool) -> list[Any]:
+    reason_codes = list(value or [])
+    if not published:
+        return reason_codes
+    return [
+        code
+        for code in reason_codes
+        if code not in _PUBLISHED_PRIVATE_REASON_CODES
+    ]
+
+
+def _assert_public_reason_codes_cataloged(value: Any) -> None:
+    catalog_payload = json.loads(
+        _PUBLIC_REASON_CODE_CATALOG_PATH.read_text(encoding="utf-8")
+    )
+    catalog_codes = {
+        str(code)
+        for code in catalog_payload.get("codes") or []
+        if isinstance(code, str) and code
+    }
+    emitted_codes = _collect_public_reason_codes(value)
+    missing = sorted(emitted_codes - catalog_codes)
+    if missing:
+        raise ValueError(
+            "publication blocked: public reason codes are missing from the "
+            f"canonical catalog: {', '.join(missing)}"
+        )
+
+
+def _collect_public_reason_codes(value: Any) -> set[str]:
+    codes: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "reason_code" and isinstance(item, str) and item:
+                codes.add(item)
+            elif key == "reason_codes" and isinstance(item, list):
+                codes.update(
+                    code
+                    for code in item
+                    if isinstance(code, str) and code
+                )
+            codes.update(_collect_public_reason_codes(item))
+    elif isinstance(value, list):
+        for item in value:
+            codes.update(_collect_public_reason_codes(item))
+    return codes
 
 
 def _project_full_system_surface(value: Any) -> dict[str, Any]:

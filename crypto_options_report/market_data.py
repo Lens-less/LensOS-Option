@@ -2146,11 +2146,11 @@ def _verified_trust_evidence(
         return _trust_evidence_payload(
             status="collecting",
             consecutive_passes=0,
-            minimum_consecutive_passes=default_minimum_passes,
+            minimum_consecutive_passes=None,
             first_pass_at=None,
             last_pass_at=None,
             observation_seconds=0,
-            minimum_observation_seconds=default_minimum_observation,
+            minimum_observation_seconds=None,
             reason_codes=["TRUST_EVIDENCE_NOT_OBSERVED"],
             feed_graph_complete=bool(feed_coverage.get("graph_complete")),
             source_identity=_trust_source_identity(normalized_snapshot),
@@ -2162,10 +2162,14 @@ def _verified_trust_evidence(
         "minimum_consecutive_passes",
         raw.get("required_consecutive_passes"),
     )
-    minimum_passes_present = raw_minimum_passes is not None
+    minimum_passes_present = (
+        isinstance(raw_minimum_passes, int)
+        and not isinstance(raw_minimum_passes, bool)
+        and raw_minimum_passes >= 1
+    )
     minimum_passes = max(
         default_minimum_passes,
-        _safe_nonnegative_int(raw_minimum_passes)
+        raw_minimum_passes
         if minimum_passes_present
         else default_minimum_passes,
     )
@@ -2176,10 +2180,14 @@ def _verified_trust_evidence(
         "minimum_observation_seconds",
         raw.get("required_observation_sec"),
     )
-    minimum_observation_present = raw_minimum_observation is not None
+    minimum_observation_present = (
+        isinstance(raw_minimum_observation, int)
+        and not isinstance(raw_minimum_observation, bool)
+        and raw_minimum_observation >= 0
+    )
     minimum_observation = max(
         default_minimum_observation,
-        _safe_nonnegative_int(raw_minimum_observation)
+        raw_minimum_observation
         if minimum_observation_present
         else default_minimum_observation,
     )
@@ -2228,11 +2236,13 @@ def _verified_trust_evidence(
     return _trust_evidence_payload(
         status=claimed_status,
         consecutive_passes=consecutive,
-        minimum_consecutive_passes=minimum_passes,
+        minimum_consecutive_passes=(minimum_passes if minimum_passes_present else None),
         first_pass_at=raw.get("first_pass_at"),
         last_pass_at=raw.get("last_pass_at"),
         observation_seconds=observation,
-        minimum_observation_seconds=minimum_observation,
+        minimum_observation_seconds=(
+            minimum_observation if minimum_observation_present else None
+        ),
         reason_codes=sorted(set(reason_codes)),
         feed_graph_complete=bool(feed_coverage.get("graph_complete")),
         source_identity=_trust_source_identity(normalized_snapshot),
@@ -2246,11 +2256,11 @@ def _trust_evidence_payload(
     *,
     status: str,
     consecutive_passes: int,
-    minimum_consecutive_passes: int,
+    minimum_consecutive_passes: int | None,
     first_pass_at: Any,
     last_pass_at: Any,
     observation_seconds: int,
-    minimum_observation_seconds: int,
+    minimum_observation_seconds: int | None,
     reason_codes: list[str],
     feed_graph_complete: bool,
     source_identity: str,

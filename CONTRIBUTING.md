@@ -17,15 +17,20 @@
 
 ## 环境准备
 
-需要 Python ≥ 3.12 和 Node ≥ 20.19（推荐 22）。Python 侧运行时零依赖，只有测试和
-开发工具需要安装。
+需要 Python ≥ 3.12 和 Node 22.22.2（或 `web/package.json` 允许的更新版本）。Python 侧运行时零依赖，
+只有构建、测试和开发工具需要安装。这些工具由 `constraints.txt` 精确约束；先按约束
+安装 installer 与 build backend，再禁用浮动的隔离构建环境安装开发 extra：
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install --upgrade -c constraints.txt pip setuptools
+python -m pip install --no-build-isolation -c constraints.txt -e ".[dev]"
 
 cd web
 npm ci
 ```
+
+CI 与发布流程使用同一份约束。日常升级由 Dependabot 发起；升级 PR 必须同时更新
+`constraints.txt`，并通过完整 Python 版本矩阵后才能合并。
 
 ## 本地检查
 
