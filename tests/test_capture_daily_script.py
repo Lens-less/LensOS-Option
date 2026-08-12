@@ -15,6 +15,21 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
+def _relative_path_within_physical_root(path: Path, root: Path) -> Path:
+    relative_parts: list[str] = []
+    candidate = path
+    while True:
+        try:
+            if os.path.samefile(candidate, root):
+                return Path(*reversed(relative_parts))
+        except OSError:
+            pass
+        if candidate.parent == candidate:
+            raise ValueError(f"{path} is not physically inside {root}")
+        relative_parts.append(candidate.name)
+        candidate = candidate.parent
+
+
 class CaptureDailyContractTests(unittest.TestCase):
     REPO_ROOT = Path(__file__).resolve().parents[1]
     SCRIPT = REPO_ROOT / "tools" / "capture-daily.ps1"
@@ -1051,8 +1066,9 @@ class CaptureDailyContractTests(unittest.TestCase):
             self.assertEqual("capture_daily_receipt.v1", receipt["schema_version"])
             self.assertEqual("capture_complete", receipt["status"])
             self.assertEqual("pending", receipt["evidence_repo_sync"]["status"])
-            receipt_relative = receipt_path.resolve().relative_to(
-                (product_root / "artifacts").resolve()
+            receipt_relative = _relative_path_within_physical_root(
+                receipt_path,
+                product_root / "artifacts",
             )
             evidence_receipt_path = evidence_root / receipt_relative
             self.assertEqual(receipt_path.read_bytes(), evidence_receipt_path.read_bytes())
@@ -1220,8 +1236,9 @@ class CaptureDailyContractTests(unittest.TestCase):
             self.assertEqual(2, rejected_summary["unsynced_local_capture_count"])
 
             pending_receipt = Path(rejected_summary["evidence_receipt"]["path"])
-            pending_receipt_relative = pending_receipt.relative_to(
-                product_root / "artifacts"
+            pending_receipt_relative = _relative_path_within_physical_root(
+                pending_receipt,
+                product_root / "artifacts",
             ).as_posix()
             self.assertEqual(
                 0,

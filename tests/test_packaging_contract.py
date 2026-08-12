@@ -113,7 +113,7 @@ def test_wheel_build_refuses_external_or_linked_build_directories() -> None:
                 assert linked_result.returncode != 0
                 assert "linked build directory" in linked_result.stderr
             finally:
-                if linked_build.is_symlink() or (
-                    os.name == "nt" and os.path.isjunction(linked_build)
-                ):
+                if linked_build.is_symlink():
+                    linked_build.unlink()
+                elif os.name == "nt" and os.path.isjunction(linked_build):
                     linked_build.rmdir()
