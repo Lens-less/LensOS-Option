@@ -1,5 +1,9 @@
 # Deribit 期权定价错配与策略推荐平台 PRD / Engineering Spec
 
+> 历史研究输入，已被 `docs/product/2026-08-02-public-product-spec.md` 与
+> `docs/product/2026-08-12-continuity-and-consistency-spec.md` 取代；本文不定义
+> 当前产品 North Star、发布验收或部署授权。
+
 版本：1.0
 日期：2026-07-10
 状态：Ready for decomposition
@@ -11,7 +15,7 @@ Issue type：Parent PRD / Epic；ready-for-agent 表示下一代理可直接执�
 
 文档关系：
 
-- 本 PRD 取代“加密货币期权卖 Call 收租系统 PRD”作为产品 North Star。
+- 本 PRD 在撰写时取代“加密货币期权卖 Call 收租系统 PRD”，曾作为当时的产品方向。
 - 原 short-call 能力保留为风险溢价类策略的首个垂直切片和回归基线，不再定义整个平台边界。
 - Data Trustworthiness PRD 及 DT-001..010 作为 Gate 0 的既有子项目继续执行，不重复创建同类工作。
 - DQR-001..012 和 ISSUE-001..015 只代表 local/replay scaffold 已接受，不代表 production data、model、paper 或 trading evidence 已满足。
@@ -53,7 +57,7 @@ Issue type：Parent PRD / Epic；ready-for-agent 表示下一代理可直接执�
 
 建设一个 evidence-first 的 Deribit Options Intelligence Platform。平台从连续市场证据出发，将产品经济语义、定价、异常分类、策略表达、组合风险、回放验证和推荐治理串成一条可重放证据链。
 
-### Product North Star
+### Historical Product North Star (已取代)
 
 平台对每个分析时点输出零个或多个 RecommendationRecord。只有当保守净边际在 bid/ask、depth、fee、slippage、legging、hedge、margin reserve 和 model uncertainty 后仍为正，并且数据、模型和组合风险门槛全部通过，候选才可以从 research anomaly 晋级为 watch candidate。Trade proposal 仍受独立 paper/testnet/manual release gate 阻断。
 
@@ -212,7 +216,7 @@ Issue type：Parent PRD / Epic；ready-for-agent 表示下一代理可直接执�
 
 ### 1. Program boundary and document authority
 
-1. 本 PRD 是新的产品 North Star；原 short-call PRD 成为 E3 风险溢价策略子用例。
+1. 本 PRD 在撰写时曾作为产品方向；现行 North Star 由顶部所列产品规格定义。
 2. Data Trustworthiness PRD 的 DT-001..010 保留 issue 身份和依赖顺序，整体纳入 Gate 0，不重复创建 trust tickets。
 3. DQR 和既有 ISSUE acceptance 作为 local/replay regression baseline。任何当前反例可以重新阻断对应生产能力，历史 done 不覆盖新证据。
 4. Next Backlog 中 A05–A12、T01–T05、N01–N06 映射到本文后续 Gate；机会告警只有在 path evidence 和 model promotion 后才能开启。
@@ -599,7 +603,7 @@ Issue type：Parent PRD / Epic；ready-for-agent 表示下一代理可直接执�
 13. 未经许可证和法律评审复制 GPL/AGPL 项目代码。
 14. 将研究结果包装为保证收益、无条件套利或自动化财务建议。
 15. 在 Gate 0–5 未关闭前用大规模视觉重构替代金融真值工作。
-16. 在当前 PRD 发布动作中实现或启用 paper、testnet、manual；Gate 7 只定义未来独立授权项目的 release rubric。
+16. 在本历史 PRD 所述发布动作中实现或启用 paper、testnet、manual；Gate 7 只定义未来独立授权项目的 release rubric。
 
 ## Further Notes
 

@@ -2058,6 +2058,22 @@ class PublishWorkflowContractTests(unittest.TestCase):
             self.assertIn("研究输入与历史方向", document)
             self.assertNotIn("现行 North Star", document)
 
+        docs_readme = (self.REPO_ROOT / "docs" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        research_prd = (
+            self.REPO_ROOT
+            / "docs"
+            / "research"
+            / "deribit-options-intelligence-platform-prd.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("不是当前 North Star", docs_readme)
+        self.assertNotIn("研究输入与 North Star PRD", docs_readme)
+        self.assertIn("历史研究输入", research_prd)
+        self.assertIn("Historical Product North Star (已取代)", research_prd)
+        self.assertNotIn("本 PRD 是新的产品 North Star", research_prd)
+        self.assertNotIn("在当前 PRD 发布动作中", research_prd)
+
 
 if __name__ == "__main__":
     unittest.main()

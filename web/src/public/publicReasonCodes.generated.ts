@@ -17,6 +17,14 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "数据可信度仍在积累",
     "detail": "连续观测尚未达到提升门槛；不会提前宣称数据源已受信任。"
   },
+  DATA_TRUST_THRESHOLD_EVIDENCE_MISSING: {
+    "title": "可信提升门槛无法验证",
+    "detail": "报告缺少可信提升所需的门槛证据；页面保持保守状态，不把该数据源标记为可信。"
+  },
+  DTE_EVIDENCE_CONFLICT: {
+    "title": "候选期限证据无法验证",
+    "detail": "候选的 DTE 与到期日证据冲突或损坏；公开产物已隐藏该候选，而不是猜测期限。"
+  },
   EVENTS_FEED_MALFORMED: {
     "title": "交易所事件源格式异常",
     "detail": "Deribit public/status 响应格式异常；页面拒绝从异常数据推断锁定状态。"
@@ -64,6 +72,10 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
   MARKET_DATA_QUALITY_FAIL: {
     "title": "市场快照未通过质量门禁",
     "detail": "公开快照未通过质量门禁；价格、波动率和事件状态不会从失败数据中推断。"
+  },
+  MARKET_TRUST_THRESHOLD_EVIDENCE_MISSING: {
+    "title": "市场可信门槛无法复核",
+    "detail": "可信状态缺少门槛元数据，页面不会把它解释为已验证的数据源。"
   },
   MISSING_DVOL_HISTORY: {
     "title": "缺少 DVOL 历史",
@@ -116,6 +128,10 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
   TRUST_EVIDENCE_NOT_OBSERVED: {
     "title": "数据可信度尚未形成观测证据",
     "detail": "还没有足够的连续采集证据证明数据链稳定，页面保持保守状态。"
+  },
+  TRUST_PROMOTION_MINIMUMS_MISSING: {
+    "title": "可信提升最低门槛缺失",
+    "detail": "可信证据不完整，不能验证是否达到 6 次连续通过与 60 秒观察要求。"
   },
   UNCALIBRATED_SCORE_MODEL: {
     "title": "打分模型未校准",

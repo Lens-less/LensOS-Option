@@ -27,7 +27,7 @@
 
 - [`operations/`](operations/) - 当前运维契约、公开发布边界与生产运行手册。
 - [`product/`](product/) - 当前产品规格、发布硬化规格与后续 superseding 决议。
-- [`research/`](research/) - 研究输入与 North Star PRD；提供方向，不直接构成发布验收。
+- [`research/`](research/) - 研究输入与历史方向；不是当前 North Star，也不直接构成发布验收。
 - [`automation/`](automation/) - 自动化运行手册、goal board、handoff 与验证记录；保留为过程证据与运维上下文，**不是当前产品/部署契约**。
 - [`archive/`](archive/) - 已完成、已替代或仅供追溯的历史材料。
 

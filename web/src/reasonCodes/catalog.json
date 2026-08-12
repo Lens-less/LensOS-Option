@@ -37,10 +37,42 @@
       "detail": "连续观测尚未达到提升门槛；不会提前宣称数据源已受信任。"
     }
   },
+  "DATA_TRUST_THRESHOLD_EVIDENCE_MISSING": {
+    "shell": {
+      "title": "可信提升门槛证据缺失",
+      "detail": "快照声称已提升可信度，但没有携带连续通过次数或观察时长门槛；引擎按降级处理，不接受宽松默认值。"
+    },
+    "public": {
+      "title": "可信提升门槛无法验证",
+      "detail": "报告缺少可信提升所需的门槛证据；页面保持保守状态，不把该数据源标记为可信。"
+    },
+    "report": {
+      "label": "可信提升门槛证据缺失",
+      "action": "系统继续采集包含完整 6 次连续通过与 60 秒观察门槛的证据。",
+      "ownerLabel": "系统持续观察",
+      "queue": "system"
+    }
+  },
   "DELTA_OUT_OF_RANGE": {
     "shell": {
       "title": "delta 不在研究区间内",
       "detail": "该行权价的 |delta| 超出 0.03–0.15 的筛选窗口。"
+    }
+  },
+  "DTE_EVIDENCE_CONFLICT": {
+    "shell": {
+      "title": "候选期限证据互相矛盾",
+      "detail": "显式 DTE 与到期日推导结果冲突，或期限字段无法解析；该候选已整行阻断，不会静默改值。"
+    },
+    "public": {
+      "title": "候选期限证据无法验证",
+      "detail": "候选的 DTE 与到期日证据冲突或损坏；公开产物已隐藏该候选，而不是猜测期限。"
+    },
+    "report": {
+      "label": "候选 DTE 证据冲突",
+      "action": "系统等待下一份期限字段一致且可解析的候选证据。",
+      "ownerLabel": "系统负责",
+      "queue": "system"
     }
   },
   "EVENTS_FEED_MALFORMED": {
@@ -195,6 +227,22 @@
     "public": {
       "title": "市场快照未通过质量门禁",
       "detail": "公开快照未通过质量门禁；价格、波动率和事件状态不会从失败数据中推断。"
+    }
+  },
+  "MARKET_TRUST_THRESHOLD_EVIDENCE_MISSING": {
+    "shell": {
+      "title": "市场可信门槛元数据缺失",
+      "detail": "市场证据声称可信，但没有提供用于复核提升门槛的元数据；分析记录已降级。"
+    },
+    "public": {
+      "title": "市场可信门槛无法复核",
+      "detail": "可信状态缺少门槛元数据，页面不会把它解释为已验证的数据源。"
+    },
+    "report": {
+      "label": "市场可信门槛元数据缺失",
+      "action": "系统重新生成带完整门槛与观察证据的市场快照。",
+      "ownerLabel": "系统负责",
+      "queue": "system"
     }
   },
   "MISSING_30_60_DAY_RECONCILIATION": {
@@ -485,6 +533,22 @@
     "report": {
       "label": "市场可信观察尚未完成",
       "action": "系统继续累计连续市场观察；不需要操作员补录数据。",
+      "ownerLabel": "系统持续观察",
+      "queue": "system"
+    }
+  },
+  "TRUST_PROMOTION_MINIMUMS_MISSING": {
+    "shell": {
+      "title": "可信提升最低门槛缺失",
+      "detail": "持久化可信证据没有声明最低连续通过次数或最低观察时长；状态保持 collecting。"
+    },
+    "public": {
+      "title": "可信提升最低门槛缺失",
+      "detail": "可信证据不完整，不能验证是否达到 6 次连续通过与 60 秒观察要求。"
+    },
+    "report": {
+      "label": "可信提升最低门槛缺失",
+      "action": "系统继续采集并写入完整的提升门槛元数据。",
       "ownerLabel": "系统持续观察",
       "queue": "system"
     }

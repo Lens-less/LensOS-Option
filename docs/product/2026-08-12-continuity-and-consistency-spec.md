@@ -1,6 +1,6 @@
 # LensOS Option · 运营连续性与 fail-closed 一致性 Spec
 
-> 状态：提案 · 起草日 2026-08-12 · 前置文档 [2026-08-03-public-release-hardening-spec.md](2026-08-03-public-release-hardening-spec.md)
+> 状态：仓库改造已完成，外部运维前置待 owner · 起草/实施日 2026-08-12 · 前置文档 [2026-08-03-public-release-hardening-spec.md](2026-08-03-public-release-hardening-spec.md)
 >
 > 第二轮 spec 回答"为什么还不能挂出去"。本文档回答**"在信号验证样本凑齐之前
 > （预计 2026-10 中旬），工程时间应该花在哪、明确不花在哪"**。

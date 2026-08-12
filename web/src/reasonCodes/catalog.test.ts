@@ -18,6 +18,12 @@ type CatalogSurface = keyof CatalogData[string];
 
 const CATALOG = catalogData as CatalogData;
 const CATALOG_CODES = Object.keys(CATALOG);
+const FAIL_CLOSED_REASON_CODES = [
+  "DATA_TRUST_THRESHOLD_EVIDENCE_MISSING",
+  "DTE_EVIDENCE_CONFLICT",
+  "MARKET_TRUST_THRESHOLD_EVIDENCE_MISSING",
+  "TRUST_PROMOTION_MINIMUMS_MISSING",
+] as const;
 
 function expectedCodes(surface: CatalogSurface): string[] {
   return CATALOG_CODES.filter((code) => CATALOG[code][surface] !== undefined);
@@ -51,5 +57,13 @@ describe("reason code catalog", () => {
     expect(GENERATED_PUBLIC_REASON_CODE_READINGS).toEqual(
       PUBLIC_REASON_CODE_READINGS,
     );
+  });
+
+  it("publishes copy for every new fail-closed reason code", () => {
+    for (const code of FAIL_CLOSED_REASON_CODES) {
+      expect(REASON_CODE_CATALOG[code]?.shell).toBeDefined();
+      expect(REASON_CODE_CATALOG[code]?.public).toBeDefined();
+      expect(REASON_CODE_CATALOG[code]?.report).toBeDefined();
+    }
   });
 });
