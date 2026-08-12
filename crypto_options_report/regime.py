@@ -545,6 +545,11 @@ def _exchange_event_score(events: Any) -> float | None:
     if events.get("locked_currencies") or events.get("locked_indices"):
         return 0.8
     macro_events = events.get("macro_events")
+    macro_events_status = events.get("macro_events_status")
+    if macro_events_status == "not_collected":
+        return None
+    if macro_events_status == "collected" and not isinstance(macro_events, list):
+        return None
     if isinstance(macro_events, list) and macro_events:
         severities = [
             _numeric_value(event, "severity", aliases=("score",))
@@ -553,7 +558,12 @@ def _exchange_event_score(events: Any) -> float | None:
         ]
         measured = [value for value in severities if value is not None]
         return _clamp01(max(measured)) if measured else None
-    return 0.0
+    if isinstance(macro_events, list) and (
+        macro_events_status == "collected"
+        or events.get("scope") != "exchange_native_only"
+    ):
+        return 0.0
+    return None
 
 
 def _numeric_value(

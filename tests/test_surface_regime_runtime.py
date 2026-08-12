@@ -14,11 +14,51 @@ from crypto_options_report.market_data import (
     write_snapshot_fixture,
     write_snapshot_trust_state,
 )
-from crypto_options_report.regime import build_regime_permission_state
+from crypto_options_report.regime import (
+    _exchange_event_score,
+    build_regime_permission_state,
+)
 from crypto_options_report.surface import build_vol_surface_and_candidate_research
 
 
 class SurfaceRegimeRuntimeTests(unittest.TestCase):
+    def test_uncollected_macro_calendar_is_not_zero_event_risk(self):
+        self.assertIsNone(
+            _exchange_event_score(
+                {
+                    "exchange_locked": False,
+                    "locked_currencies": [],
+                    "locked_indices": [],
+                    "macro_events": None,
+                    "macro_events_status": "not_collected",
+                    "scope": "exchange_native_only",
+                }
+            )
+        )
+        self.assertIsNone(
+            _exchange_event_score(
+                {
+                    "exchange_locked": False,
+                    "locked_currencies": [],
+                    "locked_indices": [],
+                    "macro_events": [],
+                    "scope": "exchange_native_only",
+                }
+            )
+        )
+        self.assertEqual(
+            0.0,
+            _exchange_event_score(
+                {
+                    "exchange_locked": False,
+                    "locked_currencies": [],
+                    "locked_indices": [],
+                    "macro_events": [],
+                    "macro_events_status": "collected",
+                }
+            ),
+        )
+
     def test_rolling_observation_respects_explicit_percent_point_iv_unit(self):
         snapshot = {
             "captured_at": "2026-07-14T00:00:00Z",
@@ -349,6 +389,7 @@ class SurfaceRegimeRuntimeTests(unittest.TestCase):
                 "locked_currencies": [],
                 "locked_indices": [],
                 "macro_events": [],
+                "macro_events_status": "collected",
                 "scope": "exchange_native_only",
             },
         }

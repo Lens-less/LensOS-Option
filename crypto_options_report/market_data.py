@@ -759,6 +759,11 @@ def _select_research_summaries(
             dte_days is not None
             and COLLECTION_DTE_RANGE_DAYS[0] <= dte_days <= COLLECTION_DTE_RANGE_DAYS[1]
         )
+        moneyness_low, moneyness_high, _ = _preferred_moneyness_band(option_type)
+        in_preferred_moneyness = (
+            moneyness is not None
+            and moneyness_low <= moneyness <= moneyness_high
+        )
         liquid = _summary_has_preferred_liquidity(summary)
         ranked.append(
             {
@@ -770,6 +775,7 @@ def _select_research_summaries(
                 "moneyness": moneyness,
                 "in_target_dte": in_target_dte,
                 "in_research_dte": in_research_dte,
+                "in_preferred_moneyness": in_preferred_moneyness,
                 "preferred_liquidity": liquid,
             }
         )
@@ -783,6 +789,7 @@ def _select_research_summaries(
         if (
             item["in_target_dte"]
             and item["option_type"] in {"call", "put"}
+            and item["in_preferred_moneyness"]
             and item["preferred_liquidity"]
         ):
             preferred_groups.setdefault(
@@ -795,22 +802,36 @@ def _select_research_summaries(
     # never starve the band the product actually screens: a short-dated group
     # taking budget from a 20-day one would trade the report's own data for
     # validation cohorts.
-    qualifying_groups = [
-        (key, rows)
-        for key, rows in sorted(
-            preferred_groups.items(),
-            key=lambda item: (
-                not any(row["in_research_dte"] for row in item[1]),
-                item[0],
+    expiry_dates = sorted({expiry for expiry, _ in preferred_groups})
+    qualifying_expiries = [
+        expiry
+        for expiry in sorted(
+            expiry_dates,
+            key=lambda expiry: (
+                not any(
+                    row["in_research_dte"]
+                    for option_type in ("call", "put")
+                    for row in preferred_groups.get((expiry, option_type), [])
+                ),
+                expiry,
             ),
         )
-        if len(rows) >= min_per_expiry
+        if all(
+            len(preferred_groups.get((expiry, option_type), [])) >= min_per_expiry
+            for option_type in ("call", "put")
+        )
     ]
     selected_items: list[dict[str, Any]] = []
     fallback_used = True
-    if effective_limit >= min_per_expiry and qualifying_groups:
-        group_limit = max(1, effective_limit // min_per_expiry)
-        chosen_groups = qualifying_groups[:group_limit]
+    two_sided_minimum = 2 * min_per_expiry
+    if effective_limit >= two_sided_minimum and qualifying_expiries:
+        expiry_limit = max(1, effective_limit // two_sided_minimum)
+        chosen_expiries = qualifying_expiries[:expiry_limit]
+        chosen_groups = [
+            ((expiry, option_type), preferred_groups[(expiry, option_type)])
+            for expiry in chosen_expiries
+            for option_type in ("call", "put")
+        ]
         for _, rows in chosen_groups:
             selected_items.extend(rows[:min_per_expiry])
         next_indexes = [min_per_expiry for _ in chosen_groups]
@@ -1112,8 +1133,11 @@ def _fetch_exchange_events_feed(
         "exchange_locked": result.get("locked"),
         "locked_currencies": [str(item) for item in locked_currencies],
         "locked_indices": [str(item) for item in locked_indices],
-        # Explicitly empty: public/status is exchange health, not a macro feed.
-        "macro_events": [],
+        # `public/status` is exchange health, not a macro calendar.  Null is
+        # deliberate: an empty list would claim that a calendar was collected
+        # and confirmed to contain no events.
+        "macro_events": None,
+        "macro_events_status": "not_collected",
         "source_endpoint": "public/status",
         "scope": "exchange_native_only",
         "provenance": _feed_provenance(
@@ -1309,6 +1333,123 @@ def build_market_data_status(
     }
 
 
+def isolate_validation_evidence(
+    snapshot: dict[str, Any],
+    *,
+    data_status: dict[str, Any],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Return only expiry evidence that may enter longitudinal validation.
+
+    The report-level quality verdict remains an all-snapshot verdict.  Series
+    and signal validation, however, consume independent expiry cohorts.  A
+    failed expiry is therefore quarantined here without turning a healthy peer
+    expiry from the same capture into missing evidence.  Snapshot-wide faults
+    (age, fetch/feed failures, malformed responses) still reject every expiry.
+    """
+    gate = dict(data_status.get("quality_gate") or {})
+    per_expiry = [
+        dict(item)
+        for item in gate.get("per_expiry") or []
+        if isinstance(item, dict)
+    ]
+    snapshot_reason_codes = list(gate.get("snapshot_reason_codes") or [])
+    if not snapshot_reason_codes and "snapshot_reason_codes" not in gate:
+        expiry_reason_codes = {
+            str(code)
+            for item in per_expiry
+            for code in item.get("reason_codes") or []
+        }
+        snapshot_reason_codes = [
+            str(code)
+            for code in gate.get("reason_codes") or []
+            if str(code) not in expiry_reason_codes
+        ]
+    if snapshot_reason_codes:
+        return None, []
+
+    eligible_expiries = {
+        str(item.get("expiry_date") or "")
+        for item in per_expiry
+        if item.get("status") == "pass" and item.get("expiry_date")
+    }
+    isolated = [
+        {
+            "captured_at": snapshot.get("captured_at"),
+            "expiry_date": str(item.get("expiry_date") or ""),
+            "reason_codes": [str(code) for code in item.get("reason_codes") or []],
+        }
+        for item in per_expiry
+        if item.get("status") == "fail" and item.get("expiry_date")
+    ]
+    if not eligible_expiries:
+        return None, isolated
+
+    rows: list[dict[str, Any]] = []
+    for row in snapshot.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        summary = row.get("summary") or {}
+        ticker = row.get("ticker") or {}
+        instrument_name = (
+            row.get("instrument_name")
+            or ticker.get("instrument_name")
+            or summary.get("instrument_name")
+        )
+        try:
+            expiry_date = str(_parse_option_metadata(instrument_name)["expiry_date"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if expiry_date in eligible_expiries:
+            rows.append(row)
+
+    if not rows:
+        return None, isolated
+
+    evidence_snapshot = dict(snapshot)
+    evidence_snapshot["rows"] = rows
+    evidence_snapshot["selected_instrument_count"] = len(rows)
+    policy = snapshot.get("selection_policy")
+    if isinstance(policy, dict):
+        evidence_policy = dict(policy)
+        selected_per_expiry = policy.get("selected_per_expiry")
+        if isinstance(selected_per_expiry, dict):
+            evidence_policy["selected_per_expiry"] = {
+                str(expiry): count
+                for expiry, count in selected_per_expiry.items()
+                if str(expiry) in eligible_expiries
+            }
+        evidence_snapshot["selection_policy"] = evidence_policy
+    return evidence_snapshot, isolated
+
+
+def build_validation_surface(
+    snapshot: dict[str, Any],
+    *,
+    now_ms: int,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any]]:
+    """Build the production surface from only validation-eligible expiries."""
+    # Import locally to keep market_data's low-level collection module free of
+    # an import cycle: surface already consumes market-data helpers.
+    from .surface import build_vol_surface_and_candidate_research
+
+    data_status = build_market_data_status(snapshot, now_ms=now_ms)
+    evidence_snapshot, isolated_expiries = isolate_validation_evidence(
+        snapshot,
+        data_status=data_status,
+    )
+    if evidence_snapshot is None:
+        return None, isolated_expiries, data_status
+
+    evidence_status = build_market_data_status(evidence_snapshot, now_ms=now_ms)
+    vol_surface_status, _ = build_vol_surface_and_candidate_research(
+        market_snapshot=evidence_snapshot,
+        generated_at=str(snapshot.get("captured_at") or ""),
+        data_status=evidence_status,
+        pnl_evidence={"status": "pass"},
+    )
+    return vol_surface_status, isolated_expiries, data_status
+
+
 def normalize_market_snapshot(
     snapshot: dict[str, Any],
     *,
@@ -1402,6 +1543,7 @@ def evaluate_market_data_quality(
     if fetch_errors:
         overall_reason_codes.append("PUBLIC_FETCH_ERRORS_PRESENT")
 
+    snapshot_reason_codes = list(overall_reason_codes)
     for expiry_date in sorted(quotes_by_expiry):
         expiry_quotes = quotes_by_expiry[expiry_date]
         invalid_quotes = [q for q in expiry_quotes if q["quality_status"] != "valid"]
@@ -1468,10 +1610,18 @@ def evaluate_market_data_quality(
         )
 
     passed = not overall_reason_codes and bool(per_expiry)
+    advisory_reason_codes: list[str] = []
+    selection_policy = (
+        normalized_snapshot.get("collection_scope") or {}
+    ).get("selection_policy") or {}
+    if selection_policy.get("fallback_used") is True:
+        advisory_reason_codes.append("SELECTION_POLICY_FALLBACK_USED")
     return {
         "passed": passed,
         "action_if_fail": "RESEARCH_ONLY_NO_TRADE",
         "reason_codes": overall_reason_codes,
+        "snapshot_reason_codes": snapshot_reason_codes,
+        "advisory_reason_codes": advisory_reason_codes,
         "thresholds": normalized_limits,
         "per_expiry": per_expiry,
         "summary": {
@@ -1895,21 +2045,37 @@ def _validate_events_feed(
     payload: dict[str, Any],
     normalized_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
+    macro_events = payload.get("macro_events")
+    macro_events_status = payload.get("macro_events_status")
+    legacy_not_collected = (
+        macro_events_status is None
+        and payload.get("scope") == "exchange_native_only"
+        and isinstance(macro_events, list)
+    )
+    macro_contract_valid = (
+        macro_events_status == "not_collected" and macro_events in (None, [])
+    ) or (
+        macro_events_status == "collected" and isinstance(macro_events, list)
+    ) or legacy_not_collected
     if (
         "exchange_locked" not in payload
         or not isinstance(payload.get("locked_currencies"), list)
-        or not isinstance(payload.get("macro_events"), list)
+        or not macro_contract_valid
         or payload.get("scope") != "exchange_native_only"
     ):
         return _malformed_feed("EVENTS_FEED_MALFORMED")
     # A locked exchange is valid evidence, not missing data.  The downstream
     # regime/risk gates decide that it blocks actions.
-    return _timestamped_feed_status(
+    status = _timestamped_feed_status(
         payload,
         normalized_snapshot,
         timestamp_field="observed_at",
         stale_reason="EVENTS_FEED_STALE",
     )
+    status["macro_events_status"] = (
+        "not_collected" if legacy_not_collected else macro_events_status
+    )
+    return status
 
 
 def _timestamped_feed_status(

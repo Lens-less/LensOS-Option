@@ -129,6 +129,26 @@ describe("PublicEvidenceView public truth labels", () => {
     expect(screen.getByText(/机器码仍会原样展示/)).toBeInTheDocument();
   });
 
+  it("renders quality-gate advisories on the public evidence surface", () => {
+    const fallbackSelection = report();
+    fallbackSelection.data_status!.quality_gate = {
+      passed: true,
+      reason_codes: [],
+      advisory_reason_codes: ["SELECTION_POLICY_FALLBACK_USED"],
+    };
+
+    render(
+      <PublicEvidenceView
+        freshness={freshness}
+        report={fallbackSelection}
+        summary={null}
+      />,
+    );
+
+    expect(screen.getByText("SELECTION_POLICY_FALLBACK_USED")).toBeInTheDocument();
+    expect(screen.getByText("采集使用了选样回退")).toBeInTheDocument();
+  });
+
   it("uses the report's VRP minimum and explains quarantined quotes", () => {
     const constrained = report();
     constrained.vrp_status = {

@@ -15,6 +15,12 @@
       "queue": "system"
     }
   },
+  "BAD_QUOTE_RATIO_EXCEEDED": {
+    "public": {
+      "title": "坏报价比例超过门槛",
+      "detail": "该到期日的无效或不可交易报价占比超过预先登记的质量上限，因此只隔离该到期日。"
+    }
+  },
   "CALIBRATION_NOT_IMPLEMENTED": {
     "shell": {
       "title": "校准与模型提升尚未实现",
@@ -29,6 +35,12 @@
       "action": "系统需要实现并复核校准能力；在此之前保持零仓位。",
       "ownerLabel": "系统负责",
       "queue": "system"
+    }
+  },
+  "CROSSED_MARKET": {
+    "public": {
+      "title": "买卖盘倒挂",
+      "detail": "卖一价低于买一价，报价无法作为可靠的可交易市场证据。"
     }
   },
   "DATA_TRUST_OBSERVATION_COLLECTING": {
@@ -95,6 +107,12 @@
       "action": "系统等待下一份期限字段一致且可解析的候选证据。",
       "ownerLabel": "系统负责",
       "queue": "system"
+    }
+  },
+  "DUPLICATE_INSTRUMENT_OR_STRIKE": {
+    "public": {
+      "title": "合约或行权价重复",
+      "detail": "同一到期日出现重复合约或重复的行权价方向组合，该到期日已被隔离。"
     }
   },
   "EVENTS_FEED_MALFORMED": {
@@ -223,6 +241,12 @@
       "queue": "operator"
     }
   },
+  "FUTURE_QUOTE_TIMESTAMP": {
+    "public": {
+      "title": "报价时间来自未来",
+      "detail": "报价时间超过允许的时钟偏差，不能作为当前或历史验证证据。"
+    }
+  },
   "INDEX_SPOT_SUBSTITUTED_FOR_FORWARD": {
     "shell": {
       "title": "用现货指数替代了远期",
@@ -247,6 +271,12 @@
       "detail": "有效观测尚未达到发布统计量所需的最低样本数；信号结论保持阻断。"
     }
   },
+  "INSUFFICIENT_VALID_QUOTES": {
+    "public": {
+      "title": "有效报价数量不足",
+      "detail": "该到期日通过全部报价质量检查的合约数量低于最低门槛，因此不会进入跨日验证。"
+    }
+  },
   "INSUFFICIENT_VRP_HISTORY": {
     "shell": {
       "title": "VRP 样本不足",
@@ -259,6 +289,30 @@
     "public": {
       "title": "VRP 样本不足",
       "detail": "VRP 有效读数少于报告声明的最低样本数，头条数字保持不可用。"
+    }
+  },
+  "INVALID_BID_IV": {
+    "public": {
+      "title": "买方隐含波动率无效",
+      "detail": "该到期日包含超出有效范围的买方隐含波动率；相关到期日证据已被隔离。"
+    }
+  },
+  "INVALID_ASK_IV": {
+    "public": {
+      "title": "卖方隐含波动率无效",
+      "detail": "该到期日包含超出有效范围的卖方隐含波动率；相关到期日证据已被隔离。"
+    }
+  },
+  "INVALID_MARK_IV": {
+    "public": {
+      "title": "标记隐含波动率无效",
+      "detail": "该到期日包含超出有效范围的标记隐含波动率；相关到期日证据已被隔离。"
+    }
+  },
+  "INVALID_UNDERLYING_PRICE": {
+    "public": {
+      "title": "标的价格无效",
+      "detail": "期权报价缺少有效的正数标的价格，因此无法规范化或验证。"
     }
   },
   "MARKET_DATA_AGE_EXCEEDED": {
@@ -319,6 +373,18 @@
       "queue": "system"
     }
   },
+  "MISSING_ASK": {
+    "public": {
+      "title": "缺少卖一价",
+      "detail": "报价没有可复核的卖一价，相关证据不会进入验证。"
+    }
+  },
+  "MISSING_ASK_IV": {
+    "public": {
+      "title": "缺少卖方隐含波动率",
+      "detail": "报价没有卖方隐含波动率，相关证据不会进入验证。"
+    }
+  },
   "MISSING_ACCOUNT_API_SNAPSHOT": {
     "shell": {
       "title": "没有接入只读账户快照",
@@ -339,6 +405,18 @@
       "queue": "system"
     }
   },
+  "MISSING_BID": {
+    "public": {
+      "title": "缺少买一价",
+      "detail": "报价没有可复核的买一价，无法支持卖方可成交溢价。"
+    }
+  },
+  "MISSING_BID_IV": {
+    "public": {
+      "title": "缺少买方隐含波动率",
+      "detail": "报价没有买方隐含波动率，相关证据不会进入验证。"
+    }
+  },
   "MISSING_CALIBRATED_MODEL": {
     "report": {
       "label": "缺少已校准模型",
@@ -357,6 +435,12 @@
     "shell": {
       "title": "候选缺少希腊值",
       "detail": "delta 或 vega 缺失。它们是损失分布的输入，代入占位数会让压力成本变成占位数的产物，因此该候选的 EV 不可用。"
+    }
+  },
+  "MISSING_CANONICAL_METADATA": {
+    "public": {
+      "title": "缺少规范合约元数据",
+      "detail": "合约名、行权价或结算字段无法规范解析，因此该报价被隔离。"
     }
   },
   "MISSING_FIT_RESIDUAL": {
@@ -385,6 +469,12 @@
       "detail": "VRP 需要连续 DVOL 历史；缺失值不会显示成 0。"
     }
   },
+  "MISSING_DEPTH": {
+    "public": {
+      "title": "缺少盘口深度",
+      "detail": "报价没有正数盘口数量，无法证明存在可交易深度。"
+    }
+  },
   "MISSING_EXTERNAL_PROMOTION_REVIEW": {
     "report": {
       "label": "缺少模型提升复核",
@@ -407,6 +497,24 @@
       "action": "系统持续累计 Paper 观察并生成对账记录。",
       "ownerLabel": "系统持续观察",
       "queue": "system"
+    }
+  },
+  "MISSING_MARK_IV": {
+    "public": {
+      "title": "缺少标记隐含波动率",
+      "detail": "报价没有标记隐含波动率，无法进入曲面与跨日验证。"
+    }
+  },
+  "MISSING_SETTLEMENT_CURRENCY": {
+    "public": {
+      "title": "缺少结算币种",
+      "detail": "场所没有显式给出结算币种，系统不会用其他字段猜测。"
+    }
+  },
+  "MISSING_SPREAD_RATIO": {
+    "public": {
+      "title": "缺少价差比例",
+      "detail": "买卖报价不足以计算价差比例，无法通过报价质量检查。"
     }
   },
   "MISSING_UNDERLYING_HISTORY": {
@@ -475,6 +583,12 @@
       "detail": "当前研究权限不允许无保护的裸卖结构；相关结构只作为被拒绝的对照，不构成建议。"
     }
   },
+  "NEGATIVE_SPREAD": {
+    "public": {
+      "title": "价差为负",
+      "detail": "计算出的买卖价差为负，报价结构不可信。"
+    }
+  },
   "NO_ELIGIBLE_CANDIDATES": {
     "shell": {
       "title": "本次快照没有合格候选",
@@ -489,6 +603,18 @@
     "public": {
       "title": "买价不是正数",
       "detail": "该期权没有正的可成交买价，不能构成卖方信用或有效信号观测。"
+    }
+  },
+  "NON_POSITIVE_ASK": {
+    "public": {
+      "title": "卖一价不是正数",
+      "detail": "卖一价为零或负数，相关报价不能作为市场证据。"
+    }
+  },
+  "NON_POSITIVE_MID": {
+    "public": {
+      "title": "中间价不是正数",
+      "detail": "中间价为零或负数，无法用于报价质量或曲面计算。"
     }
   },
   "NO_OPEN_POSITIONS": {
@@ -655,6 +781,22 @@
       "queue": "system"
     }
   },
+  "SELECTION_POLICY_FALLBACK_USED": {
+    "public": {
+      "title": "采集使用了选样回退",
+      "detail": "上游报价不足以满足首选 moneyness 分层的最小配额；结果仅保留研究用途，并显式披露该回退。"
+    },
+    "shell": {
+      "title": "采集使用了选样回退",
+      "detail": "上游报价不足以满足首选 moneyness 分层的最小配额；快照保留研究用途，但该回退会随质量证据显式披露。"
+    },
+    "report": {
+      "label": "选样回退已使用",
+      "action": "检查上游可用报价与首选分层覆盖；不得通过放宽质量阈值消除提示。",
+      "ownerLabel": "数据采集负责",
+      "queue": "system"
+    }
+  },
   "SIGNAL_HAS_NO_CROSS_SECTIONAL_VARIATION": {
     "public": {
       "title": "信号缺少横截面差异",
@@ -667,10 +809,28 @@
       "detail": "以中价衡量的价差比例超过阈值，可成交性存疑。"
     }
   },
+  "SPREAD_SANITY_FAILED": {
+    "public": {
+      "title": "买卖价差合理性失败",
+      "detail": "该到期日包含缺失、倒挂或过宽的买卖盘，未通过价差合理性检查。"
+    }
+  },
+  "SPREAD_TOO_WIDE": {
+    "public": {
+      "title": "买卖价差过宽",
+      "detail": "报价价差超过预登记的质量上限，相关报价被隔离。"
+    }
+  },
   "SPREAD_WIDTH_OUT_OF_RANGE": {
     "shell": {
       "title": "价差宽度不在区间内",
       "detail": "两腿行权价间距超出 5000–15000 的窗口。"
+    }
+  },
+  "STALE_QUOTE": {
+    "public": {
+      "title": "报价已经陈旧",
+      "detail": "报价年龄超过质量门禁上限，不能继续作为当前市场证据。"
     }
   },
   "SURFACE_QUALITY_FAIL": {

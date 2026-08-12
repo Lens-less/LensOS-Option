@@ -48,6 +48,8 @@ export interface EvidenceDataStatus {
   };
   quality_gate?: {
     passed?: boolean;
+    reason_codes?: string[];
+    advisory_reason_codes?: string[];
     summary?: {
       expiries_evaluated?: number;
       fetch_errors?: number;

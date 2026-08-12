@@ -9,9 +9,17 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "尚未运行对齐回测",
     "detail": "没有与当前策略对齐的回测产物；策略结论保持阻断。"
   },
+  BAD_QUOTE_RATIO_EXCEEDED: {
+    "title": "坏报价比例超过门槛",
+    "detail": "该到期日的无效或不可交易报价占比超过预先登记的质量上限，因此只隔离该到期日。"
+  },
   CALIBRATION_NOT_IMPLEMENTED: {
     "title": "校准与模型提升尚未实现",
     "detail": "排序尚未经过 walk-forward 校准，只能作为研究观察，不能作为收益预测。"
+  },
+  CROSSED_MARKET: {
+    "title": "买卖盘倒挂",
+    "detail": "卖一价低于买一价，报价无法作为可靠的可交易市场证据。"
   },
   DATA_TRUST_OBSERVATION_COLLECTING: {
     "title": "数据可信度仍在积累",
@@ -32,6 +40,10 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
   DTE_EVIDENCE_CONFLICT: {
     "title": "候选期限证据无法验证",
     "detail": "候选的 DTE 与到期日证据冲突或损坏；公开产物已隐藏该候选，而不是猜测期限。"
+  },
+  DUPLICATE_INSTRUMENT_OR_STRIKE: {
+    "title": "合约或行权价重复",
+    "detail": "同一到期日出现重复合约或重复的行权价方向组合，该到期日已被隔离。"
   },
   EVENTS_FEED_MALFORMED: {
     "title": "交易所事件源格式异常",
@@ -77,6 +89,10 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "外部发布授权尚未完成",
     "detail": "研究运行时不能自行授予外部发布权限；在独立授权证据完成前，发布门保持 NO-GO。"
   },
+  FUTURE_QUOTE_TIMESTAMP: {
+    "title": "报价时间来自未来",
+    "detail": "报价时间超过允许的时钟偏差，不能作为当前或历史验证证据。"
+  },
   INSUFFICIENT_CAPTURE_DATES: {
     "title": "跨日序列的采集日期不足",
     "detail": "有效采集日期尚不足以判断同一合约的持续性；缺失日期不会被插值或当作零。"
@@ -89,9 +105,29 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "信号观测数量不足",
     "detail": "有效观测尚未达到发布统计量所需的最低样本数；信号结论保持阻断。"
   },
+  INSUFFICIENT_VALID_QUOTES: {
+    "title": "有效报价数量不足",
+    "detail": "该到期日通过全部报价质量检查的合约数量低于最低门槛，因此不会进入跨日验证。"
+  },
   INSUFFICIENT_VRP_HISTORY: {
     "title": "VRP 样本不足",
     "detail": "VRP 有效读数少于报告声明的最低样本数，头条数字保持不可用。"
+  },
+  INVALID_BID_IV: {
+    "title": "买方隐含波动率无效",
+    "detail": "该到期日包含超出有效范围的买方隐含波动率；相关到期日证据已被隔离。"
+  },
+  INVALID_ASK_IV: {
+    "title": "卖方隐含波动率无效",
+    "detail": "该到期日包含超出有效范围的卖方隐含波动率；相关到期日证据已被隔离。"
+  },
+  INVALID_MARK_IV: {
+    "title": "标记隐含波动率无效",
+    "detail": "该到期日包含超出有效范围的标记隐含波动率；相关到期日证据已被隔离。"
+  },
+  INVALID_UNDERLYING_PRICE: {
+    "title": "标的价格无效",
+    "detail": "期权报价缺少有效的正数标的价格，因此无法规范化或验证。"
   },
   MARKET_DATA_AGE_EXCEEDED: {
     "title": "市场快照已经过期",
@@ -109,9 +145,29 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "市场可信门槛无法复核",
     "detail": "可信状态缺少门槛元数据，页面不会把它解释为已验证的数据源。"
   },
+  MISSING_ASK: {
+    "title": "缺少卖一价",
+    "detail": "报价没有可复核的卖一价，相关证据不会进入验证。"
+  },
+  MISSING_ASK_IV: {
+    "title": "缺少卖方隐含波动率",
+    "detail": "报价没有卖方隐含波动率，相关证据不会进入验证。"
+  },
+  MISSING_BID: {
+    "title": "缺少买一价",
+    "detail": "报价没有可复核的买一价，无法支持卖方可成交溢价。"
+  },
+  MISSING_BID_IV: {
+    "title": "缺少买方隐含波动率",
+    "detail": "报价没有买方隐含波动率，相关证据不会进入验证。"
+  },
   MISSING_CAPTURED_AT: {
     "title": "快照缺少采集时间",
     "detail": "没有可验证的采集时间就无法归属观察日或到期 cohort；该快照已从样本中排除。"
+  },
+  MISSING_CANONICAL_METADATA: {
+    "title": "缺少规范合约元数据",
+    "detail": "合约名、行权价或结算字段无法规范解析，因此该报价被隔离。"
   },
   MISSING_FIT_RESIDUAL: {
     "title": "缺少曲面拟合残差",
@@ -124,6 +180,22 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
   MISSING_DVOL_HISTORY: {
     "title": "缺少 DVOL 历史",
     "detail": "VRP 需要连续 DVOL 历史；缺失值不会显示成 0。"
+  },
+  MISSING_DEPTH: {
+    "title": "缺少盘口深度",
+    "detail": "报价没有正数盘口数量，无法证明存在可交易深度。"
+  },
+  MISSING_MARK_IV: {
+    "title": "缺少标记隐含波动率",
+    "detail": "报价没有标记隐含波动率，无法进入曲面与跨日验证。"
+  },
+  MISSING_SETTLEMENT_CURRENCY: {
+    "title": "缺少结算币种",
+    "detail": "场所没有显式给出结算币种，系统不会用其他字段猜测。"
+  },
+  MISSING_SPREAD_RATIO: {
+    "title": "缺少价差比例",
+    "detail": "买卖报价不足以计算价差比例，无法通过报价质量检查。"
   },
   MISSING_UNDERLYING_HISTORY: {
     "title": "缺少标的历史序列",
@@ -145,6 +217,10 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "裸卖权限保持关闭",
     "detail": "当前研究权限不允许无保护的裸卖结构；相关结构只作为被拒绝的对照，不构成建议。"
   },
+  NEGATIVE_SPREAD: {
+    "title": "价差为负",
+    "detail": "计算出的买卖价差为负，报价结构不可信。"
+  },
   NO_ELIGIBLE_CANDIDATES: {
     "title": "本次没有合格研究候选",
     "detail": "没有合约同时满足期限、delta、报价、流动性和信用门槛；这不是故障。"
@@ -152,6 +228,14 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
   NON_POSITIVE_BID: {
     "title": "买价不是正数",
     "detail": "该期权没有正的可成交买价，不能构成卖方信用或有效信号观测。"
+  },
+  NON_POSITIVE_ASK: {
+    "title": "卖一价不是正数",
+    "detail": "卖一价为零或负数，相关报价不能作为市场证据。"
+  },
+  NON_POSITIVE_MID: {
+    "title": "中间价不是正数",
+    "detail": "中间价为零或负数，无法用于报价质量或曲面计算。"
   },
   NO_OPEN_POSITIONS: {
     "title": "没有可评估的持仓",
@@ -201,9 +285,25 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "研究发布证据尚不完整",
     "detail": "必需证据未齐全时，公开表面不会宣称研究产物已经具备发布条件。"
   },
+  SELECTION_POLICY_FALLBACK_USED: {
+    "title": "采集使用了选样回退",
+    "detail": "上游报价不足以满足首选 moneyness 分层的最小配额；结果仅保留研究用途，并显式披露该回退。"
+  },
   SIGNAL_HAS_NO_CROSS_SECTIONAL_VARIATION: {
     "title": "信号缺少横截面差异",
     "detail": "同一观察日内的信号值没有足够差异，无法计算有意义的横截面排序相关性。"
+  },
+  SPREAD_SANITY_FAILED: {
+    "title": "买卖价差合理性失败",
+    "detail": "该到期日包含缺失、倒挂或过宽的买卖盘，未通过价差合理性检查。"
+  },
+  SPREAD_TOO_WIDE: {
+    "title": "买卖价差过宽",
+    "detail": "报价价差超过预登记的质量上限，相关报价被隔离。"
+  },
+  STALE_QUOTE: {
+    "title": "报价已经陈旧",
+    "detail": "报价年龄超过质量门禁上限，不能继续作为当前市场证据。"
   },
   SURFACE_QUALITY_FAIL: {
     "title": "波动率曲面未通过质量检查",

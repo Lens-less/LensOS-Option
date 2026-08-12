@@ -5,6 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
+        English reports are welcome; you may answer every field in English.
         请不要在 issue 中粘贴任何凭证、账户数据或私有行情快照。
         安全漏洞请通过 GitHub Security Advisory 私下报告，参见 [SECURITY.md](../../SECURITY.md)。
 

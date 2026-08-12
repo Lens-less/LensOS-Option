@@ -17,12 +17,18 @@ A harness that cannot separate those two cases would be worse than none.
 
 from __future__ import annotations
 
+import copy
 import math
 import unittest
 from datetime import UTC, date, datetime, time, timedelta
 from itertools import pairwise
 from statistics import NormalDist
 
+from crypto_options_report.market_data import (
+    build_market_data_status,
+    normalize_market_snapshot,
+    parse_timestamp_ms,
+)
 from crypto_options_report.signal_validation import (
     PRE_REGISTERED_AXIS,
     RANK_EQUIVALENCE_THRESHOLD,
@@ -284,6 +290,44 @@ def _build_series(*, richness_reaches_quote: bool) -> tuple[list[dict], dict]:
     return snapshots, _underlying_history(series)
 
 
+def _partially_blocked_snapshot(snapshot: dict) -> tuple[dict, str, set[str]]:
+    """Make one expiry fail its quote gate while leaving peer expiries healthy."""
+    broken = copy.deepcopy(snapshot)
+    captured_at = str(broken["captured_at"])
+    normalized = normalize_market_snapshot(
+        broken,
+        now_ms=parse_timestamp_ms(captured_at),
+    )
+    expiry_names: dict[str, set[str]] = {}
+    for quote in normalized["quotes"]:
+        expiry_names.setdefault(str(quote["expiry_date"]), set()).add(
+            str(quote["instrument_name"])
+        )
+    if len(expiry_names) < 2:
+        raise AssertionError("partial-expiry fixture needs at least two expiries")
+
+    failed_expiry = sorted(expiry_names)[0]
+    failed_names = expiry_names[failed_expiry]
+    for row in broken["rows"]:
+        if row["instrument_name"] in failed_names:
+            row["ticker"]["bid_iv"] = None
+    return broken, failed_expiry, set(expiry_names) - {failed_expiry}
+
+
+def _first_multi_expiry_snapshot(snapshots: list[dict]) -> dict:
+    return next(
+        snapshot
+        for snapshot in snapshots
+        if len(
+            {
+                row["instrument_name"].split("-")[1]
+                for row in snapshot["rows"]
+            }
+        )
+        >= 2
+    )
+
+
 class SignalValidationHarnessTests(unittest.TestCase):
     def test_detects_a_signal_that_is_actually_paid_for(self) -> None:
         snapshots, history = _build_series(richness_reaches_quote=True)
@@ -491,6 +535,36 @@ class PreflightTests(unittest.TestCase):
             with self.subTest(expiry=cohort["expiry_date"]):
                 self.assertTrue(cohort["settlement_close_available"])
                 self.assertGreater(cohort["prospective_observation_count"], 0)
+
+    def test_a_failed_expiry_is_isolated_from_healthy_preflight_cohorts(self) -> None:
+        snapshots, history = _build_series(richness_reaches_quote=True)
+        partial, failed_expiry, passing_expiries = _partially_blocked_snapshot(
+            _first_multi_expiry_snapshot(snapshots)
+        )
+        status = build_market_data_status(
+            partial,
+            now_ms=parse_timestamp_ms(partial["captured_at"]),
+        )
+        self.assertEqual("blocked", status["status"])
+
+        report = build_signal_preflight_report(
+            snapshots=[partial],
+            underlying_history=history,
+            generated_at=partial["captured_at"],
+        )
+
+        self.assertEqual("projected", report["status"])
+        self.assertTrue(report["cohorts"])
+        self.assertNotIn(
+            failed_expiry,
+            {row["expiry_date"] for row in report["cohorts"]},
+        )
+        self.assertTrue(
+            {row["expiry_date"] for row in report["cohorts"]}
+            <= passing_expiries
+        )
+        self.assertEqual(failed_expiry, report["excluded_expiries"][0]["expiry_date"])
+        self.assertIn(partial["captured_at"][:10], report["usable_capture_dates"])
 
     def test_an_expiry_with_no_settlement_close_is_pending_not_dropped(self) -> None:
         snapshots, history = _build_series(richness_reaches_quote=True)
@@ -775,6 +849,27 @@ class SignalValidationFailClosedTests(unittest.TestCase):
         self.assertEqual(excluded[0]["captured_at"], broken["captured_at"])
         self.assertEqual(
             report["sample"]["validated_snapshot_count"], len(snapshots) - 1
+        )
+
+    def test_measurement_counts_a_partially_usable_snapshot(self) -> None:
+        snapshots, history = _build_series(richness_reaches_quote=True)
+        source = _first_multi_expiry_snapshot(snapshots)
+        partial, failed_expiry, _ = _partially_blocked_snapshot(source)
+        source_index = snapshots.index(source)
+
+        report = build_signal_validation_report(
+            snapshots=[*snapshots[:source_index], partial, *snapshots[source_index + 1 :]],
+            underlying_history=history,
+            generated_at="2026-12-01T00:00:00Z",
+        )
+
+        self.assertEqual(
+            len(snapshots),
+            report["sample"]["validated_snapshot_count"],
+        )
+        self.assertEqual(
+            failed_expiry,
+            report["sample"]["excluded_expiries"][0]["expiry_date"],
         )
 
     def test_excludes_exchange_locked_snapshots_from_measurement_and_preflight(

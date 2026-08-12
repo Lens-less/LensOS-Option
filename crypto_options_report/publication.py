@@ -125,6 +125,7 @@ _SERIES_CONFIG_FIELDS = {
 }
 _SIGNAL_SAMPLE_FIELDS = {
     "duplicate_observations_dropped",
+    "excluded_expiries",
     "excluded_snapshot_count",
     "excluded_snapshots",
     "expiry_cohorts",
@@ -221,6 +222,7 @@ _SIGNAL_COHORT_FIELDS = {
     "status",
 }
 _SIGNAL_EXCLUDED_SNAPSHOT_FIELDS = {"captured_at", "reason_code"}
+_EXPIRY_EXCLUSION_FIELDS = {"captured_at", "expiry_date", "reason_codes"}
 _SIGNAL_PRE_REGISTRATION_FIELDS = {
     "axis",
     "document",
@@ -453,6 +455,26 @@ def _annotate_numeric_field_evidence(value: Any, *, evidence_class: str) -> Any:
     return annotated
 
 
+def _project_expiry_exclusions(value: Any, *, field: str) -> list[dict[str, Any]]:
+    projected = []
+    for item in value or []:
+        row = dict(item or {})
+        unexpected = sorted(set(row) - _EXPIRY_EXCLUSION_FIELDS)
+        if unexpected:
+            raise ValueError(
+                "publication blocked: unapproved public field "
+                f"{field}.{unexpected[0]}"
+            )
+        projected.append(
+            {
+                "captured_at": row.get("captured_at"),
+                "expiry_date": row.get("expiry_date"),
+                "reason_codes": list(row.get("reason_codes") or []),
+            }
+        )
+    return projected
+
+
 def _project_signal_artifact(value: dict[str, Any]) -> dict[str, Any]:
     projected: dict[str, Any] = {}
     for field in (
@@ -465,6 +487,7 @@ def _project_signal_artifact(value: dict[str, Any]) -> dict[str, Any]:
         "note",
         "snapshot_count",
         "t_stat_threshold",
+        "usable_capture_dates",
     ):
         if field in value:
             projected[field] = value.get(field)
@@ -519,6 +542,11 @@ def _project_signal_artifact(value: dict[str, Any]) -> dict[str, Any]:
                 {key: row.get(key) for key in sorted(row)}
             )
         projected["excluded_snapshots"] = excluded_snapshots
+    if "excluded_expiries" in value:
+        projected["excluded_expiries"] = _project_expiry_exclusions(
+            value.get("excluded_expiries"),
+            field="excluded_expiries",
+        )
     if "sample" in value:
         sample = dict(value.get("sample") or {})
         unexpected = sorted(set(sample) - _SIGNAL_SAMPLE_FIELDS)
@@ -529,6 +557,10 @@ def _project_signal_artifact(value: dict[str, Any]) -> dict[str, Any]:
         projected["sample"] = _annotate_numeric_field_evidence(
             {
                 "duplicate_observations_dropped": sample.get("duplicate_observations_dropped"),
+                "excluded_expiries": _project_expiry_exclusions(
+                    sample.get("excluded_expiries"),
+                    field="sample.excluded_expiries",
+                ),
                 "excluded_snapshot_count": sample.get("excluded_snapshot_count"),
                 "excluded_snapshots": projected.get("excluded_snapshots", []),
                 "expiry_cohorts": list(sample.get("expiry_cohorts") or []),
@@ -678,10 +710,12 @@ def _project_signal_artifact(value: dict[str, Any]) -> dict[str, Any]:
             "signals",
             "note",
             "excluded_snapshots",
+            "excluded_expiries",
             "snapshot_count",
             "pre_registration",
             "signal_definitions",
             "t_stat_threshold",
+            "usable_capture_dates",
         }
     )
     if unexpected_root:
@@ -704,6 +738,7 @@ def _project_series_artifact(value: dict[str, Any]) -> dict[str, Any]:
         "instrument_count",
         "capture_count",
         "truncated_instruments",
+        "usable_capture_dates",
     ):
         if field in value:
             projected[field] = value.get(field)
@@ -733,6 +768,11 @@ def _project_series_artifact(value: dict[str, Any]) -> dict[str, Any]:
                 )
             excluded.append({key: row.get(key) for key in sorted(row)})
         projected["excluded_captures"] = excluded
+    if "excluded_expiries" in value:
+        projected["excluded_expiries"] = _project_expiry_exclusions(
+            value.get("excluded_expiries"),
+            field="excluded_expiries",
+        )
     if "instruments" in value:
         instruments = []
         for item in value.get("instruments") or []:
@@ -835,8 +875,10 @@ def _project_series_artifact(value: dict[str, Any]) -> dict[str, Any]:
             "cannot_tell",
             "config",
             "excluded_captures",
+            "excluded_expiries",
             "instruments",
             "points",
+            "usable_capture_dates",
         }
     )
     if unexpected_root:
@@ -927,6 +969,25 @@ def _validate_artifact_capture_alignment(
                     description=description,
                     field=f"excluded_snapshots[{index}].captured_at",
                 )
+        excluded_expiries = list(payload.get("excluded_expiries") or [])
+        if isinstance(sample, dict):
+            excluded_expiries.extend(sample.get("excluded_expiries") or [])
+        for index, item in enumerate(excluded_expiries):
+            row = dict(item or {})
+            if _has_artifact_value(row.get("captured_at")):
+                _require_artifact_timestamp_at_or_before(
+                    row["captured_at"],
+                    captured_dt=captured_dt,
+                    description=description,
+                    field=f"excluded_expiries[{index}].captured_at",
+                )
+        for index, value in enumerate(payload.get("usable_capture_dates") or []):
+            _require_artifact_date_at_or_before(
+                value,
+                captured_dt=captured_dt,
+                description=description,
+                field=f"usable_capture_dates[{index}]",
+            )
         for index, item in enumerate(payload.get("cohorts") or []):
             row = dict(item or {})
             for field in ("first_capture_date", "last_capture_date"):
@@ -968,6 +1029,22 @@ def _validate_artifact_capture_alignment(
                 description=description,
                 field=f"excluded_captures[{index}].captured_at",
             )
+    for index, item in enumerate(payload.get("excluded_expiries") or []):
+        row = dict(item or {})
+        if _has_artifact_value(row.get("captured_at")):
+            _require_artifact_timestamp_at_or_before(
+                row["captured_at"],
+                captured_dt=captured_dt,
+                description=description,
+                field=f"excluded_expiries[{index}].captured_at",
+            )
+    for index, value in enumerate(payload.get("usable_capture_dates") or []):
+        _require_artifact_date_at_or_before(
+            value,
+            captured_dt=captured_dt,
+            description=description,
+            field=f"usable_capture_dates[{index}]",
+        )
     for instrument_index, item in enumerate(payload.get("instruments") or []):
         row = dict(item or {})
         latest = dict(row.get("latest") or {})
@@ -1777,6 +1854,10 @@ def _project_data_status(value: Any) -> dict[str, Any]:
         },
         "quality_gate": {
             "passed": quality_gate.get("passed"),
+            "reason_codes": list(quality_gate.get("reason_codes") or []),
+            "advisory_reason_codes": list(
+                quality_gate.get("advisory_reason_codes") or []
+            ),
             "summary": {
                 "expiries_evaluated": summary.get("expiries_evaluated"),
                 "fetch_errors": summary.get("fetch_errors"),
@@ -1887,7 +1968,7 @@ def _resolve_public_candidate_dte_days(
     if explicit is None:
         return derived, None
     if abs(explicit - derived) > 1.0:
-        return derived, DTE_EVIDENCE_CONFLICT
+        return None, DTE_EVIDENCE_CONFLICT
     return explicit, None
 
 
@@ -2479,7 +2560,9 @@ def _collect_public_reason_codes(value: Any) -> set[str]:
         for key, item in value.items():
             if key == "reason_code" and isinstance(item, str) and item:
                 codes.add(item)
-            elif key == "reason_codes" and isinstance(item, list):
+            elif key in {"reason_codes", "advisory_reason_codes"} and isinstance(
+                item, list
+            ):
                 codes.update(
                     code
                     for code in item

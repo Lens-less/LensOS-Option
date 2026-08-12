@@ -86,6 +86,26 @@ class TwoSidedSelectionTests(unittest.TestCase):
         self.assertGreaterEqual(len(calls), minimum)
         self.assertGreaterEqual(len(puts), minimum)
 
+    def test_non_fallback_selection_never_emits_a_one_sided_expiry(self) -> None:
+        minimum = int(DEFAULT_QUALITY_LIMITS["min_valid_quotes_per_expiry"])
+        chain = _chain(("14AUG26",))
+        chain.extend(
+            _summary(105_000 + offset * 2_000, "call", "28AUG26")
+            for offset in range(minimum + 2)
+        )
+
+        selected, policy = _select_research_summaries(
+            chain,
+            captured_at=CAPTURED_AT,
+            instrument_limit=DEFAULT_TICKER_REQUEST_BUDGET,
+        )
+
+        self.assertFalse(policy["fallback_used"])
+        selected_expiries = {
+            row["instrument_name"].split("-")[1] for row in selected
+        }
+        self.assertEqual({"14AUG26"}, selected_expiries)
+
     def test_the_budget_covers_a_two_sided_expiry(self) -> None:
         """At the old budget of 20 this quota could not be met at all."""
         minimum = int(DEFAULT_QUALITY_LIMITS["min_valid_quotes_per_expiry"])
@@ -107,6 +127,33 @@ class TwoSidedSelectionTests(unittest.TestCase):
             with self.subTest(instrument=row["instrument_name"]):
                 self.assertLess(strike, SPOT)
         self.assertEqual(policy["preferred_put_moneyness"], [0.7, 1.0])
+
+    def test_budget_fill_never_reintroduces_adverse_moneyness_tails(self) -> None:
+        chain = _chain()
+        for token in ("14AUG26", "28AUG26"):
+            for strike in range(70_000, 100_000, 5_000):
+                chain.append(_summary(strike, "call", token))
+            for strike in range(105_000, 135_000, 5_000):
+                chain.append(_summary(strike, "put", token))
+
+        selected, policy = _select_research_summaries(
+            chain,
+            captured_at=CAPTURED_AT,
+            instrument_limit=DEFAULT_TICKER_REQUEST_BUDGET,
+        )
+
+        self.assertFalse(policy["fallback_used"])
+        self.assertLess(len(selected), DEFAULT_TICKER_REQUEST_BUDGET)
+        for row in selected:
+            strike = float(row["instrument_name"].split("-")[2])
+            option_type = row["instrument_name"].rsplit("-", 1)[1]
+            with self.subTest(instrument=row["instrument_name"]):
+                if option_type == "C":
+                    self.assertGreaterEqual(strike / SPOT, 1.0)
+                    self.assertLessEqual(strike / SPOT, 1.3)
+                else:
+                    self.assertGreaterEqual(strike / SPOT, 0.7)
+                    self.assertLessEqual(strike / SPOT, 1.0)
 
 
 class SeriesCaptureNamingTests(unittest.TestCase):

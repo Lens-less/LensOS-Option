@@ -18,7 +18,9 @@ from crypto_options_report.market_data import (
 from crypto_options_report.publication import (
     _build_public_report,
     _build_release_gates_from_disk,
+    _collect_public_reason_codes,
     _load_manifest_verification,
+    _resolve_public_candidate_dte_days,
     _trim_history_to_capture_clock,
     publish_site,
 )
@@ -322,6 +324,32 @@ def _build_publication_history_fixture(published_at: str) -> dict[str, object]:
 
 
 class PublicationTests(unittest.TestCase):
+    def test_public_reason_collection_includes_quality_advisories(self) -> None:
+        self.assertEqual(
+            {"SELECTION_POLICY_FALLBACK_USED"},
+            _collect_public_reason_codes(
+                {
+                    "quality_gate": {
+                        "advisory_reason_codes": [
+                            "SELECTION_POLICY_FALLBACK_USED"
+                        ]
+                    }
+                }
+            ),
+        )
+
+    def test_conflicting_dte_evidence_never_returns_a_derived_value(self) -> None:
+        value, reason_code = _resolve_public_candidate_dte_days(
+            {
+                "dte_days": 14.0,
+                "expiry_date": "2026-09-12",
+            },
+            evaluation_clock="2026-08-12T09:00:00Z",
+        )
+
+        self.assertIsNone(value)
+        self.assertEqual("DTE_EVIDENCE_CONFLICT", reason_code)
+
     def test_public_report_projects_fail_closed_exchange_event_evidence(self) -> None:
         base_report = {
             "schema_version": "research_report.v1",
@@ -402,6 +430,31 @@ class PublicationTests(unittest.TestCase):
         self.assertIsNone(malformed["source_status"])
         self.assertIsNone(malformed["scope"])
         self.assertEqual("EVENT_SOURCE_UNAVAILABLE", malformed["reason_code"])
+
+    def test_public_report_preserves_selection_fallback_advisory(self) -> None:
+        report = {
+            "schema_version": "research_report.v1",
+            "data_status": {
+                "status": "validated",
+                "validated": True,
+                "quality_gate": {
+                    "passed": True,
+                    "reason_codes": [],
+                    "advisory_reason_codes": [
+                        "SELECTION_POLICY_FALLBACK_USED"
+                    ],
+                },
+            },
+        }
+
+        public_report = _build_public_report(report)
+
+        quality_gate = public_report["data_status"]["quality_gate"]
+        self.assertEqual([], quality_gate["reason_codes"])
+        self.assertEqual(
+            ["SELECTION_POLICY_FALLBACK_USED"],
+            quality_gate["advisory_reason_codes"],
+        )
 
     def test_public_report_blocks_candidate_rows_with_conflicting_or_malformed_dte_evidence(
         self,
@@ -1554,6 +1607,41 @@ class PublicationTests(unittest.TestCase):
             self.assertIsNone(summary["best_exploratory_signal"])
             self.assertIs(summary["promotion_eligible"], False)
 
+    def test_publish_preserves_expiry_level_validation_exclusions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tempdir = Path(tmp)
+            snapshot = load_snapshot_fixture(str(SNAPSHOT_FIXTURE))
+            captured_at = snapshot["captured_at"]
+            excluded_expiry = {
+                "captured_at": captured_at,
+                "expiry_date": "2026-07-17",
+                "reason_codes": ["INVALID_BID_IV"],
+            }
+            signal = _build_signal_artifact(captured_at)
+            signal["usable_capture_dates"] = [captured_at[:10]]
+            signal["excluded_expiries"] = [excluded_expiry]
+            series = _build_series_artifact(captured_at)
+            series["usable_capture_dates"] = [captured_at[:10]]
+            series["excluded_expiries"] = [excluded_expiry]
+
+            output_dir, _ = self._publish(
+                tempdir,
+                signal_payload=signal,
+                series_payload=series,
+                out_name="expiry-level-exclusions",
+            )
+
+            published_signal = json.loads(
+                (output_dir / "research" / "signal").read_text(encoding="utf-8")
+            )
+            published_series = json.loads(
+                (output_dir / "research" / "series").read_text(encoding="utf-8")
+            )
+            self.assertEqual([excluded_expiry], published_signal["excluded_expiries"])
+            self.assertEqual([excluded_expiry], published_series["excluded_expiries"])
+            self.assertEqual([captured_at[:10]], published_signal["usable_capture_dates"])
+            self.assertEqual([captured_at[:10]], published_series["usable_capture_dates"])
+
     def test_publish_blocks_uncataloged_reason_code_in_public_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tempdir = Path(tmp)
@@ -1660,6 +1748,21 @@ class PublicationTests(unittest.TestCase):
                     tempdir,
                     series_payload=future_series,
                     out_name="future-series",
+                )
+
+            future_exclusion = _build_signal_artifact(snapshot["captured_at"])
+            future_exclusion["excluded_expiries"] = [
+                {
+                    "captured_at": _timestamp(captured_dt + timedelta(seconds=1)),
+                    "expiry_date": "2026-07-17",
+                    "reason_codes": ["INVALID_BID_IV"],
+                }
+            ]
+            with self.assertRaisesRegex(ValueError, "signal artifact.*snapshot cutoff"):
+                self._publish(
+                    tempdir,
+                    signal_payload=future_exclusion,
+                    out_name="future-expiry-exclusion",
                 )
 
     def test_publish_rejects_bundle_tokens_and_non_sha_git_provenance(self) -> None:

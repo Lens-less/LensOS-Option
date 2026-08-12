@@ -33,9 +33,11 @@ from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     build_market_data_status,
     fetch_deribit_option_chain_snapshot,
+    isolate_validation_evidence,
     load_snapshot_fixture,
     load_underlying_history_fixture,
     parse_timestamp_ms,
+    snapshot_exchange_lock_reason,
     validate_ticker_request_limit,
     write_snapshot_fixture,
 )
@@ -559,6 +561,36 @@ def _cmd_pull_snapshot(args: argparse.Namespace) -> int:
     fetch_error_count = len(snapshot.get("fetch_errors") or [])
     partial_row_threshold = max(1, ceil(requested_limit * PARTIAL_SNAPSHOT_MIN_ROW_RATIO))
     partial_capture_blocked = fetch_error_count > 0 and row_count < partial_row_threshold
+    captured_at = str(snapshot.get("captured_at") or "")
+    data_status = build_market_data_status(
+        snapshot,
+        now_ms=parse_timestamp_ms(captured_at),
+    )
+    evidence_snapshot, isolated_expiries = isolate_validation_evidence(
+        snapshot,
+        data_status=data_status,
+    )
+    exchange_lock_reason = snapshot_exchange_lock_reason(snapshot)
+    if exchange_lock_reason is not None:
+        evidence_snapshot = None
+    eligible_expiry_dates = (
+        sorted(
+            {
+                str(item.get("expiry_date") or "")
+                for item in (data_status.get("quality_gate") or {}).get(
+                    "per_expiry", []
+                )
+                if item.get("status") == "pass" and item.get("expiry_date")
+            }
+        )
+        if evidence_snapshot is not None
+        else []
+    )
+    usability_reason_codes = list(
+        (data_status.get("quality_gate") or {}).get("reason_codes") or []
+    )
+    if exchange_lock_reason is not None:
+        usability_reason_codes = [exchange_lock_reason]
     payload = {
         "schema_version": "snapshot_capture.v1",
         "path": str(path),
@@ -570,6 +602,12 @@ def _cmd_pull_snapshot(args: argparse.Namespace) -> int:
         "instrument_metadata_count": snapshot.get("instrument_metadata_count"),
         "partial_row_threshold": partial_row_threshold,
         "partial_capture_blocked": partial_capture_blocked,
+        "market_data_status": data_status.get("status"),
+        "quality_gate_passed": (data_status.get("quality_gate") or {}).get("passed"),
+        "quality_reason_codes": usability_reason_codes,
+        "validation_eligible_expiry_dates": eligible_expiry_dates,
+        "validation_eligible_expiry_count": len(eligible_expiry_dates),
+        "isolated_expiry_count": len(isolated_expiries),
         "research_only": True,
     }
     _emit_json(payload, compact=args.compact)

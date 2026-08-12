@@ -3,11 +3,10 @@ import type { ResearchReport } from "../../contracts";
 /**
  * States that the report on screen is a replay of a recorded snapshot.
  *
- * A replayed report pins the evaluation clock to the snapshot's capture time,
- * which makes every freshness figure on the page read as current — the masthead
- * will happily say "Deribit live · 3 seconds" about a chain captured last week.
- * Nothing else on the page can contradict that, so this banner is not decorative
- * and is deliberately not dismissible.
+ * A replayed report pins server-side evaluation to the snapshot's capture time.
+ * Client-side freshness still advances after the response is received so a tab
+ * cannot keep trusting the same payload forever. The banner distinguishes those
+ * two clocks and is deliberately not dismissible.
  */
 export function ReplayBanner({
   report,
@@ -30,7 +29,7 @@ export function ReplayBanner({
             <time dateTime={clock}>{clock}</time>
           </>
         ) : null}
-        ，页面上的新鲜度指标描述的是那一刻，不是现在。
+        ；新鲜度从该时刻的报告读数起算，页面载入后继续计时，超限仍会阻断。这不是当前行情。
       </p>
       {context.snapshot_fixture ? (
         <code className="replay-banner-source">{context.snapshot_fixture}</code>

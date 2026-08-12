@@ -89,3 +89,21 @@ CI 通过 `git diff --exit-code -- crypto_options_report/static/evidence` 校验
 不要为安全漏洞提交公开 issue。请通过
 [GitHub Security Advisory](https://github.com/Lens-less/LensOS-Option/security/advisories/new)
 私下报告，详见 [SECURITY.md](SECURITY.md)。
+
+## English contributor summary
+
+This is a pre-entry research tool, not a trading system. Contributions must
+preserve `execution_allowed=false`, keep every gate fail-closed, and must not add
+order placement, position sizing, or paper/manual execution controls.
+
+Use Python 3.12+ and a Node version accepted by `web/package.json`. Install the
+development environment and run the same local checks shown above: the complete
+Python test suite, Ruff, the API smoke test, and the web test/lint/build trio.
+Tests must use deterministic fixtures and explicit clocks; do not call the live
+Deribit API. Changes to `web/` must include the synchronized
+`crypto_options_report/static/evidence/` build output.
+
+Keep each pull request focused, explain why the change is needed, and report
+security or conduct issues privately through GitHub Security Advisories rather
+than a public issue. See [SECURITY.md](SECURITY.md) and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

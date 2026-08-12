@@ -14,8 +14,9 @@
     public VRP edition cannot be published without it.
 
     Every run writes a canonical JSON summary under artifacts/logs/. Stage
-    failures are never swallowed: the script writes the failure summary, emits
-    an optional failure webhook, and exits non-zero immediately.
+    failures are never swallowed: after independent history refreshes are
+    attempted, the script writes the failure summary, emits an optional failure
+    webhook, and exits non-zero.
 
     When explicitly enabled, the script can reconcile the local artifacts tree
     against a separate evidence git repo, copy the unsynced durable evidence
@@ -1183,6 +1184,10 @@ function Send-FailureWebhook {
         currency = $Summary.currency
         status = $Summary.status
         failed_stage = $Summary.failed_stage
+        usable_for_validation = $Summary.usable_for_validation
+        usability_reason_codes = @($Summary.usability_reason_codes)
+        consecutive_unusable_days = $Summary.consecutive_unusable_days
+        consecutive_usable_days = $Summary.consecutive_usable_days
         captured_at = $Summary.capture_time
         summary_file = if ($Summary.summary_path) { Split-Path -Leaf $Summary.summary_path } else { $null }
         last_successful_snapshot_file = if ($Summary.last_successful_snapshot) { Split-Path -Leaf $Summary.last_successful_snapshot } else { $null }
@@ -1203,6 +1208,10 @@ function Send-SuccessHeartbeat {
         run_id = $Summary.run_id
         currency = $Summary.currency
         status = $Summary.status
+        usable_for_validation = $Summary.usable_for_validation
+        usability_reason_codes = @($Summary.usability_reason_codes)
+        consecutive_unusable_days = $Summary.consecutive_unusable_days
+        consecutive_usable_days = $Summary.consecutive_usable_days
         captured_at = $Summary.capture_time
         summary_file = if ($Summary.summary_path) { Split-Path -Leaf $Summary.summary_path } else { $null }
         last_successful_snapshot_file = if ($Summary.last_successful_snapshot) { Split-Path -Leaf $Summary.last_successful_snapshot } else { $null }
@@ -1244,6 +1253,12 @@ $lastSuccessfulSnapshot = $null
 $failedStage = $null
 $failureMessage = $null
 $currentPhase = 'bootstrap'
+$previousSummary = $null
+$previousSummaryUnavailable = $false
+$usableForValidation = $null
+$usabilityReasonCodes = [System.Collections.Generic.List[string]]::new()
+$consecutiveUnusableDays = 0
+$consecutiveUsableDays = 0
 $webhookState = [ordered]@{
     configured = $false
     attempted = $false
@@ -1258,6 +1273,66 @@ $successHeartbeatState = [ordered]@{
     delivered = $null
     delivery_attempts = 0
     error = $null
+}
+
+function Get-ConsecutiveUsabilityDayCount {
+    param(
+        $PreviousSummary,
+        [Parameter(Mandatory)] [string] $CaptureTime,
+        [Parameter(Mandatory)] [bool] $Usable,
+        [Parameter(Mandatory)] [bool] $TargetUsable,
+        [Parameter(Mandatory)] [string] $PreviousCountField,
+        [bool] $FailClosedOnUnavailable = $false
+    )
+
+    if ($Usable -ne $TargetUsable) { return 0 }
+    if ($script:previousSummaryUnavailable) {
+        return $(if ($FailClosedOnUnavailable) { 2 } else { 1 })
+    }
+    if (
+        $null -eq $PreviousSummary -or
+        [bool] $PreviousSummary.usable_for_validation -ne $TargetUsable
+    ) {
+        return 1
+    }
+    try {
+        $currentDate = [DateTimeOffset]::Parse($CaptureTime).UtcDateTime.Date
+        $previousDate = [DateTimeOffset]::Parse([string] $PreviousSummary.capture_time).UtcDateTime.Date
+    }
+    catch {
+        return 1
+    }
+    $previousCount = [Math]::Max(1, [int] $PreviousSummary.$PreviousCountField)
+    if ($previousDate -eq $currentDate) { return $previousCount }
+    if ($previousDate.AddDays(1) -eq $currentDate) { return $previousCount + 1 }
+    return 1
+}
+
+function Set-CaptureUsability {
+    param(
+        [Parameter(Mandatory)] [bool] $Usable,
+        [string[]] $ReasonCodes = @(),
+        [Parameter(Mandatory)] [string] $CaptureTime
+    )
+
+    $script:usableForValidation = $Usable
+    $script:usabilityReasonCodes = [System.Collections.Generic.List[string]]::new()
+    foreach ($reasonCode in $ReasonCodes) {
+        Add-UniqueString -List $script:usabilityReasonCodes -Value ([string] $reasonCode)
+    }
+    $script:consecutiveUnusableDays = Get-ConsecutiveUsabilityDayCount `
+        -PreviousSummary $script:previousSummary `
+        -CaptureTime $CaptureTime `
+        -Usable $Usable `
+        -TargetUsable $false `
+        -PreviousCountField 'consecutive_unusable_days' `
+        -FailClosedOnUnavailable $true
+    $script:consecutiveUsableDays = Get-ConsecutiveUsabilityDayCount `
+        -PreviousSummary $script:previousSummary `
+        -CaptureTime $CaptureTime `
+        -Usable $Usable `
+        -TargetUsable $true `
+        -PreviousCountField 'consecutive_usable_days'
 }
 
 function New-CaptureSummary {
@@ -1295,6 +1370,10 @@ function New-CaptureSummary {
             signal_preflight = $signalPreflightPath
         }
         last_successful_snapshot = $lastSuccessfulSnapshot
+        usable_for_validation = $usableForValidation
+        usability_reason_codes = @($usabilityReasonCodes)
+        consecutive_unusable_days = $consecutiveUnusableDays
+        consecutive_usable_days = $consecutiveUsableDays
         unsynced_local_capture_count = $script:UnsyncedLocalCaptureCount
         evidence_receipt = if ([string]::IsNullOrWhiteSpace($receiptPath)) {
             $null
@@ -1455,6 +1534,16 @@ try {
     $summaryPath = Join-Path $logDir "capture-daily-$currencyLower-$runStamp.summary.json"
     $latestSummaryPath = Join-Path $logDir "capture-daily-$currencyLower.latest.summary.json"
     $receiptPath = Join-Path $logDir "capture-daily-$currencyLower-$runStamp.receipt.json"
+    if (Test-Path -LiteralPath $latestSummaryPath -PathType Leaf) {
+        try {
+            $previousSummary = Get-Content -Raw -LiteralPath $latestSummaryPath -ErrorAction Stop |
+                ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            $previousSummaryUnavailable = $true
+            Write-Log "previous usability summary unavailable; alert streak will fail closed"
+        }
+    }
 
     $snapshotsRoot = Join-Path $artifactsRoot 'snapshots'
     $seriesDir = Join-Path $snapshotsRoot "$currencyLower-series"
@@ -1502,59 +1591,122 @@ try {
             '--output-dir', $seriesDir,
             '--compact'
         ))
-    $snapshotResult = Invoke-Stage -Name 'snapshot' -Command (Format-ExternalCommand -Executable $snapshotTool.display -Arguments $snapshotArgs) -Action {
-        $response = Invoke-CheckedJsonCommand -Executable $snapshotTool.executable -Arguments $snapshotArgs -Context 'pull-snapshot'
-        $script:snapshotPath = [string] $response.payload.path
-        if ([string]::IsNullOrWhiteSpace($script:snapshotPath) -or -not (Test-Path -LiteralPath $script:snapshotPath -PathType Leaf)) {
-            throw 'pull-snapshot did not produce a readable snapshot file'
-        }
-        $script:lastSuccessfulSnapshot = $script:snapshotPath
-        return [ordered]@{
-            output_path = $script:snapshotPath
-            details = [ordered]@{
-                captured_at = $response.payload.captured_at
-                row_count = $response.payload.row_count
-                fetch_errors = $response.payload.fetch_errors
+    $snapshotStageFailure = $null
+    try {
+        $snapshotResult = Invoke-Stage -Name 'snapshot' -Command (Format-ExternalCommand -Executable $snapshotTool.display -Arguments $snapshotArgs) -Action {
+            $response = Invoke-CheckedJsonCommand -Executable $snapshotTool.executable -Arguments $snapshotArgs -Context 'pull-snapshot'
+            $script:snapshotPath = [string] $response.payload.path
+            if ([string]::IsNullOrWhiteSpace($script:snapshotPath) -or -not (Test-Path -LiteralPath $script:snapshotPath -PathType Leaf)) {
+                throw 'pull-snapshot did not produce a readable snapshot file'
+            }
+            $script:lastSuccessfulSnapshot = $script:snapshotPath
+            return [ordered]@{
+                output_path = $script:snapshotPath
+                details = [ordered]@{
+                    captured_at = $response.payload.captured_at
+                    row_count = $response.payload.row_count
+                    fetch_errors = $response.payload.fetch_errors
+                    market_data_status = $response.payload.market_data_status
+                    quality_gate_passed = $response.payload.quality_gate_passed
+                    quality_reason_codes = @($response.payload.quality_reason_codes)
+                    validation_eligible_expiry_dates = @($response.payload.validation_eligible_expiry_dates)
+                    validation_eligible_expiry_count = $response.payload.validation_eligible_expiry_count
+                    isolated_expiry_count = $response.payload.isolated_expiry_count
+                }
             }
         }
     }
-    $analysisTimestamp = [string] $snapshotResult.details.captured_at
+    catch {
+        $snapshotStageFailure = $_
+    }
+    $analysisTimestamp = if ($snapshotResult -and $snapshotResult.details) {
+        [string] $snapshotResult.details.captured_at
+    }
+    else {
+        $null
+    }
 
     $underlyingArgs = @($underlyingTool.prefix_args + @(
             '--currency', $Currency,
             '--days', [string] $HistoryDays,
             '--output', $underlyingHistoryPath
         ))
-    Invoke-Stage -Name 'underlying_history' -Command (Format-ExternalCommand -Executable $underlyingTool.display -Arguments $underlyingArgs) -Action {
-        $response = Invoke-CheckedJsonCommand -Executable $underlyingTool.executable -Arguments $underlyingArgs -Context 'underlying-history'
-        return [ordered]@{
-            output_path = $underlyingHistoryPath
-            details = [ordered]@{
-                observation_count = $response.payload.observation_count
-                first_observed_at = $response.payload.first_observed_at
-                last_observed_at = $response.payload.last_observed_at
+    $underlyingStageFailure = $null
+    try {
+        Invoke-Stage -Name 'underlying_history' -Command (Format-ExternalCommand -Executable $underlyingTool.display -Arguments $underlyingArgs) -Action {
+            $response = Invoke-CheckedJsonCommand -Executable $underlyingTool.executable -Arguments $underlyingArgs -Context 'underlying-history'
+            return [ordered]@{
+                output_path = $underlyingHistoryPath
+                details = [ordered]@{
+                    observation_count = $response.payload.observation_count
+                    first_observed_at = $response.payload.first_observed_at
+                    last_observed_at = $response.payload.last_observed_at
+                }
             }
-        }
-    } | Out-Null
+        } | Out-Null
+    }
+    catch {
+        $underlyingStageFailure = $_
+    }
 
+    $dvolStageFailure = $null
     if ($CaptureDvolHistory) {
         $dvolArgs = @($dvolTool.prefix_args + @(
                 '--currency', $Currency,
                 '--days', [string] $DvolHistoryDays,
                 '--output', $dvolHistoryPath
             ))
-        Invoke-Stage -Name 'dvol_history' -Command (Format-ExternalCommand -Executable $dvolTool.display -Arguments $dvolArgs) -Action {
-            $response = Invoke-CheckedJsonCommand -Executable $dvolTool.executable -Arguments $dvolArgs -Context 'dvol-history'
-            return [ordered]@{
-                output_path = $dvolHistoryPath
-                details = [ordered]@{
-                    observation_count = $response.payload.observation_count
-                    first_observed_at = $response.payload.first_observed_at
-                    last_observed_at = $response.payload.last_observed_at
-                    missing_day_count = $response.payload.missing_day_count
+        try {
+            Invoke-Stage -Name 'dvol_history' -Command (Format-ExternalCommand -Executable $dvolTool.display -Arguments $dvolArgs) -Action {
+                $response = Invoke-CheckedJsonCommand -Executable $dvolTool.executable -Arguments $dvolArgs -Context 'dvol-history'
+                return [ordered]@{
+                    output_path = $dvolHistoryPath
+                    details = [ordered]@{
+                        observation_count = $response.payload.observation_count
+                        first_observed_at = $response.payload.first_observed_at
+                        last_observed_at = $response.payload.last_observed_at
+                        missing_day_count = $response.payload.missing_day_count
+                    }
                 }
-            }
-        } | Out-Null
+            } | Out-Null
+        }
+        catch {
+            $dvolStageFailure = $_
+        }
+    }
+
+    if ($snapshotStageFailure) {
+        Set-CaptureUsability `
+            -Usable $false `
+            -ReasonCodes @('SNAPSHOT_STAGE_FAILED') `
+            -CaptureTime $runStartedAt
+        foreach ($skippedStage in @('series_history', 'signal_preflight')) {
+            Invoke-Stage -Name $skippedStage -Command 'skipped: snapshot stage failed' -Action {
+                return [ordered]@{
+                    status = 'skipped'
+                    log_message = 'snapshot stage failed'
+                    details = [ordered]@{ reason_code = 'SNAPSHOT_STAGE_FAILED' }
+                }
+            } | Out-Null
+        }
+        $currentPhase = 'snapshot'
+        throw $snapshotStageFailure
+    }
+    if ($underlyingStageFailure) {
+        Set-CaptureUsability `
+            -Usable $false `
+            -ReasonCodes @('UNDERLYING_HISTORY_REFRESH_FAILED') `
+            -CaptureTime $analysisTimestamp
+        $currentPhase = 'underlying_history'
+        throw $underlyingStageFailure
+    }
+    if ($dvolStageFailure) {
+        Set-CaptureUsability `
+            -Usable $false `
+            -ReasonCodes @('DVOL_HISTORY_REFRESH_FAILED') `
+            -CaptureTime $analysisTimestamp
+        $currentPhase = 'dvol_history'
+        throw $dvolStageFailure
     }
 
     $seriesArgs = @($snapshotTool.prefix_args + @(
@@ -1566,7 +1718,7 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($analysisTimestamp)) {
         $seriesArgs += @('--generated-at', $analysisTimestamp)
     }
-    Invoke-Stage -Name 'series_history' -Command (Format-ExternalCommand -Executable $snapshotTool.display -Arguments $seriesArgs) -Action {
+    $seriesStageResult = Invoke-Stage -Name 'series_history' -Command (Format-ExternalCommand -Executable $snapshotTool.display -Arguments $seriesArgs) -Action {
         $response = Invoke-CheckedJsonCommand -Executable $snapshotTool.executable -Arguments $seriesArgs -Context 'series-history'
         return [ordered]@{
             output_path = $seriesHistoryPath
@@ -1574,9 +1726,11 @@ try {
                 generated_at = $response.payload.generated_at
                 instrument_count = $response.payload.instrument_count
                 capture_count = $response.payload.capture_count
+                capture_dates = @($response.payload.capture_dates)
+                usable_capture_dates = @($response.payload.usable_capture_dates)
             }
         }
-    } | Out-Null
+    }
 
     $signalArgs = @($snapshotTool.prefix_args + @(
             'validate-signal',
@@ -1589,7 +1743,7 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($analysisTimestamp)) {
         $signalArgs += @('--generated-at', $analysisTimestamp)
     }
-    Invoke-Stage -Name 'signal_preflight' -Command (Format-ExternalCommand -Executable $snapshotTool.display -Arguments $signalArgs) -Action {
+    $signalStageResult = Invoke-Stage -Name 'signal_preflight' -Command (Format-ExternalCommand -Executable $snapshotTool.display -Arguments $signalArgs) -Action {
         $response = Invoke-CheckedJsonCommand -Executable $snapshotTool.executable -Arguments $signalArgs -Context 'signal-preflight'
         return [ordered]@{
             output_path = $signalPreflightPath
@@ -1597,9 +1751,51 @@ try {
                 status = $response.payload.status
                 generated_at = $response.payload.generated_at
                 reason_code = $response.payload.reason_code
+                usable_capture_dates = @($response.payload.usable_capture_dates)
             }
         }
-    } | Out-Null
+    }
+
+    $currentCaptureDate = $analysisTimestamp.Substring(0, 10)
+    $seriesUsableDates = @(
+        $seriesStageResult.details.usable_capture_dates |
+        ForEach-Object { [string] $_ }
+    )
+    $preflightUsableDates = @(
+        $signalStageResult.details.usable_capture_dates |
+        ForEach-Object { [string] $_ }
+    )
+    $eligibleExpiryCountValue = $snapshotResult.details.validation_eligible_expiry_count
+    $eligibleExpiryCount = if ($null -ne $eligibleExpiryCountValue) {
+        [int] $eligibleExpiryCountValue
+    }
+    elseif ($preflightUsableDates -contains $currentCaptureDate) {
+        1
+    }
+    else {
+        0
+    }
+    $advancedValidationSequence = (
+        $seriesUsableDates -contains $currentCaptureDate -and
+        $preflightUsableDates -contains $currentCaptureDate
+    )
+    $runUsable = $eligibleExpiryCount -gt 0 -and $advancedValidationSequence
+    $runUsabilityReasons = [System.Collections.Generic.List[string]]::new()
+    if (-not $runUsable) {
+        foreach ($reasonCode in @($snapshotResult.details.quality_reason_codes)) {
+            Add-UniqueString -List $runUsabilityReasons -Value ([string] $reasonCode)
+        }
+        if ($eligibleExpiryCount -gt 0 -and -not $advancedValidationSequence) {
+            Add-UniqueString -List $runUsabilityReasons -Value 'VALIDATION_SEQUENCE_NOT_ADVANCED'
+        }
+        if ($runUsabilityReasons.Count -eq 0) {
+            Add-UniqueString -List $runUsabilityReasons -Value 'NO_VALIDATION_ELIGIBLE_EXPIRY'
+        }
+    }
+    Set-CaptureUsability `
+        -Usable $runUsable `
+        -ReasonCodes @($runUsabilityReasons) `
+        -CaptureTime $analysisTimestamp
 
     $currentPhase = 'capture_receipt'
     Invoke-Stage -Name 'capture_receipt' -Command 'write immutable pre-sync capture receipt' -Action {
@@ -1663,6 +1859,12 @@ catch {
         }
     }
     $failureMessage = $_.Exception.Message
+    if ($null -eq $usableForValidation) {
+        Set-CaptureUsability `
+            -Usable $false `
+            -ReasonCodes @('CAPTURE_PIPELINE_FAILED') `
+            -CaptureTime $runStartedAt
+    }
 }
 
 $summary = $null
@@ -1683,8 +1885,19 @@ if ($null -eq $summary) {
     $summary = New-CaptureSummary
 }
 
-if ($failureMessage -and -not [string]::IsNullOrWhiteSpace($FailureWebhookUrl)) {
+$usabilityAlertRequired = (
+    $usableForValidation -eq $false -and
+    $consecutiveUnusableDays -ge 2
+)
+if (
+    ($failureMessage -or $usabilityAlertRequired) -and
+    -not [string]::IsNullOrWhiteSpace($FailureWebhookUrl)
+) {
     $webhookState = Send-FailureWebhook -Url $FailureWebhookUrl -Summary $summary
+    if ($webhookState.delivered -ne $true -and -not $failureMessage) {
+        $failedStage = 'failure_webhook'
+        $failureMessage = 'failure webhook delivery failed'
+    }
     $summary = New-CaptureSummary
     if (-not [string]::IsNullOrWhiteSpace($summaryPath)) {
         try {

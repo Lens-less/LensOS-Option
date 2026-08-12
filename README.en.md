@@ -2,6 +2,10 @@
 
 English · [中文](README.md)
 
+[![CI](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml/badge.svg)](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+![Python >=3.12](https://img.shields.io/badge/Python-%3E%3D3.12-3776AB?logo=python&logoColor=white)
+
 A **pre-entry research tool for crypto options**. It reads public Deribit
 market data, decides whether there is currently an option-selling opportunity
 worth considering, and lays out every piece of evidence that conclusion rests
@@ -56,10 +60,17 @@ part of the public bundle.
 
 ## Quickstart
 
-Requires Python 3.12 or newer. There are no third-party runtime dependencies.
+Requires Git and Python 3.12 or newer. There are no third-party runtime
+dependencies, and this path needs no credentials, locally captured output, or
+owner infrastructure.
 
 ```powershell
-python -m pip install -e ".[test]"
+git clone https://github.com/Lens-less/LensOS-Option.git
+Set-Location LensOS-Option
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade -c constraints.txt pip setuptools
+python -m pip install --no-build-isolation -c constraints.txt -e ".[test]"
 python -m pytest -q
 ```
 
@@ -76,8 +87,7 @@ snapshot in a browser, you must add `--replay`:
 
 ```powershell
 python -m crypto_options_report.api --host 127.0.0.1 --port 8000 --replay `
-  --snapshot-fixture artifacts/snapshots/btc-series/<capture>.json `
-  --underlying-history-fixture artifacts/history/btc-daily.json
+  --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json
 ```
 
 Then visit <http://127.0.0.1:8000/evidence>.
@@ -102,7 +112,14 @@ blocked as-is.
 > been promoted, so the readiness gate stays closed by design. **That does not
 > mean the process is unhealthy** - `/livez` reports process liveness.
 
-## Static Public Edition
+## Operator Lane (Windows-only, optional)
+
+This section, plus the daily capture and scheduled-task instructions below,
+exists for maintainers of a continuously running public instance. It depends on
+PowerShell and optional private evidence storage and hosting; none of it is a
+quickstart or contribution prerequisite.
+
+### Static Public Edition and Publishing
 
 The public site does not call Deribit or any credentialed service. The daily
 task first freezes the market snapshot, underlying history, DVOL history, and
@@ -294,8 +311,11 @@ that traded, with no IV or bid/ask book. So this validation **cannot backfill**.
 It has to start today, capture every day, and wait for contracts to expire
 naturally.
 
-Capture once per day, with filenames based on capture time so they do not
-overwrite each other:
+#### Operator capture and scheduled task (Windows-only)
+
+The daily capture and Windows scheduled task below are an optional operations
+lane, not part of the newcomer quickstart. Capture once per day, with filenames
+based on capture time so they do not overwrite each other:
 
 ```powershell
 crypto-options-report pull-snapshot --currency BTC --instrument-limit 64 `
@@ -330,6 +350,12 @@ the dedicated task account instead. An external monitor must also fetch the
 published `health.json` and compare `stale_after`; the success ping does not
 replace that independent positive check.
 
+The summary and both notification payloads include `usable_for_validation`,
+usability reason codes, and consecutive usable/unusable day counts. Two
+consecutive capture days that fail to advance validation trigger the failure
+webhook even when the process itself exits successfully. If snapshot capture
+fails, the independent underlying and DVOL history refreshes still run.
+
 Capture logs go to `artifacts/logs/capture-daily.log`. Running more than once in
 the same day is safe: the validator deduplicates by "date x contract" and
 reports how many duplicates it dropped.
@@ -337,10 +363,12 @@ reports how many duplicates it dropped.
 **Expect about 2 months, not a few weeks, to reach 8 cohorts.** The 7-35 day
 window carries only three expiries at a time, and new weekly expiries arrive one
 per week. Deribit does have 1-5 day daily expiries, but in this repo's captured
-data they fail the quality gate (`INVALID_BID_IV` / `INSUFFICIENT_VALID_QUOTES`)
-and the gate is evaluated against the whole snapshot. Mixing them in would throw
-away healthy research-window quotes as well, which is exactly what the project
-is designed not to do.
+data they fail the quality gate (`INVALID_BID_IV` /
+`INSUFFICIENT_VALID_QUOTES`). Longitudinal series/preflight consumers now
+quarantine only the failed expiry while retaining healthy cohorts; full-chain
+reports and public publishing still block on the whole-snapshot verdict, and no
+threshold was relaxed. The capture window therefore remains 7-35 days instead
+of trading data quality for validation speed.
 
 Use preflight while waiting to see whether the capture is actually producing
 observations - **captures cannot be backfilled, so every undetected flaw wastes

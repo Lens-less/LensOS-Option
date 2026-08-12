@@ -13,8 +13,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from test_signal_validation import _build_series
+from test_signal_validation import (
+    _build_series,
+    _first_multi_expiry_snapshot,
+    _partially_blocked_snapshot,
+)
 
+from crypto_options_report.market_data import (
+    build_market_data_status,
+    parse_timestamp_ms,
+)
 from crypto_options_report.series_history import (
     PERSISTENCE_PRIOR_OBSERVATIONS,
     build_series_history_report,
@@ -149,6 +157,58 @@ class OrderingTests(unittest.TestCase):
 
 
 class FailClosedTests(unittest.TestCase):
+    def test_a_failed_expiry_is_isolated_without_discarding_healthy_peers(self) -> None:
+        snapshots, _ = _build_series(richness_reaches_quote=True)
+        partial, failed_expiry, passing_expiries = _partially_blocked_snapshot(
+            _first_multi_expiry_snapshot(snapshots)
+        )
+        status = build_market_data_status(
+            partial,
+            now_ms=parse_timestamp_ms(partial["captured_at"]),
+        )
+        self.assertEqual("blocked", status["status"])
+
+        report = build_series_history_report(
+            snapshots=[partial],
+            generated_at=partial["captured_at"],
+            config={"min_capture_dates": 1},
+        )
+
+        self.assertEqual("measured", report["status"])
+        self.assertEqual([partial["captured_at"][:10]], report["capture_dates"])
+        self.assertTrue(report["instruments"])
+        self.assertNotIn(
+            failed_expiry,
+            {row["expiry_date"] for row in report["instruments"]},
+        )
+        self.assertTrue(
+            {row["expiry_date"] for row in report["instruments"]}
+            <= passing_expiries
+        )
+        self.assertEqual(failed_expiry, report["excluded_expiries"][0]["expiry_date"])
+        self.assertIn(
+            "BAD_QUOTE_RATIO_EXCEEDED",
+            report["excluded_expiries"][0]["reason_codes"],
+        )
+
+    def test_all_failed_expiries_still_exclude_the_whole_capture(self) -> None:
+        snapshots, _ = _build_series(richness_reaches_quote=True)
+        failed = _first_multi_expiry_snapshot(snapshots)
+        for row in failed["rows"]:
+            row["ticker"]["bid_iv"] = None
+
+        report = build_series_history_report(
+            snapshots=[failed],
+            generated_at=failed["captured_at"],
+            config={"min_capture_dates": 1},
+        )
+
+        self.assertEqual("blocked", report["status"])
+        self.assertEqual([], report["capture_dates"])
+        self.assertIn("NO_VALIDATED_CAPTURES", report["reason_codes"])
+        self.assertEqual(1, len(report["excluded_captures"]))
+        self.assertGreaterEqual(len(report["excluded_expiries"]), 2)
+
     def test_exchange_locked_capture_is_excluded_from_the_series(self) -> None:
         snapshots, _ = _build_series(richness_reaches_quote=True)
         locked = {

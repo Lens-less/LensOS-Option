@@ -1,6 +1,4 @@
 import re
-import shutil
-import subprocess
 import unittest
 from pathlib import Path
 
@@ -35,32 +33,6 @@ class DashboardTruthfulnessTests(unittest.TestCase):
         self.assertFalse(
             Path("crypto_options_report/static/dashboard.html").exists()
         )
-
-    def test_cdp_verifier_targets_evidence_console_with_legacy_env_fallback(self):
-        source = Path(".workflow/verify-dashboard-cdp.mjs").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("process.env.EVIDENCE_URL", source)
-        self.assertIn("process.env.DASHBOARD_URL", source)
-        self.assertIn("http://127.0.0.1:8000/evidence", source)
-        self.assertNotIn("http://127.0.0.1:8000/dashboard.html", source)
-
-    def test_cdp_verifier_script_is_valid_javascript(self):
-        node = shutil.which("node")
-        if not node:
-            self.skipTest("node is required for verifier syntax verification")
-
-        completed = subprocess.run(
-            [node, "--check", ".workflow/verify-dashboard-cdp.mjs"],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=15,
-        )
-        self.assertEqual(0, completed.returncode, completed.stderr)
-
 
 if __name__ == "__main__":
     unittest.main()

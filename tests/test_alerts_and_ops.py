@@ -717,6 +717,14 @@ class AlertsAndOpsTests(unittest.TestCase):
             for offset in range(10)
         )
         upstream.extend(
+            summary("24JUL26", 63000 - offset * 1000, "P")
+            for offset in range(10)
+        )
+        upstream.extend(
+            summary("31JUL26", 63000 - offset * 1000, "P")
+            for offset in range(10)
+        )
+        upstream.extend(
             summary("24JUL26", 110000 + offset * 1000, "P")
             for offset in range(4)
         )
@@ -784,17 +792,17 @@ class AlertsAndOpsTests(unittest.TestCase):
             fallback_ticker_requests = list(ticker_requests)
 
         selected_names = [row["instrument_name"] for row in snapshot["rows"]]
-        self.assertEqual(58, snapshot["upstream_instrument_count"])
+        self.assertEqual(78, snapshot["upstream_instrument_count"])
         self.assertEqual(20, snapshot["selected_instrument_count"])
         self.assertEqual(20, len(bounded_ticker_requests))
         self.assertEqual(set(selected_names), set(bounded_ticker_requests))
-        self.assertTrue(all("-C" in name for name in selected_names))
-        self.assertFalse(any("13JUL26" in name for name in selected_names))
-        self.assertTrue(
-            all(int(name.split("-")[2]) >= 64000 for name in selected_names)
-        )
         self.assertEqual(
-            {"2026-07-24": 10, "2026-07-31": 10},
+            {"C", "P"},
+            {name.rsplit("-", 1)[1] for name in selected_names},
+        )
+        self.assertFalse(any("13JUL26" in name for name in selected_names))
+        self.assertEqual(
+            {"2026-07-24": 20},
             snapshot["selection_policy"]["selected_per_expiry"],
         )
         self.assertEqual(
@@ -803,9 +811,10 @@ class AlertsAndOpsTests(unittest.TestCase):
         )
         self.assertFalse(snapshot["selection_policy"]["fallback_used"])
         data_status = build_market_data_status(snapshot, now_ms=captured_ms)
+        self.assertEqual([], data_status["quality_gate"]["advisory_reason_codes"])
         collection_scope = data_status["collection_scope"]
         self.assertEqual("research_sample", collection_scope["scope"])
-        self.assertEqual(58, collection_scope["upstream_instrument_count"])
+        self.assertEqual(78, collection_scope["upstream_instrument_count"])
         self.assertEqual(20, collection_scope["selected_instrument_count"])
         self.assertEqual(
             snapshot["selection_policy"],
@@ -821,9 +830,15 @@ class AlertsAndOpsTests(unittest.TestCase):
         self.assertEqual(5, len(fallback_ticker_requests))
         self.assertEqual(set(fallback_names), set(fallback_ticker_requests))
         self.assertTrue(fallback_snapshot["selection_policy"]["fallback_used"])
-        self.assertTrue(
-            all(int(name.split("-")[2]) >= 64000 for name in fallback_names)
+        fallback_status = build_market_data_status(
+            fallback_snapshot,
+            now_ms=captured_ms,
         )
+        self.assertIn(
+            "SELECTION_POLICY_FALLBACK_USED",
+            fallback_status["quality_gate"]["advisory_reason_codes"],
+        )
+        self.assertFalse(any("13JUL26" in name for name in fallback_names))
 
     def test_live_collector_rejects_limits_above_the_public_request_budget(self):
         with self.assertRaisesRegex(

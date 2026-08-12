@@ -1095,6 +1095,11 @@ function PublicBoundarySection({
     report.data_trust?.verdict === "trusted"
       ? "证据链可信"
       : "证据链未提升";
+  const visibleReasonCodes = [
+    ...(report.reason_codes ?? []),
+    ...(report.data_status?.quality_gate?.reason_codes ?? []),
+    ...(report.data_status?.quality_gate?.advisory_reason_codes ?? []),
+  ];
 
   return (
     <section
@@ -1130,7 +1135,7 @@ function PublicBoundarySection({
         </dl>
       </section>
 
-      <PublicReasonNotice codes={report.reason_codes ?? []} />
+      <PublicReasonNotice codes={visibleReasonCodes} />
 
       <div className="blocked-output-note">
         <div>

@@ -1424,6 +1424,9 @@ describe("EvidenceConsole", () => {
     );
 
     expect((await screen.findAllByText("回放")).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/页面载入后继续计时，超限仍会阻断/),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/距采集 \d+(\.\d)? 小时/)).not.toBeInTheDocument();
   });
 

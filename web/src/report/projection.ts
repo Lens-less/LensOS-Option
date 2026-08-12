@@ -397,6 +397,9 @@ export function projectResearchReportForSidePanel(
           market_data_age_sec: report.data_status.market_data_age_sec,
           quality_gate: report.data_status.quality_gate
             ? {
+                reason_codes: report.data_status.quality_gate.reason_codes,
+                advisory_reason_codes:
+                  report.data_status.quality_gate.advisory_reason_codes,
                 thresholds: report.data_status.quality_gate.thresholds
                   ? {
                       market_data_max_age_sec:

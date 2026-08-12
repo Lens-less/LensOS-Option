@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 
 from crypto_options_report.contract import generate_research_report
-from crypto_options_report.market_data import load_snapshot_fixture
+from crypto_options_report.market_data import (
+    BLOCKING_QUALITY_FLAGS,
+    load_snapshot_fixture,
+)
 from crypto_options_report.publication import _build_public_report
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -146,7 +149,9 @@ def _artifact_reason_codes(value: object) -> set[str]:
         for key, item in value.items():
             if key == "reason_code" and isinstance(item, str) and item:
                 codes.add(item)
-            elif key == "reason_codes" and isinstance(item, list):
+            elif key in {"reason_codes", "advisory_reason_codes"} and isinstance(
+                item, list
+            ):
                 codes.update(
                     code
                     for code in item
@@ -213,6 +218,38 @@ def _project_status():
             }.issubset(codes)
         )
         self.assertEqual(set(), codes - set(_load_catalog()))
+
+    def test_public_artifact_reason_extraction_includes_quality_advisories(self) -> None:
+        self.assertEqual(
+            {"SELECTION_POLICY_FALLBACK_USED"},
+            _artifact_reason_codes(
+                {
+                    "quality_gate": {
+                        "advisory_reason_codes": [
+                            "SELECTION_POLICY_FALLBACK_USED"
+                        ]
+                    }
+                }
+            ),
+        )
+
+    def test_every_expiry_quarantine_reason_has_public_copy(self) -> None:
+        catalog = _load_catalog()
+        quarantine_codes = set(BLOCKING_QUALITY_FLAGS) | {
+            "BAD_QUOTE_RATIO_EXCEEDED",
+            "DUPLICATE_INSTRUMENT_OR_STRIKE",
+            "INSUFFICIENT_VALID_QUOTES",
+            "SPREAD_SANITY_FAILED",
+        }
+
+        self.assertEqual(
+            set(),
+            {
+                code
+                for code in quarantine_codes
+                if "public" not in catalog.get(code, {})
+            },
+        )
 
     def test_published_top_level_reasons_have_public_copy(self) -> None:
         public_report = _canonical_published_report()

@@ -1,4 +1,5 @@
 <!-- 请不要在 PR 中包含凭证、账户数据或私有行情快照。 -->
+<!-- English contributions are welcome; every section may be completed in English. -->
 
 ## 变更内容
 

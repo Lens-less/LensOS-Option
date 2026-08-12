@@ -1,30 +1,27 @@
 # Changelog
 
-## [Unreleased]
-
-### Added
-
-- Added complete DVOL pagination, closed-day clock alignment, leave-current-out empirical ranks, and known-answer RV30 tests.
-- Added a separately owned evidence-repository reconciliation path, immutable pre-sync receipts, delivery retries, success heartbeats, and durable 30-day publication receipts.
-- Added a deny-by-default public projection, shared bundle privacy policy, concrete OpenAPI 3.1 schemas, deterministic OG cards, annual shards, and immutable dated editions.
-- Added Chinese public legal/status pages with English mirrors, Apache-2.0 code licensing, and CC BY 4.0 data/content licensing.
-- Added a guarded wheel-build cleanup hook so removed hash-named frontend assets cannot survive in packaging staging directories.
-- Added executable public-address mutation guards for IANA special-purpose IPv6 ranges and replayable private evidence for each accepted external monitoring proof.
-
-### Changed
-
-- Split the public application bundle from the internal dashboard and made every release gate verify files from the completed output tree.
-- Made the canonical HTTPS site origin, public-bundle checks, durable evidence push, publication receipt, and fresh external monitoring proof one fail-closed workflow admission contract.
-- Reworked the public narrative, freshness language, DTE display, workbench navigation, change indicator, and status history so the static site cannot imply live data or execution authority.
-- Clarified that public static HTML pages and generated evidence pages are published under `web/public/` and `crypto_options_report/static/evidence/`.
+[English release summary](CHANGELOG.en.md)
 
 本文件记录值得使用者关注的变更，格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.1.0] - 待发布
+
+> 首个公开版本定位为“可审计的 research console 工具”，不是已验证的交易信号。
+> 预登记信号验证仍处于 1/8 cohort 的积累阶段；历史净化与公开身份确定前不打 tag。
 
 ### 新增
+
+- 采集摘要、failure webhook 与 dead-man heartbeat 现在显式报告验证可用性；连续两个
+  采集日不可用会告警，即使进程本身退出成功。快照失败也不再跳过独立的标的与 DVOL
+  历史刷新。
+- 新增按到期日的纵向证据隔离：series 与 signal validation 保留健康到期日并记录失败
+  到期日及 reason codes；全链报告和公开发布仍保持整份快照 fail-closed，阈值不变。
+- 新增 2026-08-12 坏 IV 分桶诊断，确认问题来自预算填充重新引入首选 moneyness 带外的
+  无效买方 IV，而不是首选研究窗口整体失去市场流动性。
+- 补齐 Contributor Covenant、CI/license/Python 徽章、仅依赖仓库 fixture 的陌生人
+  quickstart，以及中英文贡献指引。
 
 - **排序信号的预测力验证**（`signal_validation.py`、CLI `validate-signal`）。
   此前没有任何证据表明排序主轴能预测什么：`backtest.py` 回测的是一个固定基线而不是

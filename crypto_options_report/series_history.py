@@ -33,11 +33,10 @@ from typing import Any
 
 from .edge_score import normalize_premium_to_usd
 from .market_data import (
-    build_market_data_status,
+    build_validation_surface,
     parse_timestamp_ms,
     snapshot_exchange_lock_reason,
 )
-from .surface import build_vol_surface_and_candidate_research
 
 SERIES_HISTORY_SCHEMA_VERSION = "instrument_series_history.v1"
 
@@ -73,7 +72,9 @@ def build_series_history_report(
 
     readings: dict[str, dict[str, dict[str, Any]]] = {}
     capture_dates: list[str] = []
+    usable_capture_dates: list[str] = []
     excluded: list[dict[str, Any]] = []
+    excluded_expiries: list[dict[str, Any]] = []
 
     for snapshot in sorted(
         [item for item in snapshots if isinstance(item, dict)],
@@ -97,8 +98,12 @@ def build_series_history_report(
             )
             continue
 
-        data_status = build_market_data_status(snapshot, now_ms=now_ms)
-        if data_status.get("status") != "validated":
+        vol_surface_status, isolated_expiries, data_status = build_validation_surface(
+            snapshot,
+            now_ms=now_ms,
+        )
+        excluded_expiries.extend(isolated_expiries)
+        if vol_surface_status is None:
             excluded.append(
                 {
                     "captured_at": captured_at,
@@ -107,17 +112,11 @@ def build_series_history_report(
                 }
             )
             continue
-
-        vol_surface_status, _ = build_vol_surface_and_candidate_research(
-            market_snapshot=snapshot,
-            generated_at=captured_at,
-            data_status=data_status,
-            pnl_evidence={"status": "pass"},
-        )
         date = captured_at[:10]
         if date not in capture_dates:
             capture_dates.append(date)
 
+        usable = False
         for expiry in vol_surface_status.get("expiries") or []:
             if not isinstance(expiry, dict):
                 continue
@@ -128,9 +127,12 @@ def build_series_history_report(
                 reading = _reading(point, captured_at=captured_at, expiry=expiry)
                 if reading is None:
                     continue
+                usable = True
                 # Later captures on one date replace earlier ones: a retry must
                 # not become a second observation of the same day.
                 readings.setdefault(reading["instrument_name"], {})[date] = reading
+        if usable and date not in usable_capture_dates:
+            usable_capture_dates.append(date)
 
     if not capture_dates:
         return {
@@ -138,8 +140,10 @@ def build_series_history_report(
             "status": "blocked",
             "reason_codes": [NO_VALIDATED_CAPTURES],
             "capture_dates": [],
+            "usable_capture_dates": [],
             "instruments": [],
             "excluded_captures": excluded,
+            "excluded_expiries": excluded_expiries,
         }
 
     ordered_dates = sorted(capture_dates)
@@ -169,6 +173,7 @@ def build_series_history_report(
         "status": "measured" if instruments else "blocked",
         "reason_codes": [] if instruments else [INSUFFICIENT_CAPTURE_DATES],
         "capture_dates": ordered_dates,
+        "usable_capture_dates": sorted(usable_capture_dates),
         "capture_count": len(ordered_dates),
         "instrument_count": len(instruments),
         "instruments": instruments[: int(merged["max_instruments"])],
@@ -176,6 +181,7 @@ def build_series_history_report(
             len(instruments) - int(merged["max_instruments"]), 0
         ),
         "excluded_captures": excluded,
+        "excluded_expiries": excluded_expiries,
         "cannot_tell": [
             "A residual that stays positive is as consistent with a smile the "
             "quadratic fit cannot follow at that strike as it is with a market "

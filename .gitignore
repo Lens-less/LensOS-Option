@@ -7,14 +7,11 @@ __pycache__/
 .coverage
 htmlcov/
 codex_review_output.txt
-.workflow/*.log
-.workflow/*.png
-.workflow/cdp-*.json
-.workflow/tmp/
+.workflow/
+.claude/
 .codex/
 .omx/
 .coordination-evidence/
-.workflow/ultracode/
 
 # Internal agent-coordination scaffolding. Kept out of the product repo; the
 # history before the 2026-07-26 cleanup still contains it.

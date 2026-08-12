@@ -111,7 +111,11 @@ class PublicFeedGraphRuntimeTests(unittest.TestCase):
         self.assertEqual(1, feeds["order_book"]["scope"]["sampled_instrument_count"])
         self.assertEqual(8, feeds["order_book"]["scope"]["selected_instrument_count"])
         self.assertEqual("exchange_native_only", feeds["events"]["scope"])
-        self.assertEqual([], feeds["events"]["macro_events"])
+        self.assertIsNone(feeds["events"]["macro_events"])
+        self.assertEqual(
+            "not_collected",
+            feeds["events"]["macro_events_status"],
+        )
         self.assertEqual(0.00012, feeds["funding_basis"]["funding_rate"])
         self.assertEqual(100000.0, feeds["index_spot"]["index_price"])
         self.assertEqual([], status["feed_coverage"]["missing_required_feeds"])

@@ -45,12 +45,19 @@ class CaptureDailyContractTests(unittest.TestCase):
                 from __future__ import annotations
 
                 import json
+                import os
                 import sys
                 from pathlib import Path
 
 
                 tool = sys.argv[1]
                 args = sys.argv[2:]
+                captured_at = os.environ.get(
+                    "CAPTURE_STUB_CAPTURED_AT",
+                    "2026-08-02T09:00:14Z",
+                )
+                capture_date = captured_at[:10]
+                usable = os.environ.get("CAPTURE_STUB_USABLE", "1") != "0"
 
 
                 def value(flag: str) -> str:
@@ -65,30 +72,41 @@ class CaptureDailyContractTests(unittest.TestCase):
                 if tool == "snapshot":
                     command = args[0]
                     if command == "pull-snapshot":
+                        if os.environ.get("CAPTURE_STUB_FAIL_SNAPSHOT") == "1":
+                            raise SystemExit(10)
                         output_dir = Path(value("--output-dir"))
                         output = output_dir / "btc-chain-20260802T090014.json"
                         write_json(output, {"schema_version": "stub_snapshot.v1"})
                         payload = {
                             "path": str(output.resolve()),
-                            "captured_at": "2026-08-02T09:00:14Z",
+                            "captured_at": captured_at,
                             "row_count": 1,
                             "fetch_errors": [],
+                            "market_data_status": "validated" if usable else "blocked",
+                            "quality_gate_passed": usable,
+                            "quality_reason_codes": [] if usable else ["MARKET_DATA_QUALITY_FAIL"],
+                            "validation_eligible_expiry_dates": ["2026-08-14"] if usable else [],
+                            "validation_eligible_expiry_count": 1 if usable else 0,
+                            "isolated_expiry_count": 0,
                         }
                     elif command == "series-history":
                         output = Path(value("--output"))
                         write_json(output, {"schema_version": "stub_series.v1"})
                         payload = {
-                            "generated_at": "2026-08-02T09:00:14Z",
+                            "generated_at": captured_at,
                             "instrument_count": 1,
                             "capture_count": 1,
+                            "capture_dates": [capture_date] if usable else [],
+                            "usable_capture_dates": [capture_date] if usable else [],
                         }
                     elif command == "validate-signal":
                         output = Path(value("--output"))
                         write_json(output, {"schema_version": "stub_signal.v1"})
                         payload = {
                             "status": "collecting",
-                            "generated_at": "2026-08-02T09:00:14Z",
+                            "generated_at": captured_at,
                             "reason_code": "INSUFFICIENT_SETTLED_COHORTS",
+                            "usable_capture_dates": [capture_date] if usable else [],
                         }
                     else:
                         raise SystemExit(f"unexpected snapshot command: {command}")
@@ -333,6 +351,10 @@ class CaptureDailyContractTests(unittest.TestCase):
                 payload = json.loads(received.get(timeout=5).decode("utf-8-sig"))
                 self.assertEqual("capture_daily_success_heartbeat.v1", payload["schema_version"])
                 self.assertEqual("ok", payload["status"])
+                self.assertIs(payload["usable_for_validation"], True)
+                self.assertEqual(0, payload["consecutive_unusable_days"])
+                self.assertEqual(1, payload["consecutive_usable_days"])
+                self.assertEqual([], payload["usability_reason_codes"])
                 self.assertNotIn(token, json.dumps(payload))
 
                 summary_path = (
@@ -355,6 +377,141 @@ class CaptureDailyContractTests(unittest.TestCase):
                 )
                 self.assertNotIn(token, summary_text)
                 self.assertNotIn("capture-success", summary_text)
+                self.assertIs(summary["usable_for_validation"], True)
+                self.assertEqual(0, summary["consecutive_unusable_days"])
+                self.assertEqual(1, summary["consecutive_usable_days"])
+                self.assertEqual([], summary["usability_reason_codes"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
+
+    def test_unusable_streak_triggers_webhook_and_fails_closed_on_delivery_error(
+        self,
+    ) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell is not available")
+
+        received: queue.Queue[bytes] = queue.Queue()
+        response_status = {"value": 200}
+
+        class WebhookHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                received.put(self.rfile.read(length))
+                self.send_response(response_status["value"])
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, format: str, *args: object) -> None:
+                del format, args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), WebhookHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            with TemporaryDirectory() as temporary_root_value:
+                temporary_root = Path(temporary_root_value)
+                product_root = temporary_root / "product"
+                bin_root = temporary_root / "bin"
+                product_root.mkdir()
+                bin_root.mkdir()
+                self._write_capture_stub_tooling(bin_root)
+
+                def run(captured_at: str) -> subprocess.CompletedProcess[str]:
+                    return subprocess.run(
+                        [
+                            powershell,
+                            "-NoProfile",
+                            "-File",
+                            str(self.SCRIPT),
+                            "-RepoRoot",
+                            str(product_root),
+                            "-FailureWebhookUrl",
+                            f"http://127.0.0.1:{server.server_port}/capture-unusable",
+                        ],
+                        cwd=self.REPO_ROOT,
+                        env={
+                            **os.environ,
+                            "PATH": str(bin_root)
+                            + os.pathsep
+                            + os.environ.get("PATH", ""),
+                            "CAPTURE_DAILY_CAPTURE_DVOL": "true",
+                            "CAPTURE_STUB_CAPTURED_AT": captured_at,
+                            "CAPTURE_STUB_USABLE": "0",
+                        },
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        check=False,
+                        timeout=30,
+                    )
+
+                first = run("2026-08-01T09:00:14Z")
+                self.assertEqual(0, first.returncode, first.stderr + first.stdout)
+                with self.assertRaises(queue.Empty):
+                    received.get_nowait()
+
+                second = run("2026-08-02T09:00:14Z")
+                self.assertEqual(0, second.returncode, second.stderr + second.stdout)
+                payload = json.loads(received.get(timeout=5).decode("utf-8-sig"))
+                self.assertEqual("capture_daily_failure_webhook.v1", payload["schema_version"])
+                self.assertEqual("ok", payload["status"])
+                self.assertIs(payload["usable_for_validation"], False)
+                self.assertEqual(2, payload["consecutive_unusable_days"])
+                self.assertEqual(0, payload["consecutive_usable_days"])
+                self.assertIn(
+                    "MARKET_DATA_QUALITY_FAIL",
+                    payload["usability_reason_codes"],
+                )
+
+                summary = json.loads(
+                    (
+                        product_root
+                        / "artifacts"
+                        / "logs"
+                        / "capture-daily-btc.latest.summary.json"
+                    ).read_text(encoding="utf-8-sig")
+                )
+                self.assertEqual("ok", summary["status"])
+                self.assertIs(summary["usable_for_validation"], False)
+                self.assertEqual(2, summary["consecutive_unusable_days"])
+                self.assertTrue(summary["webhook"]["delivered"])
+
+                response_status["value"] = 500
+                third = run("2026-08-03T09:00:14Z")
+                self.assertNotEqual(0, third.returncode)
+                retry_payloads = [
+                    json.loads(received.get(timeout=5).decode("utf-8-sig"))
+                    for _ in range(3)
+                ]
+                self.assertTrue(all(item == retry_payloads[0] for item in retry_payloads))
+
+                summary = json.loads(
+                    (
+                        product_root
+                        / "artifacts"
+                        / "logs"
+                        / "capture-daily-btc.latest.summary.json"
+                    ).read_text(encoding="utf-8-sig")
+                )
+                self.assertEqual("failed", summary["status"])
+                self.assertEqual("failure_webhook", summary["failed_stage"])
+                self.assertEqual(3, summary["consecutive_unusable_days"])
+                self.assertEqual(
+                    {
+                        "configured": True,
+                        "attempted": True,
+                        "delivered": False,
+                        "delivery_attempts": 3,
+                        "url": "redacted",
+                        "error": "delivery failed",
+                    },
+                    summary["webhook"],
+                )
         finally:
             server.shutdown()
             server.server_close()
@@ -547,6 +704,65 @@ class CaptureDailyContractTests(unittest.TestCase):
             self.assertFalse(summary["webhook"]["configured"])
             self.assertEqual("failed", summary["stages"][0]["status"])
 
+    def test_snapshot_failure_still_refreshes_independent_histories(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell is not available")
+
+        with TemporaryDirectory() as temporary_root_value:
+            temporary_root = Path(temporary_root_value)
+            product_root = temporary_root / "product"
+            bin_root = temporary_root / "bin"
+            product_root.mkdir()
+            bin_root.mkdir()
+            self._write_capture_stub_tooling(bin_root)
+
+            completed = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-File",
+                    str(self.SCRIPT),
+                    "-RepoRoot",
+                    str(product_root),
+                ],
+                cwd=self.REPO_ROOT,
+                env={
+                    **os.environ,
+                    "PATH": str(bin_root) + os.pathsep + os.environ.get("PATH", ""),
+                    "CAPTURE_DAILY_CAPTURE_DVOL": "true",
+                    "CAPTURE_STUB_FAIL_SNAPSHOT": "1",
+                },
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=30,
+            )
+
+            self.assertNotEqual(0, completed.returncode)
+            history_root = product_root / "artifacts" / "history"
+            self.assertTrue((history_root / "btc-daily.json").is_file())
+            self.assertTrue((history_root / "btc-dvol.json").is_file())
+
+            summary = json.loads(
+                (
+                    product_root
+                    / "artifacts"
+                    / "logs"
+                    / "capture-daily-btc.latest.summary.json"
+                ).read_text(encoding="utf-8-sig")
+            )
+            self.assertEqual("failed", summary["status"])
+            self.assertEqual("snapshot", summary["failed_stage"])
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            self.assertEqual("failed", stages["snapshot"]["status"])
+            self.assertEqual("ok", stages["underlying_history"]["status"])
+            self.assertEqual("ok", stages["dvol_history"]["status"])
+            self.assertEqual("skipped", stages["series_history"]["status"])
+            self.assertEqual("skipped", stages["signal_preflight"]["status"])
+
     def test_invalid_environment_flag_still_writes_failure_summary(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if not powershell:
@@ -701,9 +917,12 @@ class CaptureDailyContractTests(unittest.TestCase):
                 payload = json.loads(received.get(timeout=5).decode("utf-8-sig"))
                 self.assertEqual("bootstrap", payload["failed_stage"])
                 self.assertIsNone(payload["summary_file"])
+                normalized_output = "".join(
+                    (completed.stderr + completed.stdout).split()
+                )
                 self.assertIn(
-                    "capture bootstrap failed before a safe summary path was available",
-                    " ".join((completed.stderr + completed.stdout).split()),
+                    "capturebootstrapfailedbeforeasafesummarypathwasavailable",
+                    normalized_output,
                 )
                 self.assertFalse((missing_repo / "artifacts").exists())
         finally:
@@ -2070,6 +2289,41 @@ class PublishWorkflowContractTests(unittest.TestCase):
                 "-RestartInterval (New-TimeSpan -Minutes 20)",
                 document,
             )
+
+    def test_newcomer_quickstarts_use_only_tracked_fixtures(self) -> None:
+        readme = (self.REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_en = (self.REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
+        quickstarts = (
+            readme.split("## 快速开始", 1)[1].split("## 操作者车道", 1)[0],
+            readme_en.split("## Quickstart", 1)[1].split("## Operator Lane", 1)[0],
+        )
+
+        for quickstart in quickstarts:
+            with self.subTest(language="zh" if "访问" in quickstart else "en"):
+                self.assertIn("git clone", quickstart)
+                self.assertIn("python -m venv .venv", quickstart)
+                self.assertGreaterEqual(
+                    quickstart.count(
+                        "tests/fixtures/deribit_btc_option_chain_snapshot.json"
+                    ),
+                    2,
+                )
+                self.assertNotIn("artifacts/", quickstart)
+
+    def test_capture_docs_distinguish_process_success_from_validation_usability(
+        self,
+    ) -> None:
+        readme = (self.REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_en = (self.REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
+        runbook = (
+            self.REPO_ROOT / "docs" / "operations" / "public-publishing.md"
+        ).read_text(encoding="utf-8")
+
+        for document in (readme, readme_en, runbook):
+            self.assertIn("usable_for_validation", document)
+        self.assertIn("连续两个采集日", readme)
+        self.assertIn("consecutive capture days", readme_en.lower())
+        self.assertIn("consecutive_unusable_days", runbook)
 
     def test_archive_docs_point_to_current_product_contract_not_a_second_prd(self) -> None:
         archive_readme = (

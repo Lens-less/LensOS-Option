@@ -51,7 +51,7 @@ from typing import Any
 
 from .edge_score import find_atm_reference, normalize_premium_to_usd
 from .market_data import (
-    build_market_data_status,
+    build_validation_surface,
     parse_timestamp_ms,
     snapshot_exchange_lock_reason,
 )
@@ -61,7 +61,6 @@ from .pnl import (
     option_fee_inverse,
     option_fee_linear,
 )
-from .surface import build_vol_surface_and_candidate_research
 
 SIGNAL_VALIDATION_SCHEMA_VERSION = "signal_validation_report.v1"
 
@@ -207,6 +206,7 @@ def build_signal_validation_report(
 
     observations: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
+    excluded_expiries: list[dict[str, Any]] = []
     validated_snapshots = 0
 
     for snapshot in sorted(
@@ -232,8 +232,12 @@ def build_signal_validation_report(
             )
             continue
 
-        data_status = build_market_data_status(snapshot, now_ms=evaluation_now_ms)
-        if data_status.get("status") != "validated":
+        vol_surface_status, isolated_expiries, data_status = build_validation_surface(
+            snapshot,
+            now_ms=evaluation_now_ms,
+        )
+        excluded_expiries.extend(isolated_expiries)
+        if vol_surface_status is None:
             excluded.append(
                 {
                     "captured_at": captured_at,
@@ -242,13 +246,6 @@ def build_signal_validation_report(
                 }
             )
             continue
-
-        vol_surface_status, _ = build_vol_surface_and_candidate_research(
-            market_snapshot=snapshot,
-            generated_at=captured_at,
-            data_status=data_status,
-            pnl_evidence={"status": "pass"},
-        )
         validated_snapshots += 1
         observations.extend(
             _observations_from_surface(
@@ -267,6 +264,7 @@ def build_signal_validation_report(
             config=merged,
             reason_codes=[NO_VALIDATED_SNAPSHOTS],
             excluded=excluded,
+            excluded_expiries=excluded_expiries,
         )
 
     observations, duplicates = _deduplicate_by_date(observations)
@@ -290,6 +288,7 @@ def build_signal_validation_report(
             "carry settlement-window error that is not modelled."
         ),
         "excluded_snapshots": excluded,
+        "excluded_expiries": excluded_expiries,
     }
 
     reason_codes: list[str] = []
@@ -363,6 +362,8 @@ def build_signal_preflight_report(
 
     cohorts: dict[str, dict[str, Any]] = {}
     excluded: list[dict[str, Any]] = []
+    excluded_expiries: list[dict[str, Any]] = []
+    usable_capture_dates: list[str] = []
 
     for snapshot in sorted(
         [item for item in snapshots if isinstance(item, dict)],
@@ -384,8 +385,12 @@ def build_signal_preflight_report(
                 {"captured_at": captured_at, "reason_code": exchange_lock_reason}
             )
             continue
-        data_status = build_market_data_status(snapshot, now_ms=evaluation_now_ms)
-        if data_status.get("status") != "validated":
+        vol_surface_status, isolated_expiries, data_status = build_validation_surface(
+            snapshot,
+            now_ms=evaluation_now_ms,
+        )
+        excluded_expiries.extend(isolated_expiries)
+        if vol_surface_status is None:
             excluded.append(
                 {
                     "captured_at": captured_at,
@@ -394,13 +399,7 @@ def build_signal_preflight_report(
                 }
             )
             continue
-
-        vol_surface_status, _ = build_vol_surface_and_candidate_research(
-            market_snapshot=snapshot,
-            generated_at=captured_at,
-            data_status=data_status,
-            pnl_evidence={"status": "pass"},
-        )
+        snapshot_observation_count = 0
         for expiry in vol_surface_status.get("expiries") or []:
             if not isinstance(expiry, dict):
                 continue
@@ -434,8 +433,14 @@ def build_signal_preflight_report(
                 reason = _preflight_blocking_reason(point)
                 if reason is None:
                     cohort["observation_count"] += 1
+                    snapshot_observation_count += 1
                 else:
                     _count(cohort["blocking_reasons"], reason)
+        if (
+            snapshot_observation_count > 0
+            and captured_at[:10] not in usable_capture_dates
+        ):
+            usable_capture_dates.append(captured_at[:10])
 
     rows = [_preflight_cohort(cohort, closes_by_date) for cohort in cohorts.values()]
     rows.sort(key=lambda row: row["expiry_date"])
@@ -445,6 +450,8 @@ def build_signal_preflight_report(
         "reason_codes": [],
         "snapshot_count": len(snapshots),
         "excluded_snapshots": excluded,
+        "excluded_expiries": excluded_expiries,
+        "usable_capture_dates": sorted(usable_capture_dates),
         "cohorts": rows,
         "bands": {
             band: _preflight_band(rows, band=band, config=merged)
@@ -567,6 +574,7 @@ def _blocked(
     config: dict[str, Any],
     reason_codes: list[str],
     excluded: list[dict[str, Any]] | None = None,
+    excluded_expiries: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         **_base(generated_at, config),
@@ -577,6 +585,7 @@ def _blocked(
             "independent_expiry_cohorts": 0,
             "sample_size_basis": "independent_expiry_cohorts",
             "excluded_snapshots": list(excluded or []),
+            "excluded_expiries": list(excluded_expiries or []),
         },
         "signals": {},
         "summary": _summary({}),

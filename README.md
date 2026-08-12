@@ -2,6 +2,10 @@
 
 [English](README.en.md) · 中文
 
+[![CI](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml/badge.svg)](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+![Python >=3.12](https://img.shields.io/badge/Python-%3E%3D3.12-3776AB?logo=python&logoColor=white)
+
 一个**期权入场前的研究工具**：它读取 Deribit 的公开行情，判断“现在有没有一个
 值得考虑的卖方机会”，并把结论所依赖的每一份证据都摊开给你看。
 
@@ -34,10 +38,16 @@ CLI 与 HTTP API 是驱动这两个界面的**本地引擎接口**，供集成�
 
 ## 快速开始
 
-需要 Python ≥ 3.12。运行时零第三方依赖。
+需要 Git 与 Python ≥ 3.12。运行时零第三方依赖；以下路径不需要凭证、本地采集产物
+或任何 owner 基础设施。
 
 ```powershell
-python -m pip install -e ".[test]"
+git clone https://github.com/Lens-less/LensOS-Option.git
+Set-Location LensOS-Option
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade -c constraints.txt pip setuptools
+python -m pip install --no-build-isolation -c constraints.txt -e ".[test]"
 python -m pytest -q
 ```
 
@@ -53,8 +63,7 @@ python -m crypto_options_report.cli analysis `
 
 ```powershell
 python -m crypto_options_report.api --host 127.0.0.1 --port 8000 --replay `
-  --snapshot-fixture artifacts/snapshots/btc-series/<capture>.json `
-  --underlying-history-fixture artifacts/history/btc-daily.json
+  --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json
 ```
 
 然后访问 <http://127.0.0.1:8000/evidence>。
@@ -72,7 +81,12 @@ HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标�
 > 同理，production 模式下 `/readyz` 会稳定返回 `503`：当前没有可提升的模型，
 > 就绪门禁按设计保持关闭。**这不代表进程异常**，`/livez` 才表示进程存活。
 
-## 静态公开版
+## 操作者车道（Windows-only，可选）
+
+本节及后文的日采集、计划任务与静态发布只用于维护一个持续运行的公开实例，依赖
+PowerShell、可选的私有证据仓和外部托管。它们不是快速开始或贡献代码的前置条件。
+
+### 静态公开版与发布
 
 公开站不运行会访问 Deribit 或持有凭证的服务。日更任务先用
 [`tools/capture-daily.ps1`](tools/capture-daily.ps1) 固化市场快照、标的历史、DVOL 历史与研究产物，
@@ -225,7 +239,10 @@ crypto-options-report series-history `
 逐合约的 TradingView K 线也只对成交过的合约有数据、且不含 IV 与买卖盘。
 所以这个验证**无法回溯补数**，只能从今天开始按天采集，等合约自然到期。
 
-每天抓一次，文件按采集时间命名，不会互相覆盖：
+#### 操作者采集与计划任务（Windows-only）
+
+下面的日采集与 Windows 计划任务是可选的运营车道，不属于陌生人快速开始。每天抓一次，
+文件按采集时间命名，不会互相覆盖：
 
 ```powershell
 crypto-options-report pull-snapshot --currency BTC --instrument-limit 64 `
@@ -255,14 +272,19 @@ Register-ScheduledTask -TaskName "LensOS-Option-DailyCapture" `
 读取的计划任务参数；应通过运行该任务的专用账户注入。外部监控还必须独立拉取公开
 `health.json` 并比较 `stale_after`，成功 ping 不能替代这条正向检查。
 
+摘要与两个通知 payload 都会写入 `usable_for_validation`、可用性 reason codes，以及连续
+可用/不可用天数。即使脚本退出成功，只要连续两个采集日没有推进验证序列，也会触发失败
+webhook；快照阶段失败时，互不依赖的标的历史和 DVOL 历史仍会继续刷新。
+
 采集日志在 `artifacts/logs/capture-daily.log`。同一天跑多次是安全的：验证器按
 “日期 × 合约”去重并报告丢弃了多少条，不会让重复行把当日横截面的相关性拉紧。
 
 **攒够 8 个 cohort 需要约 2 个月，不是几周。** 7–35 天窗口内同时只挂着 3 个到期日，新的
 周度到期日每周才进来一个。Deribit 确实有 1–5 天的日到期合约（看起来能把速度提高八倍），
-但实测**它们过不了数据质量门禁**（`INVALID_BID_IV` / `INSUFFICIENT_VALID_QUOTES`），而且
-门禁是整份快照评估的，把它们混进来会连健康的研究窗口报价一起废掉。为验证方便放宽门禁，
-正是这个项目存在的意义所反对的，所以采集窗口保持在 7–35 天。
+但历史样本显示**它们过不了数据质量门禁**（`INVALID_BID_IV` /
+`INSUFFICIENT_VALID_QUOTES`）。纵向 series/preflight 现在会只隔离失败的到期日，健康到期日
+仍可进入对应 cohort；全链报告与公开发布仍维持整份快照阻断，所有阈值保持不变。采集窗口
+继续保持在 7–35 天，不用低质量日到期合约换验证速度。
 
 等待期间用 preflight 监控采集是否真的在产出观测——**采集不可回补，一个缺陷不被发现多久
 就浪费多久**：

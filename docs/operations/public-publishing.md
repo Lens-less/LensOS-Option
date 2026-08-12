@@ -149,10 +149,18 @@ paper-ledger state, and sizing/order-cap fields.
 - A public monitor should compare the current wall clock to
   `publish_edition.stale_after`. The static tree does not update `is_stale`
   itself.
-- `capture-daily.ps1` can send a success-only dead-man ping through
-  `-SuccessHeartbeatUrl` / `CAPTURE_DAILY_SUCCESS_HEARTBEAT_URL`, after capture
-  and durable evidence sync have both succeeded. Delivery failure is fatal and
-  is recorded without persisting the URL.
+- `capture-daily.ps1` sends the dead-man ping through `-SuccessHeartbeatUrl` /
+  `CAPTURE_DAILY_SUCCESS_HEARTBEAT_URL` only after capture and durable evidence
+  sync have both succeeded. Its summary and notification payloads distinguish
+  process success from validation usability with `usable_for_validation`,
+  `usability_reason_codes`, `consecutive_usable_days`, and
+  `consecutive_unusable_days`.
+- Two consecutive capture days that do not advance a usable series trigger the
+  failure webhook even when the process status is `ok`. A snapshot-stage failure
+  still refreshes independent underlying and DVOL histories, then exits nonzero;
+  series and preflight are explicitly recorded as skipped.
+- Webhook or heartbeat delivery failure is fatal and is recorded without
+  persisting the URL.
 - The success ping is not an external health check. A separately owned hourly
   monitor must fetch `/api/v1/health.json` and compare its own clock to
   `stale_after`. Domain ownership and that third-party monitor remain explicit

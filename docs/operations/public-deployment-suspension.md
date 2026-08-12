@@ -8,6 +8,19 @@ This decision does not weaken any fail-closed gate: daily capture, evidence
 production, and public-bundle verification continue, while publication and
 hosting cutover do not run.
 
+## Second capture point
+
+The prepared default route is the existing GitHub Actions cloud lane scheduled
+by `.github/workflows/publish.yml` at `08:10 UTC`. It remains operationally
+**suspended**, together with public deployment, until the private evidence-repo
+push credential and notification endpoints below are configured. The workflow
+definition stays enabled and fail-closed, but a scheduled run without those
+owner inputs is not acceptance evidence for an active second capture point.
+
+Do not re-open route selection in automation while this item is suspended.
+After activation, close the DS-6 acceptance gate only after three consecutive
+days show both local and cloud snapshots and no evidence-repository conflict.
+
 ## Reason code
 
 `DEPLOY_SUSPENDED`
@@ -25,6 +38,9 @@ hosting cutover do not run.
 
 - Automation records `DEPLOY_SUSPENDED`; it does not claim or attempt a deploy.
 - Capture and public-bundle verification continue while suspended.
+- The Actions cloud lane is the prepared DS-6 route; activation remains blocked
+  on an owner decision and credentials, and acceptance requires the three-day
+  dual-capture observation above.
 - Clearing the suspension requires an intentional repository change plus
   verified owner-controlled infrastructure inputs; placeholder values do not
   qualify.
