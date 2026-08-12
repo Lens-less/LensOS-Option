@@ -1051,7 +1051,9 @@ class CaptureDailyContractTests(unittest.TestCase):
             self.assertEqual("capture_daily_receipt.v1", receipt["schema_version"])
             self.assertEqual("capture_complete", receipt["status"])
             self.assertEqual("pending", receipt["evidence_repo_sync"]["status"])
-            receipt_relative = receipt_path.relative_to(product_root / "artifacts")
+            receipt_relative = receipt_path.resolve().relative_to(
+                (product_root / "artifacts").resolve()
+            )
             evidence_receipt_path = evidence_root / receipt_relative
             self.assertEqual(receipt_path.read_bytes(), evidence_receipt_path.read_bytes())
 

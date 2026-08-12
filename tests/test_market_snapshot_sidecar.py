@@ -94,13 +94,13 @@ class MarketSnapshotSidecarTests(unittest.TestCase):
             key_file = key_dir / "shared.key"
             key_file.write_bytes(b"s" * 32)
             write_snapshot_fixture(output, snapshot)
-            relative_alias = os.path.relpath(key_file, Path.cwd())
+            path_alias = key_dir / ".." / key_dir.name / key_file.name
 
             with mock.patch.dict(
                 os.environ,
                 {
                     MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV: str(key_file),
-                    "CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_HMAC_KEY_FILE": relative_alias,
+                    "CRYPTO_OPTIONS_ACCOUNT_SNAPSHOT_HMAC_KEY_FILE": str(path_alias),
                 },
                 clear=True,
             ), self.assertRaisesRegex(

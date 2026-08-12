@@ -975,7 +975,14 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         try:
             if write_body:
                 self.wfile.write(body)
-        except (TimeoutError, BrokenPipeError, ConnectionResetError):
+            self.wfile.flush()
+            self._drain_unread_request_body_after_response()
+        except (
+            TimeoutError,
+            BrokenPipeError,
+            ConnectionAbortedError,
+            ConnectionResetError,
+        ):
             _log_json(
                 "client_disconnected",
                 request_id=self._request_id,
@@ -985,6 +992,31 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         finally:
             self.close_connection = True
             self._log_access(status)
+
+    def _drain_unread_request_body_after_response(self) -> None:
+        if getattr(self, "_request_body_consumed", False):
+            return
+        raw_length = self.headers.get("Content-Length")
+        try:
+            content_length = int(raw_length or "0")
+        except ValueError:
+            content_length = 0
+        remaining = min(max(content_length, 0), OVERLOAD_DRAIN_LIMIT_BYTES)
+        if remaining == 0:
+            return
+        try:
+            # Send the complete rejection before consuming any untrusted body.
+            # Draining only the declared bounded remainder prevents Windows from
+            # replacing that response with a TCP RST when the socket closes.
+            self.connection.shutdown(socket.SHUT_WR)
+            self.connection.settimeout(OVERLOAD_DRAIN_TIMEOUT_SEC)
+            while remaining > 0:
+                chunk = self.rfile.read(min(4096, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            return
 
     def _read_backtest_request(self) -> dict[str, Any]:
         if self.headers.get_content_type() != "application/json":
@@ -1011,6 +1043,7 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
                 f"JSON request body exceeds {MAX_BACKTEST_REQUEST_BYTES} bytes",
             )
         raw = self.rfile.read(content_length)
+        self._request_body_consumed = True
         try:
             value = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:

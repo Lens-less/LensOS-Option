@@ -121,13 +121,13 @@ class SidecarAuthenticationTests(unittest.TestCase):
             payload_path = data_dir / "account.json"
             payload = {"captured_at": "2026-07-14T00:00:00Z", "rows": []}
             payload_path.write_text(json.dumps(payload), encoding="utf-8")
-            relative_alias = os.path.relpath(key_file, Path.cwd())
+            path_alias = key_dir / ".." / key_dir.name / key_file.name
 
             with mock.patch.dict(
                 os.environ,
                 {
                     ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV: str(key_file),
-                    "CRYPTO_OPTIONS_MARKET_SNAPSHOT_HMAC_KEY_FILE": relative_alias,
+                    "CRYPTO_OPTIONS_MARKET_SNAPSHOT_HMAC_KEY_FILE": str(path_alias),
                 },
                 clear=True,
             ), self.assertRaisesRegex(

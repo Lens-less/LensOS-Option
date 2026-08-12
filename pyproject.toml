@@ -38,8 +38,10 @@ Issues = "https://github.com/Lens-less/LensOS-Option/issues"
 Changelog = "https://github.com/Lens-less/LensOS-Option/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-test = ["pytest>=8,<9"]
-dev = ["pytest>=8,<9", "ruff>=0.9"]
+# Packaging contract tests invoke setup.py directly, so the build backend must
+# also be present in the test environment rather than only its isolated build env.
+test = ["pytest>=8,<9", "setuptools>=77"]
+dev = ["pytest>=8,<9", "ruff>=0.9", "setuptools>=77"]
 
 [project.scripts]
 crypto-options-report = "crypto_options_report.cli:main"

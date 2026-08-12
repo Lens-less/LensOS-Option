@@ -190,7 +190,7 @@ class AtomicWriteTextTests(unittest.TestCase):
             ):
                 written = atomic_write_text(target, "new")
 
-            self.assertEqual(target, written)
+            self.assertEqual(target.resolve(), written)
             self.assertEqual("new", target.read_text(encoding="utf-8"))
             self.assertEqual("old", seen["destination_contents_before"])
             self.assertEqual("new", seen["source_contents_before"])

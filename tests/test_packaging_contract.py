@@ -27,6 +27,14 @@ def test_wheel_declares_public_legal_pages_and_both_license_files() -> None:
     assert "resources/*.json" in package_data
 
 
+def test_direct_setup_contract_declares_its_build_backend_as_a_test_tool() -> None:
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    optional_dependencies = config["project"]["optional-dependencies"]
+    assert "setuptools>=77" in optional_dependencies["test"]
+    assert "setuptools>=77" in optional_dependencies["dev"]
+
+
 def _run_build_py(build_lib: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "setup.py", "build_py", "--build-lib", str(build_lib)],
