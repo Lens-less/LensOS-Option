@@ -1574,7 +1574,7 @@ class PublishWorkflowContractTests(unittest.TestCase):
         self.assertIn("steps.publish_site.outcome == 'success'", workflow)
         self.assertIn("actions/setup-node", workflow)
         self.assertIn(
-            "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6",
+            "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
             workflow,
         )
         self.assertIn("working-directory: product/web", workflow)
