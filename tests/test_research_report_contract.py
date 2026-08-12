@@ -354,7 +354,6 @@ class ResearchReportContractTests(unittest.TestCase):
         report = smoke_once(
             snapshot_fixture=str(self._fixture_path()),
             account_scenario="green",
-            generated_at="2026-07-07T00:01:30Z",
         )
 
         self.assertEqual([], validate_report_contract(report))

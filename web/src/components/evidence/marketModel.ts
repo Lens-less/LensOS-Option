@@ -3,7 +3,16 @@ import type {
   NakedCallCandidate,
   ResearchReport,
 } from "../../contracts";
-import { finiteNumber, friendlySource } from "./reportModel";
+import {
+  formatDecimal,
+  formatDvol,
+  formatExpiry,
+  formatPercent,
+  formatTimestamp,
+  formatUsd,
+  friendlySource,
+} from "../../report/display";
+import { finiteNumber } from "../../report/numbers";
 
 type CandidateKind = "naked" | "spread";
 
@@ -36,70 +45,7 @@ export interface CandidateRow {
   noArbPass: boolean | null;
 }
 
-export function formatTimestamp(value: string | null | undefined): string {
-  if (!value) {
-    return "未提供生成时间";
-  }
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    dateStyle: "medium",
-    timeStyle: "medium",
-    timeZone: "Asia/Shanghai",
-  }).format(parsed);
-}
-
-export function formatExpiry(value: string | null): string {
-  if (!value) {
-    return "到期日未提供";
-  }
-  const parsed = Date.parse(`${value}T00:00:00Z`);
-  if (!Number.isFinite(parsed)) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(parsed);
-}
-
-export function formatUsd(value: number | null): string {
-  if (value === null) {
-    return "—";
-  }
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
-}
-
-export function formatDvol(value: number | null): string {
-  if (value === null) {
-    return "不可用";
-  }
-  const percentage = Math.abs(value) <= 2 ? value * 100 : value;
-  return `${percentage.toFixed(2)}%`;
-}
-
-export function formatPercent(value: number | null, digits = 1): string {
-  if (value === null) {
-    return "—";
-  }
-  const percentage = Math.abs(value) <= 2 ? value * 100 : value;
-  return `${percentage.toFixed(digits)}%`;
-}
-
-export function formatDecimal(
-  value: number | null,
-  digits: number,
-  fallback = "—",
-): string {
-  return value === null ? fallback : value.toFixed(digits);
-}
+export { formatDecimal, formatDvol, formatExpiry, formatPercent, formatTimestamp, formatUsd };
 
 export function marketFacts(report: ResearchReport): MarketFacts {
   const expiries = report.vol_surface_status?.expiries ?? [];

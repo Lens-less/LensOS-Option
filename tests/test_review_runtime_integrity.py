@@ -447,6 +447,7 @@ class JobApiIntegrityTests(unittest.TestCase):
                     headers={
                         "Content-Type": "application/json",
                         "Idempotency-Key": key,
+                        "Origin": f"http://127.0.0.1:{server.server_port}",
                     },
                 )
                 post_response = post_connection.getresponse()

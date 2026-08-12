@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from collections.abc import Sequence
+from functools import partial
 from math import isfinite
 from pathlib import Path
 from typing import Any
 
+from ._logging import _log_json as shared_log_json
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     DEFAULT_TICKER_REQUEST_BUDGET,
@@ -19,7 +20,6 @@ from .market_data import (
     fetch_deribit_option_chain_snapshot,
     load_snapshot_fixture,
     snapshot_trust_state_path,
-    utc_timestamp,
     validate_deribit_base_url,
     validate_ticker_request_limit,
     write_snapshot_fixture,
@@ -30,6 +30,7 @@ from .sidecar_auth import SidecarAuthUnavailable
 DEFAULT_REFRESH_INTERVAL_SECONDS = 10.0
 EXIT_OK = 0
 EXIT_REFRESH_FAILED = 1
+_log_json = partial(shared_log_json, constant_fields={"research_only": True})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -207,19 +208,6 @@ def _validated_base_url(
     except ValueError as exc:
         parser.error(str(exc))
     raise AssertionError("argparse.error must exit")
-
-
-def _log_json(event: str, **fields: Any) -> None:
-    payload = {
-        "timestamp": utc_timestamp(),
-        "event": event,
-        "research_only": True,
-    }
-    payload.update(fields)
-    print(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")),
-        file=sys.stderr,
-    )
 
 
 if __name__ == "__main__":

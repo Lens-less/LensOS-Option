@@ -428,6 +428,71 @@ class CaptureDailyContractTests(unittest.TestCase):
             server.server_close()
             server_thread.join(timeout=5)
 
+    def test_successful_capture_without_heartbeat_logs_skipped_stage_truthfully(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell is not available")
+
+        with TemporaryDirectory() as temporary_root_value:
+            temporary_root = Path(temporary_root_value)
+            product_root = temporary_root / "product"
+            bin_root = temporary_root / "bin"
+            product_root.mkdir()
+            bin_root.mkdir()
+            self._write_capture_stub_tooling(bin_root)
+
+            completed = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-File",
+                    str(self.SCRIPT),
+                    "-RepoRoot",
+                    str(product_root),
+                ],
+                cwd=self.REPO_ROOT,
+                env={
+                    **os.environ,
+                    "PATH": str(bin_root) + os.pathsep + os.environ.get("PATH", ""),
+                    "CAPTURE_DAILY_CAPTURE_DVOL": "true",
+                },
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=30,
+            )
+
+            self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
+            summary_path = (
+                product_root
+                / "artifacts"
+                / "logs"
+                / "capture-daily-btc.latest.summary.json"
+            )
+            summary = json.loads(summary_path.read_text(encoding="utf-8-sig"))
+            self.assertEqual(
+                {
+                    "configured": False,
+                    "attempted": False,
+                    "delivered": None,
+                    "delivery_attempts": 0,
+                    "error": None,
+                },
+                summary["success_heartbeat"],
+            )
+            heartbeat_stage = next(
+                stage for stage in summary["stages"] if stage["name"] == "success_heartbeat"
+            )
+            self.assertEqual("skipped", heartbeat_stage["status"])
+
+            log_text = (
+                product_root / "artifacts" / "logs" / "capture-daily.log"
+            ).read_text(encoding="utf-8-sig")
+            self.assertIn("success_heartbeat skipped (not configured)", log_text)
+            self.assertNotIn("success_heartbeat ok", log_text)
+
     def test_capture_failure_writes_a_machine_readable_summary(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if not powershell:
@@ -1563,6 +1628,79 @@ class PublishWorkflowContractTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, workflow)
 
+    def test_publish_workflow_suspends_deploy_attempts_but_keeps_local_verification(self) -> None:
+        workflow = self.WORKFLOW.read_text(encoding="utf-8")
+
+        fragments = (
+            'LENSOS_DEPLOY_DECISION: "SUSPENDED"',
+            "LENSOS_DEPLOY_DECISION_ISSUE",
+            'LENSOS_DEPLOY_DECISION_ISSUE: "docs/operations/public-deployment-suspension.md"',
+            "Build public bundle",
+            "Test public bundle boundary",
+            "Record suspended deployment decision",
+            "Build dist/site and enforce publish contract",
+            "DEPLOY_SUSPENDED",
+            "status = 'suspended'",
+            "decision_issue = $env:DEPLOY_DECISION_ISSUE",
+            "expected_owner_inputs = @(",
+            "if: always() && env.LENSOS_DEPLOY_DECISION == 'SUSPENDED'",
+            "if: always() && env.LENSOS_DEPLOY_DECISION != 'SUSPENDED'",
+            "No publication or hosting step was attempted.",
+        )
+        for fragment in fragments:
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, workflow)
+
+        build_step = workflow[
+            workflow.index("      - name: Build public bundle") : workflow.index(
+                "      - name: Test public bundle boundary"
+            )
+        ]
+        self.assertIn("if: steps.capture.outcome == 'success'", build_step)
+        self.assertNotIn("steps.config.outputs.evidence_sync_ready == 'true'", build_step)
+
+        boundary_step = workflow[
+            workflow.index("      - name: Test public bundle boundary") : workflow.index(
+                "      - name: Record suspended deployment decision"
+            )
+        ]
+        self.assertIn(
+            "if: steps.capture.outcome == 'success' && steps.bundle_build.outcome == 'success'",
+            boundary_step,
+        )
+
+        suspended_step = workflow[
+            workflow.index("      - name: Record suspended deployment decision") : workflow.index(
+                "      - name: Build dist/site and enforce publish contract"
+            )
+        ]
+        self.assertIn(
+            "if: always() && env.LENSOS_DEPLOY_DECISION == 'SUSPENDED'",
+            suspended_step,
+        )
+        self.assertNotIn("python @publishArgs", suspended_step)
+
+        publish_step = workflow[
+            workflow.index("      - name: Build dist/site and enforce publish contract") : workflow.index(
+                "      - name: Record durable publication receipt"
+            )
+        ]
+        self.assertIn(
+            "if: always() && env.LENSOS_DEPLOY_DECISION != 'SUSPENDED'",
+            publish_step,
+        )
+
+        receipt_step = workflow[
+            workflow.index("      - name: Record durable publication receipt") : workflow.index(
+                "      - name: Upload dist/site artifact"
+            )
+        ]
+        self.assertIn("env.LENSOS_DEPLOY_DECISION != 'SUSPENDED'", receipt_step)
+        self.assertNotIn(
+            "steps.config.outputs.evidence_sync_ready == 'true'",
+            boundary_step,
+        )
+
     def test_missing_sync_configuration_fails_only_after_capture(self) -> None:
         workflow = self.WORKFLOW.read_text(encoding="utf-8")
 
@@ -1888,6 +2026,37 @@ class PublishWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("deploy-pages", workflow)
         self.assertNotIn("custom-domain", workflow.lower())
         self.assertNotIn("vercel", workflow.lower())
+
+    def test_scheduled_task_docs_set_restart_policy(self) -> None:
+        readme = (self.REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_en = (self.REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
+
+        for document in (readme, readme_en):
+            self.assertIn("-RestartCount 3", document)
+            self.assertIn(
+                "-RestartInterval (New-TimeSpan -Minutes 20)",
+                document,
+            )
+
+    def test_archive_docs_point_to_current_product_contract_not_a_second_prd(self) -> None:
+        archive_readme = (
+            self.REPO_ROOT / "docs" / "archive" / "README.md"
+        ).read_text(encoding="utf-8")
+        archived_prd = (
+            self.REPO_ROOT / "docs" / "archive" / "v1-spec" / "prd-v1.1.md"
+        ).read_text(encoding="utf-8")
+        archived_spec = (
+            self.REPO_ROOT / "docs" / "archive" / "v1-spec" / "spec-v1.1-audit-fixed.md"
+        ).read_text(encoding="utf-8")
+
+        for document in (archive_readme, archived_prd, archived_spec):
+            self.assertIn("2026-08-02-public-product-spec.md", document)
+            self.assertIn(
+                "2026-08-12-continuity-and-consistency-spec.md",
+                document,
+            )
+            self.assertIn("研究输入与历史方向", document)
+            self.assertNotIn("现行 North Star", document)
 
 
 if __name__ == "__main__":

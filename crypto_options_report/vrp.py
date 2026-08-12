@@ -15,24 +15,20 @@ from collections.abc import Iterable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
+from ._http import json_getter
+from ._http import no_redirect_urlopen as urlopen
+from ._time import utc_timestamp
 from .empirical_rank import empirical_percentile, vrp_band_for_percentile
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
     MAX_MARKET_SNAPSHOT_BYTES,
     parse_timestamp_ms,
     resolve_snapshot_fixture_path,
-    utc_timestamp,
     validate_deribit_base_url,
 )
 from .realized_vol import annualized_volatility
-from .storage import (
-    read_json_object_from_regular_file,
-    read_json_object_from_stream,
-)
+from .storage import read_json_object_from_regular_file
 
 DVOL_HISTORY_SCHEMA_VERSION = "dvol_history.v1"
 VRP_STATUS_SCHEMA_VERSION = "vrp_status.v1"
@@ -41,6 +37,11 @@ MIN_VRP_SERIES_SAMPLE_COUNT = 1000
 _SECONDS_PER_DAY = 86400
 _MILLISECONDS_PER_DAY = _SECONDS_PER_DAY * 1000
 _VALIDATED_VRP_EVIDENCE = "validated_public_deribit_histories"
+_get_json = json_getter(
+    max_bytes=MAX_MARKET_SNAPSHOT_BYTES,
+    description="Deribit dvol history response",
+    opener=lambda request, *, timeout: urlopen(request, timeout=timeout),
+)
 
 
 def load_dvol_history_fixture(
@@ -879,27 +880,6 @@ def _settlement_evaluation_date(timestamp_seconds: float) -> date:
     if evaluation.hour < 8:
         return evaluation.date() - timedelta(days=1)
     return evaluation.date()
-
-
-def _get_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
-    request = Request(
-        f"{url}?{urlencode(params)}",
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "codex-option-research/0.1",
-        },
-    )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            return read_json_object_from_stream(
-                response,
-                max_bytes=MAX_MARKET_SNAPSHOT_BYTES,
-                description="Deribit dvol history response",
-            )
-    except HTTPError as exc:
-        raise ValueError(f"http {exc.code} {exc.reason}") from exc
-    except URLError as exc:
-        raise ValueError(f"network error: {exc.reason}") from exc
 
 
 def _jsonrpc_result(payload: Any, *, endpoint: str) -> Any:

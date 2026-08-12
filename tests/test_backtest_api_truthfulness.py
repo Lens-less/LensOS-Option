@@ -46,7 +46,7 @@ class BacktestApiTruthfulnessTests(unittest.TestCase):
     def test_get_default_backtest_report_is_not_run_without_performance(self):
         status, _, payload = self._request(
             "GET",
-            "/backtest/report/default?generated_at=2026-07-07T00%3A01%3A30Z",
+            "/backtest/report/default",
         )
 
         self.assertEqual(200, status)
@@ -114,7 +114,15 @@ class BacktestApiTruthfulnessTests(unittest.TestCase):
         self.assertEqual(422, status)
         self.assertIn("RFC3339", payload["error"])
 
-    def _request(self, method: str, path: str, *, body=None, headers=None):
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body=None,
+        headers=None,
+        same_origin_write: bool = True,
+    ):
         server = ResearchHTTPServer(
             ("127.0.0.1", 0),
             ResearchReportHandler,
@@ -132,6 +140,13 @@ class BacktestApiTruthfulnessTests(unittest.TestCase):
             request_headers = dict(headers or {})
             if encoded is not None:
                 request_headers["Content-Type"] = "application/json"
+            if (
+                same_origin_write
+                and method in {"POST", "DELETE"}
+                and "Origin" not in request_headers
+                and "Authorization" not in request_headers
+            ):
+                request_headers["Origin"] = f"http://127.0.0.1:{server.server_port}"
             connection.request(method, path, body=encoded, headers=request_headers)
             response = connection.getresponse()
             body = response.read().decode("utf-8")

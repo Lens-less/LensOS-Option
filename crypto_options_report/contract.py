@@ -12,9 +12,9 @@ no-trade safeguards.
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime
 from typing import Any
 
+from ._time import utc_timestamp
 from .account_risk import (
     ACCOUNT_GATE_NO_TRADE,
     ACCOUNT_MARGIN_HALT,
@@ -119,15 +119,6 @@ DEFAULT_REASON_CODES = [
     CALIBRATION_NOT_IMPLEMENTED,
     "BACKTEST_NOT_RUN",
 ]
-
-
-def utc_timestamp() -> str:
-    return (
-        datetime.now(UTC)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def _build_research_report_v1_projection(
@@ -1421,18 +1412,40 @@ def _build_data_trust_summary(data_status: dict[str, Any]) -> dict[str, Any]:
             "source_class": "live",
         }
     consecutive_passes = _nonnegative_number(evidence.get("consecutive_passes"))
-    minimum_passes = _positive_number(
-        evidence.get("minimum_consecutive_passes", evidence.get("required_consecutive_passes")),
-        default=3.0,
+    supplied_minimum_passes = _positive_number(
+        evidence.get(
+            "minimum_consecutive_passes",
+            evidence.get("required_consecutive_passes"),
+        )
+    )
+    policy_minimum_passes, policy_minimum_observation_seconds = (
+        _trust_promotion_thresholds()
+    )
+    minimum_passes = max(
+        policy_minimum_passes,
+        supplied_minimum_passes
+        if supplied_minimum_passes is not None
+        else policy_minimum_passes,
     )
     observation_seconds = _nonnegative_number(
         evidence.get("observation_seconds", evidence.get("observation_sec"))
     )
-    minimum_observation_seconds = _positive_number(
+    supplied_minimum_observation_seconds = _positive_number(
         evidence.get(
             "minimum_observation_seconds", evidence.get("required_observation_sec")
-        ),
-        default=30.0,
+        )
+    )
+    minimum_observation_seconds = max(
+        policy_minimum_observation_seconds,
+        supplied_minimum_observation_seconds
+        if supplied_minimum_observation_seconds is not None
+        else policy_minimum_observation_seconds,
+    )
+    threshold_evidence_missing = (
+        supplied_minimum_passes is None
+        or supplied_minimum_observation_seconds is None
+        or "TRUST_PROMOTION_MINIMUMS_MISSING"
+        in {str(item) for item in evidence.get("reason_codes") or []}
     )
     feed_coverage = data_status.get("feed_coverage") or {}
     response_contract = data_status.get("public_response_contract") or {}
@@ -1443,6 +1456,7 @@ def _build_data_trust_summary(data_status: dict[str, Any]) -> dict[str, Any]:
     )
     promoted = (
         evidence_status in {"promoted", "trusted"}
+        and not threshold_evidence_missing
         and consecutive_passes >= minimum_passes
         and observation_seconds >= minimum_observation_seconds
         and feeds_complete
@@ -1458,7 +1472,12 @@ def _build_data_trust_summary(data_status: dict[str, Any]) -> dict[str, Any]:
         }
 
     reasons = list(evidence.get("reason_codes") or [])
-    if consecutive_passes < minimum_passes or observation_seconds < minimum_observation_seconds:
+    if threshold_evidence_missing:
+        reasons.append("DATA_TRUST_THRESHOLD_EVIDENCE_MISSING")
+    elif (
+        consecutive_passes < minimum_passes
+        or observation_seconds < minimum_observation_seconds
+    ):
         reasons.append("DATA_TRUST_OBSERVATION_COLLECTING")
     if not feeds_complete:
         reasons.append("PUBLIC_FEED_GRAPH_INCOMPLETE")
@@ -1480,9 +1499,21 @@ def _nonnegative_number(value: Any) -> float:
     return max(0.0, float(value))
 
 
-def _positive_number(value: Any, *, default: float) -> float:
+def _positive_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
     parsed = _nonnegative_number(value)
-    return parsed if parsed > 0 else default
+    return parsed if parsed > 0 else None
+
+
+def _trust_promotion_thresholds() -> tuple[float, float]:
+    from .analysis_run import PolicyCatalog
+
+    policy = PolicyCatalog()
+    return (
+        float(policy.trust_minimum_consecutive_passes),
+        float(policy.trust_minimum_observation_seconds),
+    )
 
 
 def _data_trust_source_class(data_status: dict[str, Any]) -> str:

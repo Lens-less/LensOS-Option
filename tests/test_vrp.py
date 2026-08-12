@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 import unittest
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -170,6 +172,48 @@ class DvolHistoryLoaderTests(unittest.TestCase):
 
 
 class FetchDvolHistoryTests(unittest.TestCase):
+    def test_redirect_response_fails_closed_without_following_target(self):
+        class RedirectHandler(BaseHTTPRequestHandler):
+            target_hits = 0
+
+            def do_GET(self):
+                if self.path.startswith("/api/v2/public/get_volatility_index_data"):
+                    self.send_response(302)
+                    self.send_header("Location", "/redirect-target")
+                    self.end_headers()
+                    return
+                type(self).target_hits += 1
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"result":{"data":[]}}')
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with mock.patch(
+                "crypto_options_report.vrp.validate_deribit_base_url",
+                return_value=f"http://127.0.0.1:{server.server_port}",
+            ):
+                with self.assertRaisesRegex(ValueError, "http 302"):
+                    fetch_deribit_dvol_history(
+                        currency="BTC",
+                        days=3,
+                        resolution="1D",
+                        base_url="https://www.deribit.com",
+                        timeout=20,
+                        captured_at="2024-02-05T08:00:00Z",
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(0, RedirectHandler.target_hits)
+
     def test_fetches_requested_window_across_continuation_pages(self):
         pages = [
             {

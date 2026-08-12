@@ -142,6 +142,9 @@ class SurfaceRegimeRuntimeTests(unittest.TestCase):
         snapshot = self._bind_trust_evidence(snapshot, {
             "status": "collecting",
             "consecutive_passes": 3,
+            "minimum_consecutive_passes": 6,
+            "observation_seconds": 30,
+            "minimum_observation_seconds": 60,
             "rolling": {"observations": []},
         })
         surface, _candidates = build_vol_surface_and_candidate_research(
@@ -174,6 +177,9 @@ class SurfaceRegimeRuntimeTests(unittest.TestCase):
         snapshot = self._bind_trust_evidence(snapshot, {
             "status": "promoted",
             "consecutive_passes": 24,
+            "minimum_consecutive_passes": 6,
+            "observation_seconds": 300,
+            "minimum_observation_seconds": 60,
             "rolling": {
                 "observations": [
                     {

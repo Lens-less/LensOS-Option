@@ -17,28 +17,16 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
 from uuid import uuid4
 
+from ._http import no_redirect_urlopen as urlopen
 from .analysis_run import AnalysisRecord, EntryAdmissionStatus
 from .storage import atomic_write_json
 
 ALERT_EVENT_SCHEMA = "alert_event.v1"
 ALERT_EVAL_SCHEMA = "alert_evaluation.v1"
 ALERT_STATE_SCHEMA = "alert_state.v1"
-
-
-class _RejectRedirects(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-_NO_REDIRECT_OPENER = build_opener(_RejectRedirects())
-
-
-def urlopen(request: Request, *, timeout: int):
-    """Open one webhook request without following redirects."""
-    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
 
 
 # Risk-degradation rules only for default product policy.

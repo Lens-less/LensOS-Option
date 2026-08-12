@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from crypto_options_report.api import (
@@ -18,6 +19,7 @@ from crypto_options_report.api import (
     ResearchReportHandler,
     RuntimeConfig,
     _payload_for_path,
+    build_api_analysis_record,
     dashboard_page_html,
     evidence_page_html,
     readiness_payload,
@@ -37,6 +39,7 @@ from crypto_options_report.full_surface import (
     build_release_gates,
     validate_full_system_surface_report,
 )
+from crypto_options_report.market_data import load_snapshot_fixture
 
 
 class FullSystemSurfaceTests(unittest.TestCase):
@@ -286,6 +289,16 @@ class FullSystemSurfaceTests(unittest.TestCase):
         self.assertEqual(400, status)
         self.assertIn("production", json.loads(body)["error"])
 
+    def test_development_profile_rejects_browser_controlled_generated_at(self):
+        status, _, body = self._request(
+            "GET",
+            "/research/report?generated_at=2099-01-01T00:00:00Z",
+            runtime=RuntimeConfig(profile="development"),
+        )
+
+        self.assertEqual(422, status)
+        self.assertIn("generated_at", json.loads(body)["error"])
+
     def test_unsupported_http_methods_return_json_405(self):
         status, headers, body = self._request("PUT", "/research/report")
 
@@ -486,9 +499,125 @@ class FullSystemSurfaceTests(unittest.TestCase):
             payload,
         )
 
+    def test_post_without_origin_is_forbidden_without_bearer(self):
+        status, _, body = self._request(
+            "POST",
+            "/backtest/run",
+            body={"schema_version": "backtest_run_request.v1"},
+            request_headers={"Idempotency-Key": "missing-origin"},
+            same_origin_write=False,
+        )
+
+        self.assertEqual(403, status)
+        self.assertIn("origin", json.loads(body)["error"])
+
+    def test_delete_without_origin_is_forbidden_without_bearer(self):
+        status, _, body = self._request(
+            "DELETE",
+            "/backtest/jobs/example",
+            same_origin_write=False,
+        )
+
+        self.assertEqual(403, status)
+        self.assertIn("origin", json.loads(body)["error"])
+
+    def test_same_origin_write_still_passes_without_bearer(self):
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=RuntimeConfig(profile="development"),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        connection = http.client.HTTPConnection(
+            "127.0.0.1",
+            server.server_port,
+            timeout=5,
+        )
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Idempotency-Key": "same-origin",
+                "Origin": f"http://127.0.0.1:{server.server_port}",
+            }
+            connection.request(
+                "POST",
+                "/backtest/run",
+                body=json.dumps({"schema_version": "backtest_run_request.v1"}).encode(
+                    "utf-8"
+                ),
+                headers=headers,
+            )
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(409, response.status)
+        self.assertEqual("historical_data_not_configured", payload["status"])
+
+    def test_bearer_authorized_write_passes_without_origin(self):
+        token = "a" * 32
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=RuntimeConfig(profile="development"),
+            bearer_token=token,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        connection = http.client.HTTPConnection(
+            "127.0.0.1",
+            server.server_port,
+            timeout=5,
+        )
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Idempotency-Key": "authorized-bearer",
+                "Authorization": f"Bearer {token}",
+            }
+            connection.request(
+                "POST",
+                "/backtest/run",
+                body=json.dumps({"schema_version": "backtest_run_request.v1"}).encode(
+                    "utf-8"
+                ),
+                headers=headers,
+            )
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(409, response.status)
+        self.assertEqual("historical_data_not_configured", payload["status"])
+
     def test_cli_api_and_dashboard_use_same_projection_shape(self):
-        report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
-        api_projection = _payload_for_path("/recommendation", "generated_at=2026-07-07T00%3A01%3A30Z")
+        fixture_path = (
+            Path(__file__).with_name("fixtures")
+            / "deribit_btc_option_chain_snapshot.json"
+        )
+        captured_at = load_snapshot_fixture(fixture_path)["captured_at"]
+        report = build_api_analysis_record(
+            snapshot_fixture=str(fixture_path),
+            generated_at=captured_at,
+        ).project_research_report_v1()
+        api_projection = _payload_for_path(
+            "/recommendation",
+            "",
+            runtime=RuntimeConfig(
+                profile="development",
+                snapshot_fixture=str(fixture_path),
+                replay=True,
+            ),
+        )
         dashboard_projection = {
             key: report["full_system_surface"]["shared_schema_projection"][key]
             for key in (
@@ -594,6 +723,7 @@ class FullSystemSurfaceTests(unittest.TestCase):
         runtime=None,
         body=None,
         request_headers=None,
+        same_origin_write=True,
     ):
         server = ResearchHTTPServer(
             ("127.0.0.1", 0),
@@ -612,6 +742,13 @@ class FullSystemSurfaceTests(unittest.TestCase):
             headers = dict(request_headers or {})
             if encoded is not None:
                 headers["Content-Type"] = "application/json"
+            if (
+                same_origin_write
+                and method in {"POST", "DELETE"}
+                and "Origin" not in headers
+                and "Authorization" not in headers
+            ):
+                headers["Origin"] = f"http://127.0.0.1:{server.server_port}"
             connection.request(method, path, body=encoded, headers=headers)
             response = connection.getresponse()
             body = response.read().decode("utf-8")

@@ -316,7 +316,8 @@ $action = New-ScheduledTaskAction -Execute "powershell.exe" `
   -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 17:00
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
-  -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
+  -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 45) `
+  -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 20)
 Register-ScheduledTask -TaskName "LensOS-Option-DailyCapture" `
   -Action $action -Trigger $trigger -Settings $settings -Force
 ```

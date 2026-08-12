@@ -2,7 +2,10 @@
 > paper trading、walk-forward 校准与半自动执行等**当前产品刻意不具备**的能力。
 > 它不描述现在的产品行为，也不构成需求。
 >
-> 当前 PRD：[`docs/research/deribit-options-intelligence-platform-prd.md`](../../research/deribit-options-intelligence-platform-prd.md)
+> 现行产品契约：[`docs/product/2026-08-02-public-product-spec.md`](../../product/2026-08-02-public-product-spec.md)
+> 与 [`docs/product/2026-08-12-continuity-and-consistency-spec.md`](../../product/2026-08-12-continuity-and-consistency-spec.md)
+>
+> `docs/research/deribit-options-intelligence-platform-prd.md` 仅保留为研究输入与历史方向，不是当前 PRD / 验收契约。
 > 当前安全边界：[`SECURITY.md`](../../../SECURITY.md)
 
 # 加密货币期权卖 Call 收租系统 — 审计修复版完整开发 Spec

@@ -1642,6 +1642,9 @@ def _canonical_json(value: Any) -> bytes:
 
 
 def _utc_timestamp() -> str:
+    # Job lifecycle timestamps participate in stored job receipts and retain
+    # microseconds intentionally. Do not replace this with the shared
+    # second-precision artifact clock without a receipt/hash migration review.
     return (
         datetime.now(UTC)
         .isoformat(timespec="microseconds")

@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ._time import utc_timestamp
 from .historical import (
     build_historical_reconciliation_report,
     query_eligible_canonical_quotes,
@@ -38,15 +39,6 @@ class CandidateQuote:
     quote: dict[str, Any]
     dte_days: float
     abs_delta: float
-
-
-def utc_timestamp() -> str:
-    return (
-        datetime.now(UTC)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def _check_deadline(deadline_monotonic: float | None) -> None:

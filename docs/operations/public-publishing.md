@@ -171,9 +171,14 @@ paper-ledger state, and sizing/order-cap fields.
 ## Scheduled workflow admission
 
 The scheduled workflow always captures first, even when deployment settings are
-missing. It uploads that capture as a temporary recovery artifact, then admits
-a distributable `dist/site` only when every independent contract below is
-satisfied:
+missing. The current repository decision also keeps deployment
+**explicitly suspended** until owner-owned DNS/hosting identity exist. The
+workflow therefore still captures and verifies the public bundle, uploads that
+capture as a temporary recovery artifact, and records `DEPLOY_SUSPENDED`
+instead of attempting publication. It only admits a distributable `dist/site`
+after that suspension is intentionally cleared and every independent contract
+below is satisfied. The durable decision and owner handoff are recorded in
+[`public-deployment-suspension.md`](public-deployment-suspension.md):
 
 - Repository variables:
   - `LENSOS_EVIDENCE_REPO_SYNC_ENABLED=true`

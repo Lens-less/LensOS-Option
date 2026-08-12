@@ -1,7 +1,9 @@
 import copy
 import json
 import math
+import tempfile
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -30,6 +32,8 @@ from crypto_options_report.contract import (
 from crypto_options_report.market_data import (
     load_snapshot_fixture,
     snapshot_payload_sha256,
+    write_snapshot_fixture,
+    write_snapshot_trust_state,
 )
 
 FIXED_CLOCK = "2026-07-07T00:01:30Z"
@@ -122,18 +126,22 @@ class AnalysisRunContractTests(unittest.TestCase):
             market_snapshot=snapshot,
             account_scenario="green",
         )
+        evidence = self._trusted_market_evidence(snapshot)
         request = AnalysisRequest.from_projection(
             evaluation_clock=FIXED_CLOCK,
             report_projection=report,
             market_snapshot=snapshot,
-            market_evidence=self._trusted_market_evidence(snapshot),
-            policy_catalog=PolicyCatalog(
-                trust_minimum_consecutive_passes=4,
+            market_evidence=replace(
+                evidence,
+                trust_consecutive_passes=5,
+                trust_observation_seconds=59.0,
             ),
         )
 
         record = AnalysisRun().evaluate(request)
 
+        self.assertEqual(6, record.policy_bundle.catalog.trust_minimum_consecutive_passes)
+        self.assertEqual(60, record.policy_bundle.catalog.trust_minimum_observation_seconds)
         self.assertEqual("untrusted", record.trust_verdict)
         self.assertEqual("untrusted", record.market_analysis.status)
         self.assertIsNone(record.market_analysis.spot)
@@ -141,6 +149,38 @@ class AnalysisRunContractTests(unittest.TestCase):
         self.assertIn(
             "MARKET_TRUST_THRESHOLD_NOT_MET",
             record.global_reason_codes,
+        )
+
+    def test_report_projection_fails_closed_when_trust_threshold_minimums_are_missing(self):
+        snapshot = self._bind_trust_evidence(
+            self._trusted_snapshot(),
+            {
+                "status": "promoted",
+                "consecutive_passes": 9,
+                "observation_seconds": 90,
+                "first_pass_at": "2026-07-07T00:00:00Z",
+                "last_pass_at": FIXED_CLOCK,
+            },
+        )
+
+        report = generate_research_report(
+            generated_at=FIXED_CLOCK,
+            market_snapshot=snapshot,
+            account_scenario="green",
+        )
+
+        self.assertEqual("degraded", report["data_trust"]["verdict"])
+        self.assertIn(
+            "DATA_TRUST_THRESHOLD_EVIDENCE_MISSING",
+            report["data_trust"]["reason_codes"],
+        )
+        self.assertEqual(
+            6,
+            report["data_status"]["trust_evidence"]["minimum_consecutive_passes"],
+        )
+        self.assertEqual(
+            60,
+            report["data_status"]["trust_evidence"]["minimum_observation_seconds"],
         )
 
     def test_mandate_cannot_elevate_research_only(self):
@@ -205,8 +245,8 @@ class AnalysisRunContractTests(unittest.TestCase):
             payload_ref=f"sha256:{digest}",
             payload_hash=digest,
             reason_codes=(),
-            trust_consecutive_passes=3,
-            trust_observation_seconds=30.0,
+            trust_consecutive_passes=6,
+            trust_observation_seconds=60.0,
         )
         request = AnalysisRequest.from_projection(
             evaluation_clock=FIXED_CLOCK,
@@ -1164,9 +1204,33 @@ class AnalysisRunContractTests(unittest.TestCase):
             payload_ref=f"sha256:{snapshot_payload_sha256(snapshot)}",
             payload_hash=snapshot_payload_sha256(snapshot),
             reason_codes=(),
-            trust_consecutive_passes=3,
-            trust_observation_seconds=30.0,
+            trust_consecutive_passes=6,
+            trust_observation_seconds=60.0,
         )
+
+    @staticmethod
+    def _bind_trust_evidence(snapshot, evidence):
+        evidence = {
+            "schema_version": "market_trust_evidence.v1",
+            "source_identity": f"{snapshot['source']}|{snapshot['currency']}",
+            **evidence,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            key_dir = Path(temp_dir) / "keys"
+            data_dir.mkdir()
+            key_dir.mkdir()
+            output = data_dir / "market-snapshot.json"
+            auth_key = key_dir / "sidecar.key"
+            auth_key.write_bytes(b"r" * 32)
+            write_snapshot_fixture(output, snapshot)
+            write_snapshot_trust_state(
+                output,
+                evidence,
+                expected_snapshot=snapshot,
+                auth_key_file=auth_key,
+            )
+            return load_snapshot_fixture(output, auth_key_file=auth_key)
 
 
 if __name__ == "__main__":

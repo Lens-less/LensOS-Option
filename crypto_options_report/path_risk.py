@@ -7,11 +7,11 @@ import math
 import random
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from ._time import utc_timestamp
 from .structures import Structure, build_structure, call_credit_spread, naked_short_call
 
 PATH_RISK_REPORT_SCHEMA_VERSION = "path_risk_distribution_report.v1"
@@ -71,15 +71,6 @@ class CandidateSpec:
     # this rather than through a branch on the structure name, so a put spread
     # or a condor is priced by the same code that prices a short call.
     structure_legs: Structure = None  # type: ignore[assignment]
-
-
-def utc_timestamp() -> str:
-    return (
-        datetime.now(UTC)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def load_path_risk_fixture(path: str | Path) -> dict[str, Any]:

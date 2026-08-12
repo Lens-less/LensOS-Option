@@ -18,7 +18,10 @@ from crypto_options_report.api import (
     ResearchHTTPServer,
     ResearchReportHandler,
     RuntimeConfig,
+    _analysis_cache_entry_current,
+    _analysis_cache_identity,
     _payload_for_path,
+    _report_options_from_query,
     build_api_analysis_record,
     build_api_report,
 )
@@ -29,6 +32,11 @@ FIXTURE_PATH = (
     Path(__file__).with_name("fixtures")
     / "deribit_btc_option_chain_snapshot.json"
 )
+
+
+class _FakeRecord:
+    def __init__(self, evaluation_clock: str) -> None:
+        self.manifest = type("Manifest", (), {"evaluation_clock": evaluation_clock})()
 
 
 class AnalysisProjectionSurfaceTests(unittest.TestCase):
@@ -72,8 +80,15 @@ class AnalysisProjectionSurfaceTests(unittest.TestCase):
         self.assertEqual(record.project_research_report_v1(), report)
 
     def test_analysis_result_route_returns_the_immutable_record(self):
-        query = f"generated_at={FIXED_CLOCK.replace(':', '%3A')}"
-        payload = _payload_for_path(ANALYSIS_RESULT_PATH, query)
+        payload = _payload_for_path(
+            ANALYSIS_RESULT_PATH,
+            "",
+            runtime=RuntimeConfig(
+                profile="development",
+                snapshot_fixture=str(FIXTURE_PATH),
+                replay=True,
+            ),
+        )
 
         self.assertEqual("analysis_record.v1", payload["schema_version"])
         self.assertTrue(payload["analysis_run_id"].startswith("analysis:"))
@@ -90,12 +105,8 @@ class AnalysisProjectionSurfaceTests(unittest.TestCase):
                 "crypto_options_report.api.build_api_analysis_record",
                 wraps=build_api_analysis_record,
             ) as build:
-                first = server.analysis_record(
-                    f"generated_at={FIXED_CLOCK.replace(':', '%3A')}"
-                )
-                second = server.analysis_record(
-                    f"generated_at={FIXED_CLOCK.replace(':', '%3A')}"
-                )
+                first = server.analysis_record("")
+                second = server.analysis_record("")
 
             self.assertIs(first, second)
             self.assertEqual(1, build.call_count)
@@ -140,6 +151,111 @@ class AnalysisProjectionSurfaceTests(unittest.TestCase):
         finally:
             server.server_close()
 
+    def test_replay_clock_cache_stays_immutable_after_trust_deadline(self):
+        runtime = RuntimeConfig(
+            profile="development",
+            snapshot_fixture=str(FIXTURE_PATH),
+            replay=True,
+        )
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=runtime,
+        )
+        try:
+            with (
+                patch(
+                    "crypto_options_report.api.build_api_analysis_record",
+                    side_effect=(
+                        _FakeRecord(FIXED_CLOCK),
+                        _FakeRecord("2026-07-07T00:02:31Z"),
+                    ),
+                ) as build,
+                patch(
+                    "crypto_options_report.api._analysis_cache_now",
+                    return_value=datetime.fromisoformat(
+                        FIXED_CLOCK.replace("Z", "+00:00")
+                    )
+                    + timedelta(days=1),
+                ),
+            ):
+                first = server.analysis_record("")
+                second = server.analysis_record("")
+
+            self.assertIs(first, second)
+            self.assertEqual(1, build.call_count)
+        finally:
+            server.server_close()
+
+    def test_published_clock_cache_is_not_implicitly_immutable(self):
+        options = _report_options_from_query(
+            "",
+            runtime=RuntimeConfig(
+                profile="development",
+                snapshot_fixture=str(FIXTURE_PATH),
+                published=True,
+            ),
+        )
+        record = build_api_analysis_record(generated_at=FIXED_CLOCK)
+
+        self.assertFalse(
+            _analysis_cache_entry_current(
+                record,
+                options,
+                now=datetime.fromisoformat(FIXED_CLOCK.replace("Z", "+00:00"))
+                + timedelta(days=1),
+            )
+        )
+
+    def test_analysis_cache_evicts_oldest_implicit_clock_entry_at_capacity(self):
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=RuntimeConfig(profile="development"),
+        )
+        try:
+            with patch(
+                "crypto_options_report.api.build_api_analysis_record",
+                side_effect=[
+                    _FakeRecord(FIXED_CLOCK) for _ in range(65)
+                ],
+            ) as build:
+                for instrument_limit in range(1, 65):
+                    server.analysis_record(f"instrument_limit={instrument_limit}")
+
+                first_key = json.dumps(
+                    _analysis_cache_identity(
+                        _report_options_from_query(
+                            "instrument_limit=1",
+                            runtime=RuntimeConfig(profile="development"),
+                        )
+                    ),
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                sixty_fifth_key = json.dumps(
+                    _analysis_cache_identity(
+                        _report_options_from_query(
+                            "instrument_limit=65",
+                            runtime=RuntimeConfig(profile="development"),
+                        )
+                    ),
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+
+                self.assertIn(first_key, server._analysis_records)
+                server.analysis_record("instrument_limit=65")
+
+            self.assertNotIn(first_key, server._analysis_records)
+            self.assertIn(sixty_fifth_key, server._analysis_records)
+            self.assertEqual(64, len(server._analysis_records))
+            self.assertEqual(65, build.call_count)
+        finally:
+            server.server_close()
+
     def test_repeated_http_gets_do_not_refetch_or_recompute_live_analysis(self):
         server = ResearchHTTPServer(
             ("127.0.0.1", 0),
@@ -151,10 +267,7 @@ class AnalysisProjectionSurfaceTests(unittest.TestCase):
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        query = (
-            "live_deribit=1&instrument_limit=8"
-            f"&generated_at={FIXED_CLOCK.replace(':', '%3A')}"
-        )
+        query = "live_deribit=1&instrument_limit=8"
 
         def request(path):
             connection = http.client.HTTPConnection(
@@ -202,6 +315,52 @@ class AnalysisProjectionSurfaceTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+    def test_http_returns_503_when_cache_is_full_of_immutable_replay_entries(self):
+        runtime = RuntimeConfig(
+            profile="development",
+            snapshot_fixture=str(FIXTURE_PATH),
+            replay=True,
+        )
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=runtime,
+        )
+        for instrument_limit in range(1, 65):
+            cache_key = json.dumps(
+                _analysis_cache_identity(
+                    _report_options_from_query(
+                        f"instrument_limit={instrument_limit}",
+                        runtime=runtime,
+                    )
+                ),
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            server._analysis_records[cache_key] = object()  # type: ignore[assignment]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        connection = http.client.HTTPConnection(
+            "127.0.0.1",
+            server.server_port,
+            timeout=5,
+        )
+        try:
+            connection.request("GET", "/research/report?instrument_limit=65")
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(503, response.status)
+        self.assertEqual("1", response.getheader("Retry-After"))
+        self.assertNotEqual(400, response.status)
+        self.assertIn("cache", payload["error"])
 
     def test_domain_alert_projection_does_not_recompute_legacy_rules(self):
         record = build_analysis_record(generated_at=FIXED_CLOCK)

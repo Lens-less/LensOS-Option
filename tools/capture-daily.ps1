@@ -863,9 +863,34 @@ function Invoke-Stage {
         if ($result -is [System.Collections.IDictionary]) {
             if ($result.Contains('output_path')) { $stage.output_path = $result['output_path'] }
             if ($result.Contains('details')) { $stage.details = $result['details'] }
+            if ($result.Contains('status')) {
+                $candidateStatus = [string] $result['status']
+                if ($candidateStatus -in @('ok', 'skipped')) {
+                    $stage.status = $candidateStatus
+                }
+            }
         }
-        $stage.status = 'ok'
-        Write-Log "$Name ok"
+        if ($stage.status -eq 'running') {
+            $stage.status = 'ok'
+        }
+        if ($stage.status -eq 'skipped') {
+            $logMessage = $null
+            if (
+                $result -is [System.Collections.IDictionary] -and
+                $result.Contains('log_message')
+            ) {
+                $logMessage = [string] $result['log_message']
+            }
+            if ([string]::IsNullOrWhiteSpace($logMessage)) {
+                Write-Log "$Name skipped"
+            }
+            else {
+                Write-Log "$Name skipped ($logMessage)"
+            }
+        }
+        else {
+            Write-Log "$Name ok"
+        }
         return $result
     }
     catch {
@@ -1610,6 +1635,8 @@ try {
                 error = $null
             }
             return [ordered]@{
+                status = 'skipped'
+                log_message = 'not configured'
                 details = $script:successHeartbeatState
             }
         }

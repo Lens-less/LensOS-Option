@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
+from ._logging import _log_json
+from ._time import utc_timestamp
 from .account_risk import (
     AVAILABLE_ACCOUNT_SCENARIOS,
     build_account_status,
@@ -51,9 +53,6 @@ from .market_data import (
     load_underlying_history_fixture,
     snapshot_trust_state_path,
     validate_deribit_base_url,
-)
-from .market_data import (
-    utc_timestamp as market_utc_timestamp,
 )
 from .sidecar_auth import (
     authenticate_sidecar_payload,
@@ -85,7 +84,6 @@ GET_SURFACE_PATHS = {
     "/candidates",
     "/recommendation",
     "/backtest/report/default",
-    "/backtest/report/{id}",
     "/dashboard",
 }
 POST_SURFACE_PATHS = {"/backtest/run"}
@@ -358,8 +356,14 @@ class ResearchHTTPServer(ThreadingHTTPServer):
                     return cached
                 self._analysis_records.pop(cache_key, None)
             if len(self._analysis_records) >= 64:
-                raise ValueError("analysis result cache is full")
-            record = build_api_analysis_record(**options)
+                if not _evict_oldest_implicit_analysis_record(self._analysis_records):
+                    raise _RequestContractError(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        "analysis result cache is temporarily full",
+                    )
+            record = build_api_analysis_record(
+                **_analysis_record_build_options(options)
+            )
             self._analysis_records[cache_key] = record
             return record
 
@@ -684,6 +688,17 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
                     )
                 finally:
                     _REQUEST_ANALYSIS_RECORD.reset(token)
+        except _RequestContractError as exc:
+            self._write_json(
+                exc.status,
+                {"error": str(exc)},
+                extra_headers=(
+                    {"Retry-After": "1"}
+                    if exc.status == HTTPStatus.SERVICE_UNAVAILABLE
+                    else None
+                ),
+            )
+            return
         except ValueError as exc:
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
@@ -918,20 +933,6 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             extra_headers={"Retry-After": "1"},
         )
 
-    def _write_html(self, status: HTTPStatus, body: str) -> None:
-        encoded = body.encode("utf-8")
-        self._write_response(
-            status,
-            encoded,
-            content_type="text/html; charset=utf-8",
-            content_security_policy=(
-                "default-src 'self'; img-src 'self' data:; "
-                "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
-                "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
-                "form-action 'none'"
-            ),
-        )
-
     def _write_evidence_html(self, status: HTTPStatus, body: str) -> None:
         self._write_response(
             status,
@@ -1066,16 +1067,9 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             )
             return False
         origin = origin_values[0] if origin_values else None
-        if (
-            self.command in {"POST", "DELETE"}
-            and origin
-            and not _origin_matches_host(origin, host_header)
-        ):
-            self._write_json(
-                HTTPStatus.FORBIDDEN,
-                {"error": "cross_origin_request_rejected"},
-            )
-            return False
+        write_request = self.command in {"POST", "DELETE"}
+        same_origin = origin is not None and _origin_matches_host(origin, host_header)
+        valid_bearer = self._request_has_valid_bearer(authorization_values)
         if _request_requires_bearer_auth(self.command, path) and not self._request_is_authorized(
             authorization_values
         ):
@@ -1085,6 +1079,19 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
                 extra_headers={"WWW-Authenticate": "Bearer"},
             )
             return False
+        if write_request:
+            if origin and not same_origin:
+                self._write_json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "cross_origin_request_rejected"},
+                )
+                return False
+            if origin is None and not valid_bearer:
+                self._write_json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "same_origin_or_bearer_required_for_write"},
+                )
+                return False
         return True
 
     def _ensure_request_context(self) -> None:
@@ -1095,6 +1102,13 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         expected = getattr(self.server, "expected_bearer_authorization", None)
         if expected is None:
             return True
+        provided = authorization_values[0] if authorization_values else None
+        return isinstance(provided, str) and hmac.compare_digest(provided, expected)
+
+    def _request_has_valid_bearer(self, authorization_values: list[str]) -> bool:
+        expected = getattr(self.server, "expected_bearer_authorization", None)
+        if expected is None:
+            return False
         provided = authorization_values[0] if authorization_values else None
         return isinstance(provided, str) and hmac.compare_digest(provided, expected)
 
@@ -1229,7 +1243,7 @@ def readiness_payload(
         _log_json("readiness_check_failed", error=type(exc).__name__)
         reason_codes.append("SERVICE_VALIDATION_FAILED")
 
-    generated_at = market_utc_timestamp()
+    generated_at = utc_timestamp()
     if analysis_record is not None:
         policy_catalog = analysis_record.policy_bundle.catalog
         market_provider_ready = analysis_record.market_analysis.status == "validated"
@@ -1758,7 +1772,9 @@ def _analysis_record_from_query(
     runtime: RuntimeConfig | None = None,
 ) -> AnalysisRecord:
     return build_api_analysis_record(
-        **_report_options_from_query(query, runtime=runtime)
+        **_analysis_record_build_options(
+            _report_options_from_query(query, runtime=runtime)
+        )
     )
 
 
@@ -1790,6 +1806,12 @@ def _analysis_cache_identity(options: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _analysis_record_build_options(options: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value for key, value in options.items() if key != "generated_at_source"
+    }
+
+
 def _analysis_cache_entry_current(
     record: AnalysisRecord,
     options: dict[str, Any],
@@ -1797,7 +1819,7 @@ def _analysis_cache_entry_current(
     now: datetime | None = None,
 ) -> bool:
     """Reuse implicit-clock runs only inside their shortest trust window."""
-    if options.get("generated_at") is not None:
+    if options.get("generated_at_source") == "replay":
         return True
     current = now or _analysis_cache_now()
     if current.tzinfo is None:
@@ -1883,6 +1905,14 @@ def _evaluation_clock(runtime: RuntimeConfig) -> str | None:
     return _replay_clock(runtime) or _published_clock(runtime)
 
 
+def _evaluation_clock_source(runtime: RuntimeConfig) -> str | None:
+    if runtime.replay:
+        return "replay"
+    if runtime.published:
+        return "published"
+    return None
+
+
 def _report_options_from_query(
     query: str,
     *,
@@ -1907,6 +1937,7 @@ def _report_options_from_query(
             "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
             "underlying_history_fixture": runtime.underlying_history_fixture,
             "generated_at": _evaluation_clock(runtime),
+            "generated_at_source": _evaluation_clock_source(runtime),
         }
 
     # HTTP always stays research_only for display/action consistency.
@@ -1936,7 +1967,12 @@ def _report_options_from_query(
     if params.get("deribit_base_url"):
         raise ValueError("deribit_base_url query override is not allowed over HTTP")
     account_scenario = params.get("account_scenario", [None])[0]
-    generated_at = params.get("generated_at", [_evaluation_clock(runtime)])[0]
+    if params.get("generated_at"):
+        raise _RequestContractError(
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            "generated_at query override is not allowed over HTTP",
+        )
+    generated_at = _evaluation_clock(runtime)
     instrument_limit = _parse_optional_int(
         params.get(
             "instrument_limit",
@@ -1964,6 +2000,7 @@ def _report_options_from_query(
         "account_scenario": account_scenario,
         "account_snapshot_fixture": runtime.account_snapshot_fixture,
         "generated_at": generated_at,
+        "generated_at_source": _evaluation_clock_source(runtime),
         "sandbox_fixtures": sandbox_fixtures,
         "backtest_artifact_dir": runtime.backtest_artifact_dir,
         "paper_ledger_path": runtime.paper_ledger_path,
@@ -1980,14 +2017,15 @@ def smoke_once(
     deribit_base_url: str = DEFAULT_DERIBIT_BASE_URL,
     instrument_limit: int | None = None,
     account_scenario: str | None = None,
-    generated_at: str | None = None,
 ) -> dict[str, Any]:
     server = ResearchHTTPServer(
         ("127.0.0.1", 0),
         ResearchReportHandler,
         runtime=RuntimeConfig(
             profile="development",
+            snapshot_fixture=snapshot_fixture,
             allow_live_fetch=live_deribit,
+            replay=bool(snapshot_fixture),
         ),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1995,12 +2033,8 @@ def smoke_once(
     try:
         time.sleep(SMOKE_SERVER_START_GRACE_SEC)
         query: dict[str, Any] = {"mode": "research_only"}
-        if snapshot_fixture:
-            query["snapshot_fixture"] = snapshot_fixture
         if account_scenario:
             query["account_scenario"] = account_scenario
-        if generated_at:
-            query["generated_at"] = generated_at
         if live_deribit:
             query["live_deribit"] = "1"
             query["currency"] = currency
@@ -2017,7 +2051,6 @@ def smoke_once(
                 deribit_base_url=deribit_base_url,
                 instrument_limit=instrument_limit,
                 account_scenario=account_scenario,
-                generated_at=generated_at,
             )
         url = (
             f"{REPORT_PATH}?{urlencode(query)}"
@@ -2411,6 +2444,25 @@ def _request_requires_bearer_auth(method: str, path: str) -> bool:
     )
 
 
+def _evict_oldest_implicit_analysis_record(
+    cache: dict[str, AnalysisRecord],
+) -> bool:
+    for cache_key in tuple(cache):
+        if _analysis_cache_key_is_mutable(cache_key):
+            cache.pop(cache_key, None)
+            return True
+    return False
+
+
+def _analysis_cache_key_is_mutable(cache_key: str) -> bool:
+    try:
+        identity = json.loads(cache_key)
+    except json.JSONDecodeError:
+        return False
+    options = identity.get("options")
+    return isinstance(options, dict) and options.get("generated_at_source") != "replay"
+
+
 def _environment_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
 
@@ -2423,15 +2475,6 @@ def _environment_number(name: str, default: Any, converter: Any) -> Any:
         return converter(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} is invalid") from exc
-
-
-def _log_json(event: str, **fields: Any) -> None:
-    payload = {
-        "event": event,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        **fields,
-    }
-    print(json.dumps(payload, sort_keys=True, separators=(",", ":")), file=sys.stderr)
 
 
 def _is_loopback_host(host: str) -> bool:

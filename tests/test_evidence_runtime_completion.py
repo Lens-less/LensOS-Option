@@ -40,19 +40,19 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
             {
                 "status": "collecting",
                 "consecutive_passes": 1,
-                "minimum_consecutive_passes": 3,
+                "minimum_consecutive_passes": 6,
                 "observation_seconds": 0,
-                "minimum_observation_seconds": 30,
+                "minimum_observation_seconds": 60,
                 "feed_graph_complete": True,
             }
         )
         promoted = self._live_data_status(
             {
                 "status": "promoted",
-                "consecutive_passes": 3,
-                "minimum_consecutive_passes": 3,
-                "observation_seconds": 35,
-                "minimum_observation_seconds": 30,
+                "consecutive_passes": 6,
+                "minimum_consecutive_passes": 6,
+                "observation_seconds": 65,
+                "minimum_observation_seconds": 60,
                 "feed_graph_complete": True,
             }
         )
@@ -76,9 +76,9 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
             {
                 "status": "promoted",
                 "consecutive_passes": 99,
-                "minimum_consecutive_passes": 3,
+                "minimum_consecutive_passes": 6,
                 "observation_seconds": 999,
-                "minimum_observation_seconds": 30,
+                "minimum_observation_seconds": 60,
                 "feed_graph_complete": True,
             }
         )
@@ -102,6 +102,24 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
 
         self.assertEqual("untrusted", trust["verdict"])
         self.assertEqual(["TRUST_EVIDENCE_CLAIM_INVALID"], trust["reason_codes"])
+
+    def test_live_data_trust_without_minimum_threshold_evidence_stays_degraded(self):
+        status = self._live_data_status(
+            {
+                "status": "promoted",
+                "consecutive_passes": 9,
+                "observation_seconds": 90,
+                "feed_graph_complete": True,
+            }
+        )
+
+        trust = _build_data_trust_summary(status)
+
+        self.assertEqual("degraded", trust["verdict"])
+        self.assertIn(
+            "DATA_TRUST_THRESHOLD_EVIDENCE_MISSING",
+            trust["reason_codes"],
+        )
 
     def test_backtest_job_is_content_addressed_and_projected_into_report(self):
         fixture = (
@@ -285,6 +303,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                         headers={
                             "Content-Type": "application/json",
                             "Idempotency-Key": "prove-async-response",
+                            "Origin": f"http://127.0.0.1:{server.server_port}",
                         },
                     )
                     response = connection.getresponse()
@@ -307,6 +326,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                         headers={
                             "Content-Type": "application/json",
                             "Idempotency-Key": "queue-must-reject",
+                            "Origin": f"http://127.0.0.1:{server.server_port}",
                         },
                     )
                     overload_response = overloaded.getresponse()
@@ -566,6 +586,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                     headers={
                         "Content-Type": "application/json",
                         "Idempotency-Key": idempotency_key,
+                        "Origin": f"http://127.0.0.1:{server.server_port}",
                     },
                 )
                 response = connection.getresponse()
@@ -1470,6 +1491,7 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
                         headers={
                             "Content-Type": "application/json",
                             "Idempotency-Key": "executor-failure-http",
+                            "Origin": f"http://127.0.0.1:{server.server_port}",
                         },
                     )
                     response = connection.getresponse()
@@ -2155,6 +2177,10 @@ class EvidenceRuntimeCompletionTests(unittest.TestCase):
             request_headers = dict(headers or {})
             if encoded is not None:
                 request_headers["Content-Type"] = "application/json"
+            if method in {"POST", "DELETE"} and "Origin" not in request_headers:
+                request_headers["Origin"] = (
+                    f"http://127.0.0.1:{server.server_port}"
+                )
             connection.request(method, path, body=encoded, headers=request_headers)
             response = connection.getresponse()
             return response.status, json.loads(response.read().decode("utf-8"))

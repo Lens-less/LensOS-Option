@@ -43,7 +43,7 @@
   - Local targets: `portfolio_risk.py`
 - **Operational dashboards**: Track freshness, rate limits, validation failures, and readiness gates as first-class panels.
   - Sources: Grafana, Dash, Streamlit
-  - Local targets: `api.py`, `static/dashboard.html`
+  - Local targets: `api.py`, `web/src/App.tsx`, `web/src/public/`
 
 ## Research fixtures and reporting
 

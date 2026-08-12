@@ -9,18 +9,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
 from collections.abc import Mapping, Sequence
+from functools import partial
 from math import isfinite
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
 
+from ._http import no_redirect_urlopen as urlopen
+from ._logging import _log_json as shared_log_json
+from ._time import utc_timestamp
 from .market_data import (
     DEFAULT_DERIBIT_BASE_URL,
-    utc_timestamp,
     validate_deribit_base_url,
 )
 from .sidecar_auth import (
@@ -34,23 +36,14 @@ DEFAULT_REFRESH_INTERVAL_SECONDS = 15.0
 MAX_ACCOUNT_HTTP_RESPONSE_BYTES = 4 * 1024 * 1024
 EXIT_OK = 0
 EXIT_REFRESH_FAILED = 1
+_log_json = partial(
+    shared_log_json,
+    constant_fields={"research_only": True, "credentials_logged": False},
+)
 REQUIRED_SCOPES = ("account:read", "trade:read")
 DERIBIT_POSITION_KINDS = frozenset(
     {"future", "option", "spot", "future_combo", "option_combo"}
 )
-
-
-class _RejectRedirects(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-_NO_REDIRECT_OPENER = build_opener(_RejectRedirects())
-
-
-def urlopen(request: Request, *, timeout: int):
-    """Open one Deribit request without following redirects."""
-    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -719,17 +712,6 @@ def _persist_snapshot(output: Path, payload: dict[str, Any]) -> bool:
         sidecar_auth_state_path(output).unlink(missing_ok=True)
         return False
     return True
-
-
-def _log_json(event: str, **fields: Any) -> None:
-    payload = {
-        "timestamp": utc_timestamp(),
-        "event": event,
-        "research_only": True,
-        "credentials_logged": False,
-    }
-    payload.update(fields)
-    print(json.dumps(payload, sort_keys=True, separators=(",", ":")), file=sys.stderr)
 
 
 if __name__ == "__main__":

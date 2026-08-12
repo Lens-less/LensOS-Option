@@ -642,20 +642,6 @@ def _score_value_with_provenance(
     return _clamp01(default), True
 
 
-def _score_value(
-    raw_inputs: dict[str, Any],
-    primary: str,
-    *,
-    aliases: tuple[str, ...],
-    default: float,
-) -> float:
-    value, _used_default = _score_value_with_provenance(
-        raw_inputs,
-        primary,
-        aliases=aliases,
-        default=default,
-    )
-    return value
 
 
 def _percentile_value(

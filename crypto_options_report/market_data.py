@@ -13,10 +13,11 @@ from math import isfinite
 from pathlib import Path
 from time import monotonic
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import urlparse
 
+from ._http import json_getter
+from ._http import no_redirect_urlopen as urlopen
+from ._time import utc_timestamp
 from .sidecar_auth import (
     ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV,
     MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
@@ -29,21 +30,7 @@ from .sidecar_auth import (
 from .storage import (
     atomic_write_json,
     read_json_object_from_regular_file,
-    read_json_object_from_stream,
 )
-
-
-class _RejectRedirects(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-_NO_REDIRECT_OPENER = build_opener(_RejectRedirects())
-
-
-def urlopen(request: Request, *, timeout: int):
-    """Open one public-market request without following redirects."""
-    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
 
 DEFAULT_DERIBIT_BASE_URL = "https://www.deribit.com"
 ALLOWED_DERIBIT_BASE_URLS = frozenset(
@@ -69,6 +56,11 @@ HTTP_MAX_INSTRUMENT_LIMIT = DEFAULT_TICKER_REQUEST_BUDGET
 MAX_MARKET_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_MARKET_SNAPSHOT_BYTES = 16 * 1024 * 1024
 MAX_MARKET_TRUST_STATE_BYTES = 1024 * 1024
+_get_json = json_getter(
+    max_bytes=MAX_MARKET_HTTP_RESPONSE_BYTES,
+    description="Deribit market response",
+    opener=lambda request, *, timeout: urlopen(request, timeout=timeout),
+)
 RESEARCH_DTE_RANGE_DAYS = (7, 35)
 # Collection deliberately does *not* reach below the research window, and the
 # reason is measured rather than assumed.
@@ -117,8 +109,6 @@ PUBLIC_FEED_CONTRACTS = {
 
 PUBLIC_FEED_MAX_AGE_SEC = 120
 PUBLIC_FEED_FUTURE_TOLERANCE_SEC = 5
-TRUST_MINIMUM_CONSECUTIVE_PASSES = 6
-TRUST_MINIMUM_OBSERVATION_SECONDS = 60
 TRUST_MAXIMUM_PASS_GAP_SECONDS = 60
 SNAPSHOT_TRUST_STATE_SCHEMA_VERSION = "market_snapshot_trust_state.v2"
 _BOUND_TRUST_EVIDENCE_KEY = "_bound_trust_evidence"
@@ -130,6 +120,16 @@ class _BoundTrustEvidence(dict[str, Any]):
     def __init__(self, value: dict[str, Any], *, snapshot_sha256: str) -> None:
         super().__init__(value)
         self.snapshot_sha256 = snapshot_sha256
+
+
+def _trust_promotion_thresholds() -> tuple[int, int]:
+    from .analysis_run import PolicyCatalog
+
+    policy = PolicyCatalog()
+    return (
+        policy.trust_minimum_consecutive_passes,
+        policy.trust_minimum_observation_seconds,
+    )
 
 SPREAD_SANITY_FLAGS = {
     "MISSING_BID",
@@ -173,15 +173,6 @@ _MONTHS = {
     "NOV": 11,
     "DEC": 12,
 }
-
-
-def utc_timestamp() -> str:
-    return (
-        datetime.now(UTC)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def parse_timestamp_ms(value: str | int | float | None) -> int:
@@ -1999,11 +1990,18 @@ def advance_trust_evidence(
     snapshot: dict[str, Any],
     *,
     previous_snapshot: dict[str, Any] | None = None,
-    minimum_consecutive_passes: int = TRUST_MINIMUM_CONSECUTIVE_PASSES,
-    minimum_observation_seconds: int = TRUST_MINIMUM_OBSERVATION_SECONDS,
+    minimum_consecutive_passes: int | None = None,
+    minimum_observation_seconds: int | None = None,
     maximum_pass_gap_seconds: int = TRUST_MAXIMUM_PASS_GAP_SECONDS,
 ) -> dict[str, Any]:
     """Advance durable live-snapshot evidence without opening any trade mode."""
+    default_minimum_passes, default_minimum_observation_seconds = (
+        _trust_promotion_thresholds()
+    )
+    if minimum_consecutive_passes is None:
+        minimum_consecutive_passes = default_minimum_passes
+    if minimum_observation_seconds is None:
+        minimum_observation_seconds = default_minimum_observation_seconds
     if (
         minimum_consecutive_passes < 1
         or minimum_observation_seconds < 0
@@ -2140,16 +2138,19 @@ def _verified_trust_evidence(
     quality_gate: dict[str, Any],
     feed_coverage: dict[str, Any],
 ) -> dict[str, Any]:
+    default_minimum_passes, default_minimum_observation = (
+        _trust_promotion_thresholds()
+    )
     raw = dict(normalized_snapshot.get("trust_evidence") or {})
     if not raw:
         return _trust_evidence_payload(
             status="collecting",
             consecutive_passes=0,
-            minimum_consecutive_passes=TRUST_MINIMUM_CONSECUTIVE_PASSES,
+            minimum_consecutive_passes=default_minimum_passes,
             first_pass_at=None,
             last_pass_at=None,
             observation_seconds=0,
-            minimum_observation_seconds=TRUST_MINIMUM_OBSERVATION_SECONDS,
+            minimum_observation_seconds=default_minimum_observation,
             reason_codes=["TRUST_EVIDENCE_NOT_OBSERVED"],
             feed_graph_complete=bool(feed_coverage.get("graph_complete")),
             source_identity=_trust_source_identity(normalized_snapshot),
@@ -2157,26 +2158,30 @@ def _verified_trust_evidence(
         )
 
     consecutive = _safe_nonnegative_int(raw.get("consecutive_passes"))
+    raw_minimum_passes = raw.get(
+        "minimum_consecutive_passes",
+        raw.get("required_consecutive_passes"),
+    )
+    minimum_passes_present = raw_minimum_passes is not None
     minimum_passes = max(
-        TRUST_MINIMUM_CONSECUTIVE_PASSES,
-        _safe_nonnegative_int(
-            raw.get(
-                "minimum_consecutive_passes",
-                raw.get("required_consecutive_passes", TRUST_MINIMUM_CONSECUTIVE_PASSES),
-            )
-        ),
+        default_minimum_passes,
+        _safe_nonnegative_int(raw_minimum_passes)
+        if minimum_passes_present
+        else default_minimum_passes,
     )
     observation = _safe_nonnegative_int(
         raw.get("observation_seconds", raw.get("observation_sec"))
     )
+    raw_minimum_observation = raw.get(
+        "minimum_observation_seconds",
+        raw.get("required_observation_sec"),
+    )
+    minimum_observation_present = raw_minimum_observation is not None
     minimum_observation = max(
-        TRUST_MINIMUM_OBSERVATION_SECONDS,
-        _safe_nonnegative_int(
-            raw.get(
-                "minimum_observation_seconds",
-                raw.get("required_observation_sec", TRUST_MINIMUM_OBSERVATION_SECONDS),
-            )
-        ),
+        default_minimum_observation,
+        _safe_nonnegative_int(raw_minimum_observation)
+        if minimum_observation_present
+        else default_minimum_observation,
     )
     claimed_status = str(raw.get("status") or "collecting")
     current_valid = (
@@ -2184,22 +2189,34 @@ def _verified_trust_evidence(
         and _is_live_deribit_source(normalized_snapshot.get("source"))
         and feed_coverage.get("graph_complete") is True
     )
+    threshold_evidence_missing = not (
+        minimum_passes_present and minimum_observation_present
+    )
     promotion_valid = (
         claimed_status == "promoted"
         and current_valid
+        and not threshold_evidence_missing
         and consecutive >= minimum_passes
         and observation >= minimum_observation
         and raw.get("source_identity") == _trust_source_identity(normalized_snapshot)
     )
     if claimed_status == "promoted" and not promotion_valid:
-        claimed_status = "reset"
-        reason_codes = ["TRUST_EVIDENCE_CLAIM_INVALID"]
+        claimed_status = (
+            "collecting" if threshold_evidence_missing else "reset"
+        )
+        reason_codes = (
+            ["TRUST_PROMOTION_MINIMUMS_MISSING"]
+            if threshold_evidence_missing
+            else ["TRUST_EVIDENCE_CLAIM_INVALID"]
+        )
     else:
         if claimed_status not in {"collecting", "promoted", "reset"}:
             claimed_status = "reset"
             reason_codes = ["TRUST_EVIDENCE_SCHEMA_INVALID"]
         else:
             reason_codes = [str(item) for item in raw.get("reason_codes") or []]
+    if threshold_evidence_missing:
+        reason_codes.append("TRUST_PROMOTION_MINIMUMS_MISSING")
     if not current_valid:
         claimed_status = "reset"
         if not feed_coverage.get("graph_complete"):
@@ -2615,27 +2632,6 @@ def _quality_flags(quote: dict[str, Any], limits: dict[str, float]) -> list[str]
         flags.append("MISSING_SETTLEMENT_CURRENCY")
 
     return sorted({flag for flag in flags if flag in BLOCKING_QUALITY_FLAGS})
-
-
-def _get_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
-    request = Request(
-        f"{url}?{urlencode(params)}",
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "codex-option-research/0.1",
-        },
-    )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            return read_json_object_from_stream(
-                response,
-                max_bytes=MAX_MARKET_HTTP_RESPONSE_BYTES,
-                description="Deribit market response",
-            )
-    except HTTPError as exc:
-        raise ValueError(f"http {exc.code} {exc.reason}") from exc
-    except URLError as exc:
-        raise ValueError(f"network error: {exc.reason}") from exc
 
 
 def _parse_option_metadata(instrument_name: str | None) -> dict[str, Any]:

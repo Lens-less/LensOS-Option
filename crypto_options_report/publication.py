@@ -99,6 +99,7 @@ _UNIX_ABSOLUTE_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 _GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+DTE_EVIDENCE_CONFLICT = "DTE_EVIDENCE_CONFLICT"
 
 _SIGNAL_CONFIG_FIELDS = {
     "bucket_count",
@@ -1529,6 +1530,23 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
     evaluation_clock = str(
         ((report.get("runtime_context") or {}).get("evaluation_clock")) or ""
     )
+    publication_reason_codes = list(report.get("reason_codes") or [])
+    candidate_research = _project_candidate_research(
+        report.get("candidate_research"),
+        evaluation_clock=evaluation_clock,
+        publication_reason_codes=publication_reason_codes,
+    )
+    strategy_research = _project_strategy_research(
+        report.get("strategy_research"),
+        published=bool((report.get("runtime_context") or {}).get("mode") == "published"),
+        evaluation_clock=evaluation_clock,
+        publication_reason_codes=publication_reason_codes,
+    )
+    ev_candidate_scanner = _project_ev_candidate_scanner(
+        report.get("ev_candidate_scanner"),
+        evaluation_clock=evaluation_clock,
+        publication_reason_codes=publication_reason_codes,
+    )
     return {
         "schema_version": report.get("schema_version"),
         "generated_at": report.get("generated_at"),
@@ -1536,7 +1554,7 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
         "mode": report.get("mode"),
         "effective_mode": report.get("effective_mode"),
         "risk_state": report.get("risk_state"),
-        "reason_codes": list(report.get("reason_codes") or []),
+        "reason_codes": publication_reason_codes,
         "event_status": _project_exchange_event_status(report),
         "runtime_context": _project_runtime_context(report.get("runtime_context")),
         "publish_edition": _project_publish_edition(report.get("publish_edition")),
@@ -1547,19 +1565,9 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
         "calibration_status": _project_status_pair(report.get("calibration_status")),
         "backtest_status": _project_status_pair(report.get("backtest_status")),
         "vol_surface_status": _project_vol_surface_status(report.get("vol_surface_status")),
-        "candidate_research": _project_candidate_research(
-            report.get("candidate_research"),
-            evaluation_clock=evaluation_clock,
-        ),
-        "strategy_research": _project_strategy_research(
-            report.get("strategy_research"),
-            published=bool((report.get("runtime_context") or {}).get("mode") == "published"),
-            evaluation_clock=evaluation_clock,
-        ),
-        "ev_candidate_scanner": _project_ev_candidate_scanner(
-            report.get("ev_candidate_scanner"),
-            evaluation_clock=evaluation_clock,
-        ),
+        "candidate_research": candidate_research,
+        "strategy_research": strategy_research,
+        "ev_candidate_scanner": ev_candidate_scanner,
         "mode_gate": _project_mode_gate(report.get("mode_gate")),
         "full_system_surface": _project_full_system_surface(
             report.get("full_system_surface")
@@ -1820,39 +1828,68 @@ def _project_surface_quality(value: Any) -> dict[str, Any] | None:
     }
 
 
-def _project_public_candidate_dte_days(
+def _append_public_reason_code(reason_codes: list[str] | None, code: str) -> None:
+    if reason_codes is None or not code or code in reason_codes:
+        return
+    reason_codes.append(code)
+
+
+def _resolve_public_candidate_dte_days(
     candidate: dict[str, Any],
     *,
     evaluation_clock: str,
-) -> float | None:
+) -> tuple[float | None, str | None]:
     explicit_value = candidate.get("dte_days")
-    explicit = (
-        round(float(explicit_value), 6)
-        if isinstance(explicit_value, (int, float)) and not isinstance(explicit_value, bool)
-        else None
-    )
+    if explicit_value is None:
+        explicit = None
+    elif isinstance(explicit_value, (int, float)) and not isinstance(explicit_value, bool):
+        explicit = round(float(explicit_value), 6)
+    else:
+        return None, DTE_EVIDENCE_CONFLICT
     expiry_date = candidate.get("expiry_date")
     if not isinstance(expiry_date, str) or not expiry_date:
-        return explicit
+        return None, DTE_EVIDENCE_CONFLICT
     try:
         expiry_dt = datetime.fromisoformat(expiry_date)
         evaluation_dt = _parse_timestamp(evaluation_clock, field="evaluation_clock")
     except ValueError:
-        return explicit
+        return None, DTE_EVIDENCE_CONFLICT
     derived = float(max((expiry_dt.date() - evaluation_dt.date()).days, 0))
     if explicit is None:
-        return derived
+        return derived, None
     if abs(explicit - derived) > 1.0:
-        return derived
-    return explicit
+        return derived, DTE_EVIDENCE_CONFLICT
+    return explicit, None
+
+
+def _project_public_candidate_dte_days(
+    candidate: dict[str, Any],
+    *,
+    evaluation_clock: str,
+    publication_reason_codes: list[str] | None = None,
+) -> float | None:
+    dte_days, reason_code = _resolve_public_candidate_dte_days(
+        candidate,
+        evaluation_clock=evaluation_clock,
+    )
+    _append_public_reason_code(publication_reason_codes, reason_code or "")
+    return dte_days
 
 
 def _project_call_credit_candidate(
     value: Any,
     *,
     evaluation_clock: str,
-) -> dict[str, Any]:
+    publication_reason_codes: list[str] | None = None,
+) -> dict[str, Any] | None:
     candidate = dict(value or {})
+    dte_days, reason_code = _resolve_public_candidate_dte_days(
+        candidate,
+        evaluation_clock=evaluation_clock,
+    )
+    if reason_code:
+        _append_public_reason_code(publication_reason_codes, reason_code)
+        return None
     return {
         "candidate_id": candidate.get("candidate_id"),
         "decision": candidate.get("decision"),
@@ -1862,10 +1899,7 @@ def _project_call_credit_candidate(
         "sell_leg_strike_price": candidate.get("sell_leg_strike_price"),
         "buy_leg_strike_price": candidate.get("buy_leg_strike_price"),
         "expiry_date": candidate.get("expiry_date"),
-        "dte_days": _project_public_candidate_dte_days(
-            candidate,
-            evaluation_clock=evaluation_clock,
-        ),
+        "dte_days": dte_days,
         "model_delta": candidate.get("model_delta"),
         "net_credit": candidate.get("net_credit"),
         "spread_width": candidate.get("spread_width"),
@@ -1879,18 +1913,23 @@ def _project_naked_candidate(
     value: Any,
     *,
     evaluation_clock: str,
-) -> dict[str, Any]:
+    publication_reason_codes: list[str] | None = None,
+) -> dict[str, Any] | None:
     candidate = dict(value or {})
+    dte_days, reason_code = _resolve_public_candidate_dte_days(
+        candidate,
+        evaluation_clock=evaluation_clock,
+    )
+    if reason_code:
+        _append_public_reason_code(publication_reason_codes, reason_code)
+        return None
     return {
         "candidate_id": candidate.get("candidate_id"),
         "decision": candidate.get("decision"),
         "structure_type": candidate.get("structure_type"),
         "instrument_name": candidate.get("instrument_name"),
         "expiry_date": candidate.get("expiry_date"),
-        "dte_days": _project_public_candidate_dte_days(
-            candidate,
-            evaluation_clock=evaluation_clock,
-        ),
+        "dte_days": dte_days,
         "model_delta": candidate.get("model_delta"),
         "market_mid": candidate.get("market_mid"),
         "premium_currency": candidate.get("premium_currency"),
@@ -1904,23 +1943,27 @@ def _project_candidate_bucket(
     *,
     row_projector: Any,
     evaluation_clock: str,
+    publication_reason_codes: list[str] | None = None,
 ) -> dict[str, Any] | None:
     bucket = dict(value or {})
     if not bucket:
         return None
+    projected_buckets: dict[str, list[dict[str, Any]]] = {}
+    for bucket_name in ("eligible", "review", "rejected"):
+        rows: list[dict[str, Any]] = []
+        for item in bucket.get(bucket_name) or []:
+            projected = row_projector(
+                item,
+                evaluation_clock=evaluation_clock,
+                publication_reason_codes=publication_reason_codes,
+            )
+            if projected is not None:
+                rows.append(projected)
+        projected_buckets[bucket_name] = rows
     return {
-        "eligible": [
-            row_projector(item, evaluation_clock=evaluation_clock)
-            for item in bucket.get("eligible") or []
-        ],
-        "review": [
-            row_projector(item, evaluation_clock=evaluation_clock)
-            for item in bucket.get("review") or []
-        ],
-        "rejected": [
-            row_projector(item, evaluation_clock=evaluation_clock)
-            for item in bucket.get("rejected") or []
-        ],
+        "eligible": projected_buckets["eligible"],
+        "review": projected_buckets["review"],
+        "rejected": projected_buckets["rejected"],
     }
 
 
@@ -1928,9 +1971,56 @@ def _project_candidate_research(
     value: Any,
     *,
     evaluation_clock: str,
+    publication_reason_codes: list[str] | None = None,
 ) -> dict[str, Any]:
     research = dict(value or {})
     summary = dict(research.get("summary") or {})
+    naked_short_calls = _project_candidate_bucket(
+        research.get("naked_short_calls"),
+        row_projector=_project_naked_candidate,
+        evaluation_clock=evaluation_clock,
+        publication_reason_codes=publication_reason_codes,
+    )
+    call_credit_spreads = _project_candidate_bucket(
+        research.get("call_credit_spreads"),
+        row_projector=_project_call_credit_candidate,
+        evaluation_clock=evaluation_clock,
+        publication_reason_codes=publication_reason_codes,
+    )
+    all_buckets = [
+        bucket
+        for bucket in (naked_short_calls, call_credit_spreads)
+        if isinstance(bucket, dict)
+    ]
+    projected_summary = {
+        "eligible_call_credit_spreads": len((call_credit_spreads or {}).get("eligible") or []),
+        "eligible_expiries": len(
+            {
+                str(row.get("expiry_date"))
+                for bucket in all_buckets
+                for row in bucket.get("eligible") or []
+                if isinstance(row.get("expiry_date"), str) and row.get("expiry_date")
+            }
+        ),
+        "eligible_naked_short_calls": len((naked_short_calls or {}).get("eligible") or []),
+        "expiries_considered": len(
+            {
+                str(row.get("expiry_date"))
+                for bucket in all_buckets
+                for bucket_name in ("eligible", "review", "rejected")
+                for row in bucket.get(bucket_name) or []
+                if isinstance(row.get("expiry_date"), str) and row.get("expiry_date")
+            }
+        ),
+        "rejected_call_credit_spreads": len((call_credit_spreads or {}).get("rejected") or []),
+        "rejected_naked_short_calls": len((naked_short_calls or {}).get("rejected") or []),
+        "review_call_credit_spreads": len((call_credit_spreads or {}).get("review") or []),
+        "review_naked_short_calls": len((naked_short_calls or {}).get("review") or []),
+    }
+    if summary:
+        summary.update(projected_summary)
+    else:
+        summary = projected_summary
     return {
         "status": research.get("status"),
         "reason_code": research.get("reason_code"),
@@ -1944,16 +2034,8 @@ def _project_candidate_research(
             "review_call_credit_spreads": summary.get("review_call_credit_spreads"),
             "review_naked_short_calls": summary.get("review_naked_short_calls"),
         },
-        "naked_short_calls": _project_candidate_bucket(
-            research.get("naked_short_calls"),
-            row_projector=_project_naked_candidate,
-            evaluation_clock=evaluation_clock,
-        ),
-        "call_credit_spreads": _project_candidate_bucket(
-            research.get("call_credit_spreads"),
-            row_projector=_project_call_credit_candidate,
-            evaluation_clock=evaluation_clock,
-        ),
+        "naked_short_calls": naked_short_calls,
+        "call_credit_spreads": call_credit_spreads,
     }
 
 
@@ -1975,6 +2057,7 @@ def _project_strategy_research(
     *,
     published: bool = False,
     evaluation_clock: str,
+    publication_reason_codes: list[str] | None = None,
 ) -> dict[str, Any] | None:
     strategy = dict(value or {})
     if not strategy:
@@ -2079,6 +2162,7 @@ def _project_strategy_research(
                     "dte_days": _project_public_candidate_dte_days(
                         front_expiry,
                         evaluation_clock=evaluation_clock,
+                        publication_reason_codes=publication_reason_codes,
                     ),
                     "atm_fitted_iv_percent": front_expiry.get("atm_fitted_iv_percent"),
                     "fit_quality_score": front_expiry.get("fit_quality_score"),
@@ -2090,6 +2174,7 @@ def _project_strategy_research(
                     "dte_days": _project_public_candidate_dte_days(
                         next_expiry,
                         evaluation_clock=evaluation_clock,
+                        publication_reason_codes=publication_reason_codes,
                     ),
                     "atm_fitted_iv_percent": next_expiry.get("atm_fitted_iv_percent"),
                     "fit_quality_score": next_expiry.get("fit_quality_score"),
@@ -2109,6 +2194,7 @@ def _project_strategy_research(
             strategy.get("playbook"),
             published=published,
             evaluation_clock=evaluation_clock,
+            publication_reason_codes=publication_reason_codes,
         ),
         "monitoring": monitoring,
         "review": {
@@ -2129,6 +2215,7 @@ def _project_playbook(
     *,
     published: bool = False,
     evaluation_clock: str,
+    publication_reason_codes: list[str] | None = None,
 ) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -2155,6 +2242,7 @@ def _project_playbook(
             "dte_days": _project_public_candidate_dte_days(
                 candidate,
                 evaluation_clock=evaluation_clock,
+                publication_reason_codes=publication_reason_codes,
             ),
             "sell_leg": candidate.get("sell_leg"),
             "buy_leg": candidate.get("buy_leg"),
@@ -2226,15 +2314,24 @@ def _project_ev_candidate_scanner(
     value: Any,
     *,
     evaluation_clock: str,
+    publication_reason_codes: list[str] | None = None,
 ) -> dict[str, Any] | None:
     scanner = dict(value or {})
     if not scanner:
         return None
     ranking_basis = dict(scanner.get("ranking_basis") or {})
+    summary = dict(scanner.get("summary") or {})
     rows = []
     rejected_count = 0
     for row in scanner.get("ranked_candidates") or []:
         item = dict(row or {})
+        dte_days, reason_code = _resolve_public_candidate_dte_days(
+            item,
+            evaluation_clock=evaluation_clock,
+        )
+        if reason_code:
+            _append_public_reason_code(publication_reason_codes, reason_code)
+            continue
         action = item.get("action")
         if action == "REJECT":
             rejected_count += 1
@@ -2246,10 +2343,7 @@ def _project_ev_candidate_scanner(
                 "structure_type": item.get("structure_type"),
                 "action": action,
                 "expiry_date": item.get("expiry_date"),
-                "dte_days": _project_public_candidate_dte_days(
-                    item,
-                    evaluation_clock=evaluation_clock,
-                ),
+                "dte_days": dte_days,
                 "ranking_score": item.get("ranking_score"),
                 "ev_after_cost_usdc": item.get("ev_after_cost_usdc"),
                 "executable_credit_usdc": item.get("executable_credit_usdc"),
@@ -2271,11 +2365,19 @@ def _project_ev_candidate_scanner(
                 "losing_axes": list(item.get("losing_axes") or []),
             }
         )
+    if summary:
+        summary.update(
+            {
+                "candidates_scanned": len(rows),
+                "review_candidates": sum(row.get("action") == "REVIEW" for row in rows),
+                "rejected_candidates": sum(row.get("action") == "REJECT" for row in rows),
+            }
+        )
     return {
         "status": scanner.get("status"),
         "score_status": scanner.get("score_status"),
         "reason_code": scanner.get("reason_code"),
-        "summary": scanner.get("summary"),
+        "summary": summary or scanner.get("summary"),
         "ranking_basis": {
             "method": ranking_basis.get("method"),
             "tie_break_order": list(ranking_basis.get("tie_break_order") or []),

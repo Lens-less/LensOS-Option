@@ -403,6 +403,197 @@ class PublicationTests(unittest.TestCase):
         self.assertIsNone(malformed["scope"])
         self.assertEqual("EVENT_SOURCE_UNAVAILABLE", malformed["reason_code"])
 
+    def test_public_report_blocks_candidate_rows_with_conflicting_or_malformed_dte_evidence(
+        self,
+    ) -> None:
+        valid_candidate = {
+            "candidate_id": "valid-spread",
+            "decision": "RESEARCH_ONLY",
+            "structure_type": "call_credit_spread",
+            "sell_leg_instrument_name": "BTC-29AUG26-120000-C",
+            "buy_leg_instrument_name": "BTC-29AUG26-125000-C",
+            "sell_leg_strike_price": 120000.0,
+            "buy_leg_strike_price": 125000.0,
+            "expiry_date": "2026-08-29",
+            "dte_days": 26.0,
+            "model_delta": 0.18,
+            "net_credit": 0.012,
+            "spread_width": 5000.0,
+            "premium_currency": "BTC",
+            "underlying_price": 115000.0,
+        }
+        conflict_candidate = {
+            **valid_candidate,
+            "candidate_id": "conflict-spread",
+            "dte_days": 8.0,
+        }
+        malformed_candidate = {
+            "candidate_id": "bad-naked",
+            "decision": "REJECT",
+            "structure_type": "naked_short_call",
+            "instrument_name": "BTC-29AUG26-140000-C",
+            "expiry_date": "not-a-date",
+            "dte_days": 26.0,
+            "model_delta": 0.09,
+            "market_mid": 0.004,
+            "premium_currency": "BTC",
+            "underlying_price": 115000.0,
+        }
+        valid_rejected_candidate = {
+            **malformed_candidate,
+            "candidate_id": "valid-rejected-naked",
+            "expiry_date": "2026-09-05",
+            "dte_days": 33.0,
+        }
+        source_report = {
+            "schema_version": "research_report.v1",
+            "reason_codes": ["KEEP_EXISTING_REASON"],
+            "runtime_context": {"evaluation_clock": "2026-08-03T00:00:00Z"},
+            "candidate_research": {
+                "status": "validated",
+                "reason_code": None,
+                "summary": {
+                    "eligible_call_credit_spreads": 1,
+                    "eligible_expiries": 1,
+                    "eligible_naked_short_calls": 0,
+                    "expiries_considered": 1,
+                    "rejected_call_credit_spreads": 0,
+                    "rejected_naked_short_calls": 1,
+                    "review_call_credit_spreads": 1,
+                    "review_naked_short_calls": 0,
+                },
+                "naked_short_calls": {
+                    "eligible": [],
+                    "review": [],
+                    "rejected": [valid_rejected_candidate, malformed_candidate],
+                },
+                "call_credit_spreads": {
+                    "eligible": [valid_candidate],
+                    "review": [conflict_candidate],
+                    "rejected": [],
+                },
+            },
+            "ev_candidate_scanner": {
+                "status": "validated",
+                "score_status": "UNCALIBRATED_RESEARCH_ONLY",
+                "reason_code": None,
+                "summary": {
+                    "candidates_scanned": 2,
+                    "review_candidates": 1,
+                    "rejected_candidates": 1,
+                },
+                "ranking_basis": {
+                    "method": "screening_rank_no_path_risk",
+                    "tie_break_order": ["ranking_score"],
+                    "absolute_ev_available": False,
+                },
+                "ranked_candidates": [
+                    {
+                        "candidate_id": "valid-review",
+                        "structure_type": "call_credit_spread",
+                        "action": "REVIEW",
+                        "expiry_date": "2026-08-29",
+                        "dte_days": 26.0,
+                        "ranking_score": 0.61,
+                        "ev_after_cost_usdc": 42.0,
+                        "executable_credit_usdc": 73.0,
+                        "path_risk": {
+                            "status": "available",
+                            "reason_code": None,
+                            "p_touch": 0.12,
+                            "p_itm": 0.08,
+                            "cvar_95_usdc": 80.0,
+                            "authoritative_sample_size": 512,
+                            "sample_size_basis": "validated",
+                        },
+                        "kill_conditions": [],
+                        "dominated_by": None,
+                        "losing_axes": [],
+                    },
+                    {
+                        "candidate_id": "scanner-conflict",
+                        "structure_type": "call_credit_spread",
+                        "action": "REJECT",
+                        "expiry_date": "2026-08-29",
+                        "dte_days": 2.0,
+                        "ranking_score": 0.12,
+                        "ev_after_cost_usdc": -5.0,
+                        "executable_credit_usdc": 9.0,
+                        "path_risk": {
+                            "status": "available",
+                            "reason_code": None,
+                            "p_touch": 0.41,
+                            "p_itm": 0.27,
+                            "cvar_95_usdc": 180.0,
+                            "authoritative_sample_size": 512,
+                            "sample_size_basis": "validated",
+                        },
+                        "kill_conditions": ["BAD_EDGE"],
+                        "dominated_by": "valid-review",
+                        "losing_axes": ["edge"],
+                    },
+                ],
+            },
+        }
+
+        public_report = _build_public_report(source_report)
+
+        self.assertEqual(
+            ["KEEP_EXISTING_REASON", "DTE_EVIDENCE_CONFLICT"],
+            public_report["reason_codes"],
+        )
+        self.assertEqual(
+            ["valid-spread"],
+            [
+                row["candidate_id"]
+                for row in public_report["candidate_research"]["call_credit_spreads"][
+                    "eligible"
+                ]
+            ],
+        )
+        self.assertEqual(
+            [],
+            public_report["candidate_research"]["call_credit_spreads"]["review"],
+        )
+        self.assertEqual(
+            ["valid-rejected-naked"],
+            [
+                row["candidate_id"]
+                for row in public_report["candidate_research"]["naked_short_calls"][
+                    "rejected"
+                ]
+            ],
+        )
+        self.assertEqual(
+            {
+                "eligible_call_credit_spreads": 1,
+                "eligible_expiries": 1,
+                "eligible_naked_short_calls": 0,
+                "expiries_considered": 2,
+                "rejected_call_credit_spreads": 0,
+                "rejected_naked_short_calls": 1,
+                "review_call_credit_spreads": 0,
+                "review_naked_short_calls": 0,
+            },
+            public_report["candidate_research"]["summary"],
+        )
+        self.assertEqual(
+            ["valid-review"],
+            [
+                row["candidate_id"]
+                for row in public_report["ev_candidate_scanner"]["ranked_candidates"]
+            ],
+        )
+        self.assertEqual(
+            {
+                "candidates_scanned": 1,
+                "review_candidates": 1,
+                "rejected_candidates": 0,
+            },
+            public_report["ev_candidate_scanner"]["summary"],
+        )
+        self.assertEqual(0, public_report["ev_candidate_scanner"]["rejected_count"])
+
     def test_history_cutoff_uses_exact_capture_clock_and_recomputes_coverage(self) -> None:
         payload = {
             "coverage": {

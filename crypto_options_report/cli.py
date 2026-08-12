@@ -11,6 +11,7 @@ from math import ceil
 from pathlib import Path
 from typing import Any
 
+from ._time import utc_timestamp
 from .account_risk import AVAILABLE_ACCOUNT_SCENARIOS
 from .alerts import (
     deliver_webhook,
@@ -24,7 +25,7 @@ from .backtest import (
     build_fixed_baseline_backtest_report,
     load_backtest_fixture,
 )
-from .contract import SUPPORTED_MODES, utc_timestamp
+from .contract import SUPPORTED_MODES
 from .ev_robustness import DEFAULT_PERIOD_SLICES, build_ev_robustness_report
 from .full_surface import build_recommendation_projection
 from .historical import build_historical_reconciliation_report, load_historical_fixture

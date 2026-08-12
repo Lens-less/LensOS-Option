@@ -248,8 +248,8 @@ class AnalysisMandate:
 class PolicyCatalog:
     schema_version: str = POLICY_CATALOG_SCHEMA
     policy_version: str = "pre-entry-policy.v1"
-    trust_minimum_consecutive_passes: int = 3
-    trust_minimum_observation_seconds: int = 30
+    trust_minimum_consecutive_passes: int = 6
+    trust_minimum_observation_seconds: int = 60
     market_snapshot_max_age_seconds: float = 60.0
     account_snapshot_max_age_seconds: float = 30.0
     pre_entry_risk_max_age_seconds: float = 30.0
@@ -1890,8 +1890,23 @@ def _market_evidence_from_projection(
     observation_seconds = _optional_finite(
         trust_evidence.get("observation_seconds")
     )
+    minimum_passes = _optional_positive(
+        trust_evidence.get(
+            "minimum_consecutive_passes",
+            trust_evidence.get("required_consecutive_passes"),
+        )
+    )
+    minimum_observation_seconds = _optional_positive(
+        trust_evidence.get(
+            "minimum_observation_seconds",
+            trust_evidence.get("required_observation_sec"),
+        )
+    )
     if state is EvidenceState.TRUSTED and (
-        consecutive_passes is None or observation_seconds is None
+        consecutive_passes is None
+        or observation_seconds is None
+        or minimum_passes is None
+        or minimum_observation_seconds is None
     ):
         state = EvidenceState.DEGRADED
     observed_at = data_status.get("snapshot_captured_at")
@@ -1908,9 +1923,17 @@ def _market_evidence_from_projection(
             [str(item) for item in trust.get("reason_codes") or []]
             or [
                 (
-                    "MARKET_TRUST_OBSERVATIONS_MISSING"
+                    "MARKET_TRUST_THRESHOLD_EVIDENCE_MISSING"
                     if verdict == "trusted"
-                    else "MISSING_VALIDATED_MARKET_DATA"
+                    and (
+                        minimum_passes is None
+                        or minimum_observation_seconds is None
+                    )
+                    else (
+                        "MARKET_TRUST_OBSERVATIONS_MISSING"
+                        if verdict == "trusted"
+                        else "MISSING_VALIDATED_MARKET_DATA"
+                    )
                 )
             ]
         )

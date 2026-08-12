@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ._time import utc_timestamp
 from .pnl import inverse_long_call_settlement_coin
 
 HISTORICAL_REPORT_SCHEMA_VERSION = "historical_reconciliation_report.v1"
@@ -177,15 +178,6 @@ class CanonicalHistoricalQuote:
             "data_vendor": self.data_vendor,
             "quality_status": self.quality_status,
         }
-
-
-def utc_timestamp() -> str:
-    return (
-        datetime.now(UTC)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def load_historical_fixture(path: str | Path, *, scenario: str | None = None) -> dict[str, Any]:

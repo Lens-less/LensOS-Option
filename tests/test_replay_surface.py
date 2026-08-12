@@ -86,6 +86,7 @@ class ReplayClockTests(unittest.TestCase):
         options = _report_options_from_query("", runtime=_runtime(replay=True))
 
         self.assertEqual(options["generated_at"], expected)
+        self.assertEqual(options["generated_at_source"], "replay")
 
     def test_the_clock_is_read_from_the_file_not_accepted_from_a_caller(self) -> None:
         """An operator cannot pin the clock to a moment the data is not from.
@@ -101,6 +102,7 @@ class ReplayClockTests(unittest.TestCase):
         options = _report_options_from_query("", runtime=_runtime())
 
         self.assertIsNone(options["generated_at"])
+        self.assertIsNone(options["generated_at_source"])
 
     def test_replay_without_a_snapshot_is_rejected(self) -> None:
         with self.assertRaises(ValueError) as caught:
@@ -161,6 +163,7 @@ class PublishedEditionRuntimeTests(unittest.TestCase):
         context = _runtime_context(_runtime(published=True).validate())
 
         self.assertEqual(expected, options["generated_at"])
+        self.assertEqual("published", options["generated_at_source"])
         self.assertEqual("research_only", options["mode"])
         self.assertEqual("published", context["mode"])
         self.assertIs(context["replay"], False)

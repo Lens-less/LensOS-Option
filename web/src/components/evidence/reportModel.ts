@@ -1,146 +1,22 @@
 import type { ReleasePrerequisite, ResearchReport } from "../../contracts";
 import type { FreshnessPhase, ReportFreshness } from "../../report";
 import { finiteNumber } from "../../report";
+import {
+  formatCutoffTime,
+  friendlySource,
+  humanize,
+  marketDisplayState,
+} from "../../report/display";
+import { REPORT_REASON_COPY as REASON_COPY } from "../../reasonCodes/catalog";
 
 export { selectReportFreshness as reportFreshness } from "../../report";
 export { finiteNumber };
+export { formatCutoffTime, friendlySource, humanize, marketDisplayState };
 export type Freshness = ReportFreshness;
 
 export type Queue = "operator" | "system";
 export type Tone = "danger" | "muted" | "safe" | "warning";
-export type MarketDisplayState = "available" | "quality_blocked" | "stale";
-
-const REASON_COPY: Record<
-  string,
-  { label: string; action: string; ownerLabel: string; queue: Queue }
-> = {
-  BACKTEST_NOT_RUN: {
-    label: "Backtest 尚未运行",
-    action: "系统在历史数据就绪后运行有限边界 Backtest。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  CALIBRATION_NOT_IMPLEMENTED: {
-    label: "校准能力尚未就绪",
-    action: "系统需要实现并复核校准能力；在此之前保持零仓位。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  EXTERNAL_APPROVAL_PENDING: {
-    label: "外部人工审批尚未记录",
-    action: "完成独立复核，并把批准证据记录到版本化 runbook。",
-    ownerLabel: "需要外部复核",
-    queue: "operator",
-  },
-  EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED: {
-    label: "缺少独立发布复核",
-    action: "由独立责任人完成发布复核；本研究运行时不能自行授权。",
-    ownerLabel: "需要外部复核",
-    queue: "operator",
-  },
-  MISSING_30_60_DAY_RECONCILIATION: {
-    label: "缺少 30–60 天 Paper 对账",
-    action: "系统持续累计观察，并生成可复核的对账证据。",
-    ownerLabel: "系统持续观察",
-    queue: "system",
-  },
-  MISSING_ACCOUNT_API_SNAPSHOT: {
-    label: "缺少账户 API 快照",
-    action: "在本机配置只读账户凭证或脱敏快照；系统随后重算风险。",
-    ownerLabel: "需要你提供",
-    queue: "operator",
-  },
-  MISSING_BACKTEST_ALIGNMENT: {
-    label: "缺少 Backtest 对齐",
-    action: "系统在历史数据就绪后完成基线与策略窗口对齐。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  MISSING_CALIBRATED_MODEL: {
-    label: "缺少已校准模型",
-    action: "系统继续校准；在提升评审完成前保持研究只读。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  MISSING_EXTERNAL_PROMOTION_REVIEW: {
-    label: "缺少模型提升复核",
-    action: "审阅校准证据，并记录明确的模型提升决定。",
-    ownerLabel: "需要外部复核",
-    queue: "operator",
-  },
-  MISSING_OUT_OF_SAMPLE_EVIDENCE: {
-    label: "缺少样本外验证证据",
-    action: "系统继续执行 Walk-forward 样本外验证。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  MISSING_PAPER_RECONCILIATION: {
-    label: "缺少 Paper 对账证据",
-    action: "系统持续累计 Paper 观察并生成对账记录。",
-    ownerLabel: "系统持续观察",
-    queue: "system",
-  },
-  MISSING_VALIDATED_MARKET_DATA: {
-    label: "缺少已验证市场数据",
-    action: "系统继续采集并等待连续通过的可信市场快照。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  MISSING_VALIDATED_PATH_RISK: {
-    label: "缺少已验证路径风险",
-    action: "系统继续计算路径风险；未通过前保持 NO_TRADE。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  MISSING_VENDOR_HISTORY_PROVENANCE: {
-    label: "缺少历史数据来源证明",
-    action: "配置获授权、可追溯的历史数据源。",
-    ownerLabel: "需要你提供",
-    queue: "operator",
-  },
-  NO_VALIDATED_PATH_RISK: {
-    label: "路径风险尚未验证",
-    action: "系统继续计算并验证路径风险；在此之前保持研究只读。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  REGIME_MIN_OBSERVATIONS_NOT_MET: {
-    label: "Regime 最少观察数未达到",
-    action: "系统继续累计实时 Regime 观察样本。",
-    ownerLabel: "系统持续观察",
-    queue: "system",
-  },
-  REGIME_ROLLING_FIELDS_INCOMPLETE: {
-    label: "Regime 滚动字段未完整",
-    action: "系统继续补全滚动字段与时间窗口。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  REGIME_ROLLING_HISTORY_INSUFFICIENT: {
-    label: "Regime 实时历史仍不足",
-    action: "系统继续累计实时 Regime 观察样本。",
-    ownerLabel: "系统持续观察",
-    queue: "system",
-  },
-  REGIME_TRUST_EVIDENCE_NOT_PROMOTED: {
-    label: "Regime 可信证据尚未提升",
-    action: "系统继续累计并复核 Regime 可信观察。",
-    ownerLabel: "系统持续观察",
-    queue: "system",
-  },
-  SIMULATION_NOT_REQUESTED: {
-    label: "保证金模拟尚未请求",
-    action: "账户证据就绪后，系统发起只读组合模拟。",
-    ownerLabel: "系统负责",
-    queue: "system",
-  },
-  TRUST_EVIDENCE_NOT_OBSERVED: {
-    label: "市场可信观察尚未完成",
-    action: "系统继续累计连续市场观察；不需要操作员补录数据。",
-    ownerLabel: "系统持续观察",
-    queue: "system",
-  },
-};
+export type { MarketDisplayState } from "../../report/display";
 
 const ACTION_TRANSLATIONS: Record<string, string> = {
   "Obtain separately authorized manual/external release evidence; this research runtime cannot grant it.":
@@ -224,48 +100,6 @@ export function formatPublishedAge(ageSec: number | null | undefined): string {
   })} 小时`;
 }
 
-export function formatCutoffTime(value: string | null | undefined): string {
-  if (!value) {
-    return "截止时间未提供";
-  }
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "Asia/Shanghai",
-  }).format(parsed);
-}
-
-export function marketDisplayState(
-  report: ResearchReport,
-  freshness: Freshness,
-): MarketDisplayState {
-  if (
-    freshness.mode === "published" &&
-    freshness.phase === "expired"
-  ) {
-    return "stale";
-  }
-  if (
-    report.data_status?.validated !== true ||
-    freshness.phase === "expired" ||
-    freshness.phase === "unavailable"
-  ) {
-    return "quality_blocked";
-  }
-  return "available";
-}
-
-export function humanize(value: string | null | undefined, fallback = "未提供"): string {
-  if (!value) {
-    return fallback;
-  }
-  return value.replaceAll("_", " ");
-}
-
 export function displayStatus(
   value: string | null | undefined,
   fallback = "未提供",
@@ -284,22 +118,6 @@ function displaySource(
     return fallback;
   }
   return value;
-}
-
-export function friendlySource(value: string | null | undefined): string {
-  if (!value || value === "not_configured") {
-    return "市场来源未配置";
-  }
-  if (value.startsWith("deribit_live:")) {
-    return "Deribit live";
-  }
-  if (value === "deribit_published_snapshot") {
-    return "Deribit 日更快照";
-  }
-  if (value.startsWith("fixture:")) {
-    return "验证回放数据";
-  }
-  return humanize(value);
 }
 
 function statusTone(status: string | null | undefined): Tone {
