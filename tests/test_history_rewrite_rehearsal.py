@@ -61,6 +61,21 @@ def test_plan_preserves_only_the_current_static_bundle_and_never_pushes() -> Non
         for path in current_assets
         if path.endswith((".css", ".js")) and "/index-" in path
     )
+    historical_paths = subprocess.run(
+        ["git", "log", "--all", "--name-only", "--pretty=format:"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    ).stdout.splitlines()
+    historical_bundles = {
+        path
+        for path in historical_paths
+        if path.startswith("crypto_options_report/static/evidence/assets/index-")
+        and path.endswith((".css", ".js"))
+    }
+    expected_obsolete_bundles = historical_bundles - set(current_bundles)
 
     assert plan["schema_version"] == "public_history_rewrite_plan.v1"
     assert plan["status"] == "planned"
@@ -92,10 +107,7 @@ def test_plan_preserves_only_the_current_static_bundle_and_never_pushes() -> Non
         "tests/test_options_platform_projection_v2.py",
         "tests/test_options_platform_remote_cli_v2.py",
     }.issubset(plan["removed_paths"])
-    assert any(
-        path.startswith("crypto_options_report/static/evidence/assets/index-")
-        for path in plan["removed_paths"]
-    )
+    assert expected_obsolete_bundles.issubset(plan["removed_paths"])
     assert plan["source_mutation_allowed"] is False
     assert plan["push_allowed"] is False
     assert plan["private_archive_required"] is True
