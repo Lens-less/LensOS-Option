@@ -126,6 +126,13 @@ def test_rewrite_mirror_disables_local_clone_optimization() -> None:
     assert '["git", "clone", "--mirror", "--no-hardlinks", archive_mirror' not in script
 
 
+def test_validation_clone_explicitly_checks_out_rewritten_main() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert '"--branch",\n            "main",\n            "--single-branch"' in script
+    assert 'if validation_head != rewritten_head:' in script
+
+
 def test_current_tracked_tree_contains_no_registered_private_identity_tokens() -> None:
     private_user_id = "28" + "340"
     private_author_id = private_user_id + "0448"

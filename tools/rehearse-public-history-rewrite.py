@@ -528,7 +528,22 @@ def rehearse(
     bundle_heads = _run(["git", "bundle", "list-heads", rewritten_bundle]).stdout
     if bundle_heads.count("refs/heads/main") != 1 or len(bundle_heads.splitlines()) != 1:
         raise RewriteError("public bundle contains refs outside refs/heads/main")
-    _run(["git", "clone", "--no-local", rewritten_bundle, validation_worktree])
+    rewritten_head = _git(rewritten_mirror, "rev-parse", PUBLIC_REF)
+    _run(
+        [
+            "git",
+            "clone",
+            "--branch",
+            "main",
+            "--single-branch",
+            "--no-local",
+            rewritten_bundle,
+            validation_worktree,
+        ]
+    )
+    validation_head = _git(validation_worktree, "rev-parse", "HEAD")
+    if validation_head != rewritten_head:
+        raise RewriteError("validation clone HEAD does not match rewritten main")
 
     commit_map = _copy_filter_report(rewritten_mirror, output_root, "commit-map")
     changed_refs = _copy_filter_report(rewritten_mirror, output_root, "changed-refs")
@@ -560,7 +575,7 @@ def rehearse(
         "existing_repository_public_cutover_ready": not existing_repository_blockers,
         "existing_repository_blockers": existing_repository_blockers,
         "source_head": plan["source_head"],
-        "rewritten_head": _git(rewritten_mirror, "rev-parse", PUBLIC_REF),
+        "rewritten_head": rewritten_head,
         "identity_mode": plan["identity_mode"],
         "public_author": plan["public_author"],
         "filter_repo_version": FILTER_REPO_VERSION,
@@ -576,6 +591,7 @@ def rehearse(
         "rewritten_bundle": str(rewritten_bundle),
         "public_bundle_refs": [PUBLIC_REF],
         "validation_worktree": str(validation_worktree),
+        "validation_head": validation_head,
         "commit_map": commit_map,
         "changed_refs": changed_refs,
         "first_changed_commits": first_changed_commits,
