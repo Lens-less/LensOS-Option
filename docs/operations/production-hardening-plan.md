@@ -30,7 +30,7 @@ Scope: deploy the research console safely without enabling paper, manual, or liv
 
 - `python -m crypto_options_report.api --smoke`
 - `GET /health`, `GET /livez`, `GET /readyz`
-- `GET /dashboard.html`, `GET /research/report`, invalid route/query, overload response
+- `GET /dashboard.html` (now a legacy dashboard alias serving the same Evidence Console as `/evidence`; the standalone `static/dashboard.html` page no longer exists), `GET /research/report`, invalid route/query, overload response
 - CLI compact report and alert evaluation
 - complete unit/pytest suite and compile walk
 - in-app browser desktop and narrow viewport checks, refresh interaction, console and failed-request inspection

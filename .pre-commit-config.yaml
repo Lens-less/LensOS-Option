@@ -1,0 +1,22 @@
+# 可选的本地辅助钩子。CI 的权威门禁仍是 pytest / ruff / web 三件套，
+# 本配置不得放宽任何现有门禁。
+#
+# 刻意不启用任何会改写文件内容的 hook（ruff-format、end-of-file-fixer、
+# trailing-whitespace、mixed-line-ending 等）：仓库有 .gitattributes eol=lf
+# 约定与逐字节锁定的 fixture，自动改写会破坏它们。
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # 与 constraints.txt 钉住的 ruff==0.16.0 保持一致。
+    rev: v0.16.0
+    hooks:
+      # 只启用 lint（ruff check）；ruff-check 是 v0.11+ 中 `ruff` hook 的现行 id。
+      - id: ruff-check
+        args: []
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        # crypto_options_report/static/evidence/ 提交了前端构建产物，
+        # 当前最大的是约 344 KB 的 index-*.js，600 KB 留有余量。
+        args: ["--maxkb=600"]

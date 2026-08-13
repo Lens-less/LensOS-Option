@@ -49,6 +49,18 @@ npm run lint
 npm run build
 ```
 
+### 可选：pre-commit 钩子
+
+仓库提供了最小的 `.pre-commit-config.yaml`（ruff lint、合并冲突标记、超大文件检查），
+作为**可选**的本地辅助：
+
+```powershell
+pip install pre-commit
+pre-commit install
+```
+
+它不替代任何门禁——CI 的权威门禁仍是上面的 pytest / ruff / web 三件套。
+
 ### 修改了 `web/` 时的额外要求
 
 `crypto_options_report/static/evidence/` 是打进 Python wheel 的前端构建产物，它被
@@ -99,6 +111,9 @@ order placement, position sizing, or paper/manual execution controls.
 Use Python 3.12+ and a Node version accepted by `web/package.json`. Install the
 development environment and run the same local checks shown above: the complete
 Python test suite, Ruff, the API smoke test, and the web test/lint/build trio.
+Optionally, `pip install pre-commit && pre-commit install` enables the minimal
+local hooks in `.pre-commit-config.yaml`; the authoritative gates remain the
+pytest/ruff/web checks above.
 Tests must use deterministic fixtures and explicit clocks; do not call the live
 Deribit API. Changes to `web/` must include the synchronized
 `crypto_options_report/static/evidence/` build output.
