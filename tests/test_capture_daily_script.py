@@ -337,6 +337,7 @@ class CaptureDailyContractTests(unittest.TestCase):
                         **os.environ,
                         "PATH": str(bin_root) + os.pathsep + os.environ.get("PATH", ""),
                         "CAPTURE_DAILY_CAPTURE_DVOL": "true",
+                        "CAPTURE_DAILY_ORIGIN": "local_windows",
                         "CAPTURE_SUCCESS_HEARTBEAT_URL": f"http://127.0.0.1:{server.server_port}/capture-success?token={token}",
                     },
                     capture_output=True,
@@ -351,6 +352,7 @@ class CaptureDailyContractTests(unittest.TestCase):
                 payload = json.loads(received.get(timeout=5).decode("utf-8-sig"))
                 self.assertEqual("capture_daily_success_heartbeat.v1", payload["schema_version"])
                 self.assertEqual("ok", payload["status"])
+                self.assertEqual("local_windows", payload["capture_origin"])
                 self.assertIs(payload["usable_for_validation"], True)
                 self.assertEqual(0, payload["consecutive_unusable_days"])
                 self.assertEqual(1, payload["consecutive_usable_days"])
@@ -377,10 +379,18 @@ class CaptureDailyContractTests(unittest.TestCase):
                 )
                 self.assertNotIn(token, summary_text)
                 self.assertNotIn("capture-success", summary_text)
+                self.assertEqual("local_windows", summary["capture_origin"])
+                self.assertTrue(summary["provider_run_id"])
                 self.assertIs(summary["usable_for_validation"], True)
                 self.assertEqual(0, summary["consecutive_unusable_days"])
                 self.assertEqual(1, summary["consecutive_usable_days"])
                 self.assertEqual([], summary["usability_reason_codes"])
+                receipt_path = Path(summary["evidence_receipt"]["path"])
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8-sig"))
+                self.assertEqual("local_windows", receipt["capture_origin"])
+                self.assertEqual(summary["provider_run_id"], receipt["provider_run_id"])
+                self.assertIs(receipt["usable_for_validation"], True)
+                self.assertEqual([], receipt["usability_reason_codes"])
         finally:
             server.shutdown()
             server.server_close()
@@ -516,6 +526,147 @@ class CaptureDailyContractTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             server_thread.join(timeout=5)
+
+    def test_origin_specific_portable_state_restores_unusable_streak(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        git = shutil.which("git")
+        if not powershell or not git:
+            self.skipTest("PowerShell and git are required")
+
+        with TemporaryDirectory() as temporary_root_value:
+            temporary_root = Path(temporary_root_value)
+            product_root = temporary_root / "product"
+            evidence_root = temporary_root / "evidence"
+            evidence_remote = temporary_root / "evidence.git"
+            bin_root = temporary_root / "bin"
+            product_root.mkdir()
+            evidence_root.mkdir()
+            bin_root.mkdir()
+            self._write_capture_stub_tooling(bin_root)
+            subprocess.run(
+                [git, "init", "-b", "main"], cwd=product_root, check=True, capture_output=True
+            )
+            subprocess.run(
+                [
+                    git,
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/example/lensos-product.git",
+                ],
+                cwd=product_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                [git, "init", "--bare", str(evidence_remote)],
+                cwd=temporary_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                [git, "init", "-b", "main"], cwd=evidence_root, check=True, capture_output=True
+            )
+            for directory in ("snapshots", "history", "logs", "reports"):
+                target = evidence_root / directory
+                target.mkdir(exist_ok=True)
+                (target / ".gitkeep").write_text("", encoding="utf-8")
+            state_dir = evidence_root / "logs"
+            (state_dir / "capture-daily-btc-github_actions_0810_utc.latest.state.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "capture_daily_usability_state.v1",
+                        "capture_origin": "github_actions_0810_utc",
+                        "capture_time": "2026-08-01T08:10:00Z",
+                        "usable_for_validation": False,
+                        "usability_reason_codes": ["MARKET_DATA_QUALITY_FAIL"],
+                        "consecutive_unusable_days": 1,
+                        "consecutive_usable_days": 0,
+                        "run_id": "capture-daily-btc-github_actions_0810_utc-prior",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            subprocess.run([git, "add", "."], cwd=evidence_root, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    git,
+                    "-c",
+                    "user.name=Test Operator",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-m",
+                    "Seed portable capture state",
+                ],
+                cwd=evidence_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                [git, "remote", "add", "origin", str(evidence_remote)],
+                cwd=evidence_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                [git, "push", "-u", "origin", "main"],
+                cwd=evidence_root,
+                check=True,
+                capture_output=True,
+            )
+
+            completed = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-File",
+                    str(self.SCRIPT),
+                    "-RepoRoot",
+                    str(product_root),
+                    "-CaptureOrigin",
+                    "github_actions_0810_utc",
+                    "-EvidenceRepoRoot",
+                    str(evidence_root),
+                    "-EnableEvidenceRepoPreflight",
+                ],
+                cwd=self.REPO_ROOT,
+                env={
+                    **os.environ,
+                    "PATH": str(bin_root) + os.pathsep + os.environ.get("PATH", ""),
+                    "CAPTURE_STUB_CAPTURED_AT": "2026-08-02T08:10:00Z",
+                    "CAPTURE_STUB_USABLE": "0",
+                },
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=30,
+            )
+
+            summary_path = (
+                product_root
+                / "artifacts"
+                / "logs"
+                / "capture-daily-btc.latest.summary.json"
+            )
+            failure_detail = completed.stderr + completed.stdout
+            if summary_path.exists():
+                failure_detail += summary_path.read_text(encoding="utf-8-sig")
+            self.assertEqual(0, completed.returncode, failure_detail)
+            summary = json.loads(summary_path.read_text(encoding="utf-8-sig"))
+            self.assertEqual(2, summary["consecutive_unusable_days"])
+            state = json.loads(
+                (
+                    product_root
+                    / "artifacts"
+                    / "logs"
+                    / "capture-daily-btc-github_actions_0810_utc.latest.state.json"
+                ).read_text(encoding="utf-8-sig")
+            )
+            self.assertEqual("capture_daily_usability_state.v1", state["schema_version"])
+            self.assertEqual(2, state["consecutive_unusable_days"])
 
     def test_successful_capture_retries_heartbeat_and_fails_closed_on_delivery_error(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
@@ -1782,6 +1933,10 @@ class PublishWorkflowContractTests(unittest.TestCase):
         workflow = self.WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn('cron: "10 8 * * *"', workflow)
+        self.assertIn('LENSOS_SECOND_CAPTURE_DECISION: "SELECTED"', workflow)
+        self.assertIn('LENSOS_SECOND_CAPTURE_ROUTE: "ACTIONS_0810_UTC"', workflow)
+        self.assertIn('CAPTURE_DAILY_ORIGIN: "github_actions_0810_utc"', workflow)
+        self.assertIn("CAPTURE_DAILY_PROVIDER_RUN_ID", workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("concurrency:", workflow)
         self.assertIn("group: publish-public-evidence", workflow)
@@ -1829,7 +1984,7 @@ class PublishWorkflowContractTests(unittest.TestCase):
         self.assertIn("$attestationResponse.StatusCode -ne 200", workflow)
         self.assertIn("application/(?:json|[^;]+\\+json)", workflow)
         self.assertIn("Publish CLI is not available yet", workflow)
-        self.assertIn("Publish failed closed", workflow)
+        self.assertIn("python tools/check-publish-workflow-gate.py", workflow)
         self.assertIn("CAPTURE_DAILY_CAPTURE_DVOL: \"true\"", workflow)
         self.assertIn("'--published-at', $publishedAt", workflow)
         self.assertIn("'--site-origin', $env:SITE_ORIGIN", workflow)
@@ -1965,6 +2120,30 @@ class PublishWorkflowContractTests(unittest.TestCase):
             "EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready }}",
             workflow[final_gate_start:],
         )
+        final_gate = workflow[final_gate_start:]
+        self.assertIn(
+            "FAILURE_WEBHOOK_READY: ${{ steps.config.outputs.failure_webhook_ready }}",
+            final_gate,
+        )
+        self.assertIn(
+            "SUCCESS_HEARTBEAT_READY: ${{ steps.config.outputs.success_heartbeat_ready }}",
+            final_gate,
+        )
+        self.assertIn("python tools/check-publish-workflow-gate.py", final_gate)
+        self.assertNotIn("if ($env:DEPLOY_DECISION -eq 'SUSPENDED')", final_gate)
+
+    def test_raw_capture_backup_is_explicitly_private_only(self) -> None:
+        workflow = self.WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "Upload captured evidence recovery backup (private repository only)",
+            workflow,
+        )
+        self.assertIn(
+            "if: always() && github.event.repository.private == true",
+            workflow,
+        )
+        self.assertIn("retention-days: 90", workflow)
 
     def test_publish_workflow_documents_status_history_and_stale_after_contracts(self) -> None:
         workflow = self.WORKFLOW.read_text(encoding="utf-8")
@@ -2002,7 +2181,7 @@ class PublishWorkflowContractTests(unittest.TestCase):
             "research_publication_status",
             "manifest_sha256",
             "RECEIPT_OUTCOME",
-            "Durable evidence sync is disabled",
+            "EVIDENCE_SYNC_ENABLED: ${{ env.LENSOS_EVIDENCE_REPO_SYNC_ENABLED }}",
             "git fetch",
             "git rebase",
             "git push",

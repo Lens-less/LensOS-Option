@@ -24,6 +24,8 @@
 | [`product/2026-08-12-continuity-and-consistency-spec.md`](product/2026-08-12-continuity-and-consistency-spec.md) | 运营连续性与 fail-closed 一致性修复规格（验证等待期的工程优先级）。 |
 | [`product/2026-08-12-data-usability-and-open-source-readiness-spec.md`](product/2026-08-12-data-usability-and-open-source-readiness-spec.md) | 数据可用性止损与开源就绪规格（采集可用性、历史净化与切 public 时序）。 |
 | [`operations/public-deployment-suspension.md`](operations/public-deployment-suspension.md) | 公开部署的显式挂起决议与解除前置条件。 |
+| [`operations/public-history-rewrite.md`](operations/public-history-rewrite.md) | 历史净化的隔离演练、固定工具版本、PR refs 阻塞与验收契约。 |
+| [`operations/public-release-cutover.md`](operations/public-release-cutover.md) | 切 public 前的一次性冻结、历史、Actions、GitHub 设置与 v0.1.0 清单。 |
 
 ## 一级目录归属
 

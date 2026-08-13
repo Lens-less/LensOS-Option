@@ -36,6 +36,15 @@
 .PARAMETER RepoRoot
     Repository root; inferred from the script location when omitted.
 
+.PARAMETER CaptureOrigin
+    Stable non-secret lane identifier written into summaries, receipts, and
+    heartbeats. Defaults to CAPTURE_DAILY_ORIGIN, then local_operator.
+
+.PARAMETER ProviderRunId
+    Optional scheduler-native run identifier used to correlate an immutable
+    receipt with its provider. Defaults to CAPTURE_DAILY_PROVIDER_RUN_ID, then
+    the script run id. It must not contain a secret.
+
 .PARAMETER CaptureDvolHistory
     Controls the DVOL history stage. It defaults to true; an explicit false is
     only for local diagnostics and makes the public publish inputs incomplete.
@@ -75,6 +84,8 @@ param(
     [int]    $InstrumentLimit = 96,
     [int]    $HistoryDays = 1200,
     [string] $RepoRoot,
+    [string] $CaptureOrigin,
+    [string] $ProviderRunId,
     [Nullable[bool]] $CaptureDvolHistory = $null,
     [int]    $DvolHistoryDays = 1095,
     [string] $FailureWebhookUrl,
@@ -483,6 +494,9 @@ function Get-ManagedArtifactRelativePaths {
         foreach ($item in Get-ChildItem -LiteralPath $receiptRoot -Filter 'capture-daily-*.receipt.json' -File -ErrorAction SilentlyContinue) {
             Add-UniqueString -List $relativePaths -Value (Get-RelativePath -RootPath $ArtifactsRoot -ChildPath $item.FullName)
         }
+        foreach ($item in Get-ChildItem -LiteralPath $receiptRoot -Filter 'capture-daily-*.latest.state.json' -File -ErrorAction SilentlyContinue) {
+            Add-UniqueString -List $relativePaths -Value (Get-RelativePath -RootPath $ArtifactsRoot -ChildPath $item.FullName)
+        }
     }
 
     return @($relativePaths | Sort-Object)
@@ -631,7 +645,8 @@ function Copy-EvidenceRepoSeedToLocalArtifacts {
     foreach ($relativePath in @(
             "history/$CurrencyLower-daily.json",
             "history/$CurrencyLower-dvol.json",
-            'logs/capture-daily.log'
+            'logs/capture-daily.log',
+            "logs/capture-daily-$CurrencyLower-$resolvedCaptureOrigin.latest.state.json"
         )) {
         if (Test-Path -LiteralPath (Join-Path $EvidenceRepoRoot $relativePath)) {
             Add-UniqueString -List $seedRelativePaths -Value $relativePath
@@ -1181,6 +1196,7 @@ function Send-FailureWebhook {
     $payload = [ordered]@{
         schema_version = 'capture_daily_failure_webhook.v1'
         run_id = $Summary.run_id
+        capture_origin = $Summary.capture_origin
         currency = $Summary.currency
         status = $Summary.status
         failed_stage = $Summary.failed_stage
@@ -1206,6 +1222,7 @@ function Send-SuccessHeartbeat {
     $payload = [ordered]@{
         schema_version = 'capture_daily_success_heartbeat.v1'
         run_id = $Summary.run_id
+        capture_origin = $Summary.capture_origin
         currency = $Summary.currency
         status = $Summary.status
         usable_for_validation = $Summary.usable_for_validation
@@ -1229,6 +1246,8 @@ $script:UnsyncedLocalCaptureCount = $null
 $runStartedAt = Get-IsoTimestamp
 $runStamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')
 $script:RunId = "capture-daily-bootstrap-$runStamp"
+$resolvedCaptureOrigin = $null
+$resolvedProviderRunId = $null
 $currencyLower = $null
 $artifactsRoot = $null
 $snapshotsRoot = $null
@@ -1239,6 +1258,7 @@ $reportDir = $null
 $script:LogFile = $null
 $summaryPath = $null
 $latestSummaryPath = $null
+$usabilityStatePath = $null
 $receiptPath = $null
 $snapshotTool = $null
 $underlyingTool = $null
@@ -1348,6 +1368,8 @@ function New-CaptureSummary {
         run_id = $script:RunId
         status = if ($failureMessage) { 'failed' } else { 'ok' }
         currency = $Currency
+        capture_origin = $resolvedCaptureOrigin
+        provider_run_id = $resolvedProviderRunId
         capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { $snapshotResult.details.captured_at } else { $runStartedAt }
         run_started_at = $runStartedAt
         repo_root = $RepoRoot
@@ -1414,6 +1436,26 @@ function Write-CaptureSummary {
     return $summary
 }
 
+function Write-UsabilityState {
+    if ([string]::IsNullOrWhiteSpace($usabilityStatePath)) {
+        throw 'capture usability state path is unavailable'
+    }
+    $state = [ordered]@{
+        schema_version = 'capture_daily_usability_state.v1'
+        run_id = $script:RunId
+        provider_run_id = $resolvedProviderRunId
+        currency = $Currency
+        capture_origin = $resolvedCaptureOrigin
+        capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { $snapshotResult.details.captured_at } else { $runStartedAt }
+        usable_for_validation = $usableForValidation
+        usability_reason_codes = @($usabilityReasonCodes)
+        consecutive_unusable_days = $consecutiveUnusableDays
+        consecutive_usable_days = $consecutiveUsableDays
+    }
+    Write-CanonicalJson -Path $usabilityStatePath -InputObject $state
+    return $state
+}
+
 function New-ReceiptArtifactRecord {
     param([string] $Path)
 
@@ -1461,8 +1503,14 @@ function Write-CaptureReceipt {
         run_id = $script:RunId
         status = 'capture_complete'
         currency = $Currency
+        capture_origin = $resolvedCaptureOrigin
+        provider_run_id = $resolvedProviderRunId
         capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { $snapshotResult.details.captured_at } else { $runStartedAt }
         run_started_at = $runStartedAt
+        usable_for_validation = $usableForValidation
+        usability_reason_codes = @($usabilityReasonCodes)
+        consecutive_unusable_days = $consecutiveUnusableDays
+        consecutive_usable_days = $consecutiveUsableDays
         artifacts = [ordered]@{
             snapshot = New-ReceiptArtifactRecord -Path $snapshotPath
             underlying_history = New-ReceiptArtifactRecord -Path $underlyingHistoryPath
@@ -1523,28 +1571,38 @@ try {
     if ([string]::IsNullOrWhiteSpace($Currency)) {
         throw 'currency must not be empty'
     }
+    if ([string]::IsNullOrWhiteSpace($CaptureOrigin)) {
+        $CaptureOrigin = [Environment]::GetEnvironmentVariable('CAPTURE_DAILY_ORIGIN')
+    }
+    if ([string]::IsNullOrWhiteSpace($CaptureOrigin)) {
+        $CaptureOrigin = 'local_operator'
+    }
+    $resolvedCaptureOrigin = $CaptureOrigin.Trim().ToLowerInvariant()
+    if ($resolvedCaptureOrigin -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') {
+        throw 'capture origin must be a 1-64 character lowercase lane identifier'
+    }
     $currencyLower = $Currency.ToLowerInvariant()
-    $script:RunId = "capture-daily-$currencyLower-$runStamp"
+    $script:RunId = "capture-daily-$currencyLower-$resolvedCaptureOrigin-$runStamp"
+    if ([string]::IsNullOrWhiteSpace($ProviderRunId)) {
+        $ProviderRunId = [Environment]::GetEnvironmentVariable('CAPTURE_DAILY_PROVIDER_RUN_ID')
+    }
+    if ([string]::IsNullOrWhiteSpace($ProviderRunId)) {
+        $ProviderRunId = $script:RunId
+    }
+    $resolvedProviderRunId = $ProviderRunId.Trim()
+    if ($resolvedProviderRunId -notmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') {
+        throw 'provider run id must be a non-secret 1-128 character identifier'
+    }
 
     $artifactsRoot = Join-Path $RepoRoot 'artifacts'
     Ensure-Directory -Path $artifactsRoot
     $logDir = Join-Path $artifactsRoot 'logs'
     Ensure-Directory -Path $logDir
     $script:LogFile = Join-Path $logDir 'capture-daily.log'
-    $summaryPath = Join-Path $logDir "capture-daily-$currencyLower-$runStamp.summary.json"
+    $summaryPath = Join-Path $logDir "capture-daily-$currencyLower-$resolvedCaptureOrigin-$runStamp.summary.json"
     $latestSummaryPath = Join-Path $logDir "capture-daily-$currencyLower.latest.summary.json"
-    $receiptPath = Join-Path $logDir "capture-daily-$currencyLower-$runStamp.receipt.json"
-    if (Test-Path -LiteralPath $latestSummaryPath -PathType Leaf) {
-        try {
-            $previousSummary = Get-Content -Raw -LiteralPath $latestSummaryPath -ErrorAction Stop |
-                ConvertFrom-Json -ErrorAction Stop
-        }
-        catch {
-            $previousSummaryUnavailable = $true
-            Write-Log "previous usability summary unavailable; alert streak will fail closed"
-        }
-    }
-
+    $usabilityStatePath = Join-Path $logDir "capture-daily-$currencyLower-$resolvedCaptureOrigin.latest.state.json"
+    $receiptPath = Join-Path $logDir "capture-daily-$currencyLower-$resolvedCaptureOrigin-$runStamp.receipt.json"
     $snapshotsRoot = Join-Path $artifactsRoot 'snapshots'
     $seriesDir = Join-Path $snapshotsRoot "$currencyLower-series"
     $historyDir = Join-Path $artifactsRoot 'history'
@@ -1577,6 +1635,37 @@ try {
         }
         catch {
             Write-Log "evidence seed hydrate skipped $($_.Exception.Message)"
+        }
+    }
+
+    if (Test-Path -LiteralPath $usabilityStatePath -PathType Leaf) {
+        try {
+            $candidateState = Get-Content -Raw -LiteralPath $usabilityStatePath -ErrorAction Stop |
+                ConvertFrom-Json -ErrorAction Stop
+            if (
+                [string] $candidateState.schema_version -ne 'capture_daily_usability_state.v1' -or
+                [string] $candidateState.capture_origin -ne $resolvedCaptureOrigin
+            ) {
+                throw 'portable usability state schema or origin mismatch'
+            }
+            $previousSummary = $candidateState
+        }
+        catch {
+            $previousSummaryUnavailable = $true
+            Write-Log "previous portability state unavailable; alert streak will fail closed"
+        }
+    }
+    elseif (Test-Path -LiteralPath $latestSummaryPath -PathType Leaf) {
+        try {
+            $candidateSummary = Get-Content -Raw -LiteralPath $latestSummaryPath -ErrorAction Stop |
+                ConvertFrom-Json -ErrorAction Stop
+            if ([string] $candidateSummary.capture_origin -eq $resolvedCaptureOrigin) {
+                $previousSummary = $candidateSummary
+            }
+        }
+        catch {
+            $previousSummaryUnavailable = $true
+            Write-Log "previous usability summary unavailable; alert streak will fail closed"
         }
     }
 
@@ -1796,6 +1885,8 @@ try {
         -Usable $runUsable `
         -ReasonCodes @($runUsabilityReasons) `
         -CaptureTime $analysisTimestamp
+
+    Write-UsabilityState | Out-Null
 
     $currentPhase = 'capture_receipt'
     Invoke-Stage -Name 'capture_receipt' -Command 'write immutable pre-sync capture receipt' -Action {

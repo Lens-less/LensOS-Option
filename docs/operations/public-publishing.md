@@ -155,6 +155,11 @@ paper-ledger state, and sizing/order-cap fields.
   process success from validation usability with `usable_for_validation`,
   `usability_reason_codes`, `consecutive_usable_days`, and
   `consecutive_unusable_days`.
+- Every summary, heartbeat, and immutable receipt records a validated
+  `capture_origin`; the receipt also records a non-secret `provider_run_id`.
+  Each lane persists a narrow `capture_daily_usability_state.v1` file so an
+  ephemeral runner restores its own consecutive-day counter from the private
+  evidence repository rather than resetting it each day.
 - Two consecutive capture days that do not advance a usable series trigger the
   failure webhook even when the process status is `ok`. A snapshot-stage failure
   still refreshes independent underlying and DVOL histories, then exits nonzero;
@@ -178,14 +183,18 @@ paper-ledger state, and sizing/order-cap fields.
 
 ## Scheduled workflow admission
 
-The scheduled workflow always captures first, even when deployment settings are
-missing. The current repository decision also keeps deployment
-**explicitly suspended** until owner-owned DNS/hosting identity exist. The
-workflow therefore still captures and verifies the public bundle, uploads that
-capture as a temporary recovery artifact, and records `DEPLOY_SUSPENDED`
-instead of attempting publication. It only admits a distributable `dist/site`
-after that suspension is intentionally cleared and every independent contract
-below is satisfied. The durable decision and owner handoff are recorded in
+The scheduled workflow always attempts capture first, even when deployment
+settings are missing. Capture-lane admission then independently requires a
+successful capture and public-bundle boundary check, durable private evidence
+sync, a valid failure webhook, and a valid success heartbeat. `DEPLOY_SUSPENDED`
+cannot bypass those requirements. Site DNS and the independent stale monitor
+are required only after publication is intentionally activated.
+
+The selected second lane is `github_actions_0810_utc` at `08:10 UTC`; the
+Windows scheduler uses `local_windows_scheduler`. Three consecutive usable days
+from both lanes must be verified from immutable receipts with
+`tools/check-dual-capture-acceptance.py`. The durable decision and owner handoff
+are recorded in
 [`public-deployment-suspension.md`](public-deployment-suspension.md):
 
 - Repository variables:
@@ -201,8 +210,9 @@ below is satisfied. The durable decision and owner handoff are recorded in
   - `LENSOS_STALE_MONITOR_ATTESTATION_URL`
   - `LENSOS_STALE_MONITOR_ATTESTATION_TOKEN`
 
-Missing configuration produces a failed, durable publication receipt and no
-distributable site artifact. The workflow does not accept an operator boolean
+Missing capture configuration leaves the workflow red after preserving the
+attempted capture; missing publication configuration produces no distributable
+site artifact. The workflow does not accept an operator boolean
 as proof that monitoring exists. It fetches a fresh JSON attestation over
 public HTTPS from a host distinct from the site origin, rejects redirects, and
 binds the proof to the exact origin, health endpoint, notification endpoints,
@@ -253,7 +263,10 @@ retains enough information to replay why admission was green on that run.
   backfilled by a later run. The GitHub Actions 90-day artifact is only a
   temporary safety copy. Preflight rejects product-repository worktrees,
   matching remotes, ignored managed paths, detached branches, and dirty
-  evidence repos before an ordinary (never forced) push.
+  evidence repos before an ordinary (never forced) push. The workflow artifact
+  recovery copy is private-repository-only and is automatically skipped unless
+  GitHub reports repository visibility as `private`. Existing runs/artifacts
+  must still be removed or privately archived before visibility changes.
 - In Actions, the product checkout lives at
   `${{ github.workspace }}/product` and the evidence checkout at
   `${{ github.workspace }}/evidence-repo`. They are siblings by design;

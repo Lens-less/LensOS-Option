@@ -23,10 +23,10 @@
 | 第二采集点 | ❌ 不存在（`435d078` Not-tested 清单自证） |
 | 证据备份 | ✅ 私有证据仓每日自动 push（`LensOS-Option-Evidence`，最新 commit 08-12 17:00） |
 | 仓库可见性 | 🔒 `Lens-less/LensOS-Option` 为 **private**；66 个提交，无 semver tag，0 个 release |
-| **历史 PII** | ❌ **25/66 个提交内容含 `C:\Users\<LOCAL_USER_ID>`**；57 个提交作者为真实 QQ 邮箱、56 个作者名为 `Lens-less`（含 `.codex\worktrees` 等本机路径） |
+| **历史 PII** | ❌ **审计基线 25/66 个提交内容含本机 home 路径**；57 个提交作者为私人邮箱、56 个作者名含本机账户标识（含 `.codex\worktrees` 等路径） |
 | HEAD 卫生 | ⚠️ 仍 track 4 份 `docs/automation/` 过程文档（含部署侦探记录）与 `.workflow/verify-dashboard-cdp.mjs`（硬编码本机 Chrome 路径）；`.claude/` 未被 ignore |
 | 开源构件 | ✅ LICENSE（Apache-2.0）/ LICENSE-DATA（CC BY 4.0）/ SECURITY / CONTRIBUTING / issue & PR 模板 / dependabot 齐备；`pyproject.toml` 无 `authors`；无 CODE_OF_CONDUCT |
-| 当前树 PII | ✅ tracked 树 `git grep '<LOCAL_USER_ID>'` 零命中；`.env` 从未进过历史；CI 不读 secrets，fork PR 可绿 |
+| 当前树 PII | ✅ tracked 树对已登记私有标识零命中；`.env` 从未进过历史；CI 不读 secrets，fork PR 可绿 |
 
 ---
 
@@ -183,25 +183,30 @@ underlying_history / dvol / series / preflight 当日全部跳过。结算价来
 ### OS-1 · 历史净化（硬阻塞，只做一次）
 
 **证据（全部独立核查）：**
-- 25/66 个提交内容含 `<LOCAL_USER_ID>`（`C:\Users\<LOCAL_USER_ID>\...`、`C:\Users\<LOCAL_USER_ID>\.codex\worktrees\...`）；
-- 作者元数据：`201440286+Lens-less@users.noreply.github.com` × 57、`Lens-less` × 56；
+- 审计基线 25/66 个提交内容含本机账户标识（本机 home 与 `.codex\worktrees` 路径）；
+- 作者元数据：私人邮箱 × 57、含本机账户标识的作者名 × 56；
 - 历史含已删除的 `docs/automation/evidence-store`（约 99 路径 / 1.56 MB）、
   `issues/`、coordination 工具、历代 hash-named JS bundle（≥15 次，各 271–348 KB）；
+- GitHub 远端仍广告 12 个只读 `refs/pull/*/head`；其中旧 PR tree 仍含本机标识，
+  普通 branch/tag force-push 无法更新这些 ref；
 - `SECURITY.md:29-39`："Before making this repository public, rewrite history
   to purge them"——项目对自己的要求。
 
 **修复：** `git filter-repo` 一次性完成三件事：
 1. **路径删除**：历史中的 `docs/automation/`（保留现行 4 文件的去留由 OS-2 决定）、
    `issues/`、coordination 工具、旧 bundle blob；
-2. **文本替换**（`--replace-text`）：`C:\Users\<LOCAL_USER_ID>` 及 worktree 路径 → 占位符；
+2. **文本替换**（`--replace-text`）：本机 home 及 worktree 路径 → `<LOCAL_USER_HOME>` 占位符；
 3. **作者改写**（mailmap）：两个真实身份 → 公开身份（建议 GitHub noreply 邮箱）。
 
-先在镜像 clone 上演练并跑核对脚本，确认后 force push；本地保留一份私有完整
-镜像存档。dependabot 分支删除后由 dependabot 自动重建。
+先在镜像 clone 上演练并跑核对脚本，本地保留一份包含 PR refs 的私有完整镜像。
+本地重写通过仍不代表原 GitHub 仓可公开：必须由 GitHub Support 删除/解引用旧 PR refs
+与缓存；若无法取得确认，则把只含重写后 `main` 的 bundle 推入**全新 public 仓库**，
+旧仓永久 private。dependabot 分支在新历史上重建。
 
-**验收：** 对全部 refs：`git log --all -S '<LOCAL_USER_ID>'`、`-S '<REDACTED_AUTHOR_ID>'` 零命中；
-逐 revision `git grep '<LOCAL_USER_ID>'` 零命中；作者列表只含公开身份与 dependabot；
-私有镜像存档可访问；重写后 `pytest`/`ruff`/web 三件套全绿。
+**验收：** 对全部 refs 的已登记本机账户标识、私人作者 ID 与本机 home 前缀零命中；
+逐 revision 内容扫描零命中；作者列表只含公开身份、GitHub 与 dependabot；
+私有镜像存档可访问；public ref allowlist 只含 `main`；重写后
+`pytest`/`ruff`/web 三件套全绿；远端 PR refs 单独复核为零，或采用全新 public 仓。
 
 **注记：** 证据仓 `LensOS-Option-Evidence` **永久保持 private**；公开数据
 只经由 CC BY 4.0 的发布产物这一条通道。
@@ -301,7 +306,7 @@ static/evidence 同步提交、reason code append-only、不触碰
 
 1. **数据止损测试**：构造部分到期日 fail 的快照 → pass 到期日观测入库；
    连续 2 天不可用 → 收到通知。（DS-2 + DS-3 + DS-4 联合验收）
-2. **历史审计测试**：全部 refs 搜 `<LOCAL_USER_ID>` / `<REDACTED_AUTHOR_ID>` / `LENS\\` 零命中。
+2. **历史审计测试**：全部 refs 对已登记本机账户标识、私人作者 ID、旧作者名前缀与本机 home 前缀零命中。
 3. **陌生人测试**：干净机器 clone → README 快速开始 → 30 分钟内
    evidence console 出图，全程不接触 `artifacts/` 与任何 owner 基建。
 
@@ -311,21 +316,21 @@ static/evidence 同步提交、reason code append-only、不触碰
 
 | 风险 | 缓解 |
 | --- | --- |
-| 历史重写不可逆 / 出错 | 只在镜像上演练直到核对脚本全绿；本地保留私有完整镜像；重写发生在 private 阶段，无外部 fork 受影响——**这个窗口公开后永久关闭** |
+| 历史重写不可逆 / 出错 | 只在镜像上演练直到核对脚本全绿；本地保留私有完整镜像；原仓的只读 PR refs 不能靠 force-push 清除，Support 不确认时改用全新 public 仓——**这个窗口公开后永久关闭** |
 | 重写后既有文档里的 commit SHA 引用（`435d078`、`0818a4a` 等）失效 | 保留 filter-repo 的 commit-map 于私有镜像；归档文档头部加一行"历史于 2026-08 重写，旧 SHA 见私有映射" |
 | DS-2 被误解为放宽门禁 | 阈值零改动；单元级 fail-closed 与报告级整份裁决都不动；以"全 fail 快照仍整体剔除"的回归测试为证 |
 | DS-2 改动 series/preflight 消费面引起回放漂移 | 以既有快照 fixture 的逐字节快照测试为准绳；仅新增可用观测，不改既有观测的编码 |
-| force push 打断 dependabot | 分支删除后自动重建；PR 重开成本为零 |
-| 开源后 secrets 暴露面 | CI 不读 secrets（已核查）；`publish.yml` 仅 schedule/dispatch，fork 不可达；OS-6 里再核 Actions fork 审批设置 |
+| 历史重写移除既有提交/标签签名 | 这是 `git-filter-repo` 的预期副作用；发布新历史后用新身份签署 `v0.1.0`，不声称旧 Verified 徽章可保留 |
+| 开源后 secrets / Actions artifact 暴露面 | CI 不读 secrets（已核查）；切 public 前清点并删除或私下归档旧 workflow artifacts/runs，且停止在 public 产品仓上传 raw capture；再核 fork 审批设置 |
 | 08-14 cohort 结算在即（2 天后） | DS-5 与历史刷新的独立性保证结算价可得；这正是 DS 系列排在本周的现实理由 |
 
 ---
 
-## 8. 需要 owner 拍板
+## 8. Owner 决策状态
 
-| # | 决策 | 建议 | 不决的后果 |
+| # | 决策 | 状态 | 落地 |
 | --- | --- | --- | --- |
-| D-1 | 历史重写后的公开作者身份 | GitHub 用户名 + noreply 邮箱 | OS-1 无法执行 |
-| D-2 | 第二采集点路线 | 路线 1（Actions 云车道，顺手冗余掉本地 SSL 类故障） | 单点风险持续；每轮 automation 重复评估 |
-| D-3 | 切 public 时点 | 数据止损落地 + OS-1..5 完成后即切，**不必等 10 月验证**——开源的是工具与方法论，不是信号结论 | 开源改造与验证节点耦合，白等两个月 |
-| D-4 | issue/PR 模板语言 | 保持中文为主，模板顶部加一行英文指引 | 无阻塞，仅体验 |
+| D-1 | 历史重写后的公开作者身份 | **待 owner** | 需确认公开姓名与已验证 noreply 邮箱；final rewrite 在此之前 fail-closed |
+| D-2 | 第二采集点路线 | **已选** | Actions `08:10 UTC`，origin=`github_actions_0810_utc`；需凭证与三日双车道验收后才 accepted |
+| D-3 | 切 public 时点 | **已选** | 数据止损 + OS-1..5 后切，不等 10 月信号验证；公共站点可继续 `SUSPENDED` |
+| D-4 | issue/PR 模板语言 | **已选** | 中文为主，模板顶部提供英文提交指引 |

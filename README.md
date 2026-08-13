@@ -257,7 +257,7 @@ crypto-options-report pull-snapshot --currency BTC --instrument-limit 64 `
 $repo = "C:\path\to\Option"
 $evidenceRepo = "C:\path\to\LensOS-Option-Evidence"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$repo\tools\capture-daily.ps1`" -RepoRoot `"$repo`" -EnableEvidenceRepoSync -EvidenceRepoRoot `"$evidenceRepo`" -EvidenceRepoRemote origin -HistoryDays 1200 -DvolHistoryDays 1095" `
+  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$repo\tools\capture-daily.ps1`" -RepoRoot `"$repo`" -CaptureOrigin local_windows_scheduler -EnableEvidenceRepoSync -EvidenceRepoRoot `"$evidenceRepo`" -EvidenceRepoRemote origin -HistoryDays 1200 -DvolHistoryDays 1095" `
   -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 17:00
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
@@ -275,6 +275,18 @@ Register-ScheduledTask -TaskName "LensOS-Option-DailyCapture" `
 摘要与两个通知 payload 都会写入 `usable_for_validation`、可用性 reason codes，以及连续
 可用/不可用天数。即使脚本退出成功，只要连续两个采集日没有推进验证序列，也会触发失败
 webhook；快照阶段失败时，互不依赖的标的历史和 DVOL 历史仍会继续刷新。
+
+第二采集点已选定为 GitHub Actions 的 `08:10 UTC` 车道，标识为
+`github_actions_0810_utc`。配置私有 evidence repo 与两个通知端点后，用不可变 receipt
+验收连续三天的双车道数据；退出码 `0/10/11` 分别表示通过/继续收集/证据无效：
+
+```powershell
+python tools/check-dual-capture-acceptance.py `
+  --evidence-root $evidenceRepo `
+  --required-origin local_windows_scheduler `
+  --required-origin github_actions_0810_utc `
+  --days 3
+```
 
 采集日志在 `artifacts/logs/capture-daily.log`。同一天跑多次是安全的：验证器按
 “日期 × 合约”去重并报告丢弃了多少条，不会让重复行把当日横截面的相关性拉紧。

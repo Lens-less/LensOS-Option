@@ -16,6 +16,8 @@ env:
   PYTHONUNBUFFERED: "1"
   LENSOS_DEPLOY_DECISION: "SUSPENDED"
   LENSOS_DEPLOY_DECISION_ISSUE: "docs/operations/public-deployment-suspension.md"
+  LENSOS_SECOND_CAPTURE_DECISION: "SELECTED"
+  LENSOS_SECOND_CAPTURE_ROUTE: "ACTIONS_0810_UTC"
   LENSOS_EVIDENCE_REPO_SYNC_ENABLED: ${{ vars.LENSOS_EVIDENCE_REPO_SYNC_ENABLED || 'false' }}
   LENSOS_EVIDENCE_REPO_SLUG: ${{ vars.LENSOS_EVIDENCE_REPO_SLUG || '' }}
   LENSOS_EVIDENCE_REPO_BRANCH: ${{ vars.LENSOS_EVIDENCE_REPO_BRANCH || 'main' }}
@@ -350,6 +352,10 @@ jobs:
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
           $failureWebhookReady = Test-PublicHttpsUrl -Value $env:FAILURE_WEBHOOK_SECRET
           $successHeartbeatReady = Test-PublicHttpsUrl -Value $env:SUCCESS_HEARTBEAT_SECRET
+          "failure_webhook_ready=$($failureWebhookReady.ToString().ToLowerInvariant())" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "success_heartbeat_ready=$($successHeartbeatReady.ToString().ToLowerInvariant())" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
           $attestationUrlReady = Test-PublicHttpsUrl -Value $env:MONITOR_ATTESTATION_URL
           $monitorIdReady = Test-MonitorId -Value $env:LENSOS_STALE_MONITOR_ID
           $monitoringReady = $false
@@ -451,6 +457,8 @@ jobs:
         shell: pwsh
         env:
           CAPTURE_DAILY_CAPTURE_DVOL: "true"
+          CAPTURE_DAILY_ORIGIN: "github_actions_0810_utc"
+          CAPTURE_DAILY_PROVIDER_RUN_ID: "github_actions:${{ github.run_id }}:${{ github.run_attempt }}"
           CAPTURE_DAILY_FAILURE_WEBHOOK_URL: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
           CAPTURE_DAILY_EVIDENCE_SYNC: ${{ steps.config.outputs.evidence_sync_ready }}
           CAPTURE_DAILY_EVIDENCE_REPO_ROOT: ${{ github.workspace }}/evidence-repo
@@ -500,6 +508,11 @@ jobs:
               'Configured evidence-sync, heartbeat, failure-webhook, and stale-monitor surfaces'
             )
             note = 'No publication or hosting step was attempted. Capture and public-bundle verification continue while the owner-controlled deployment prerequisites remain unavailable.'
+            second_capture = [ordered]@{
+              decision = $env:LENSOS_SECOND_CAPTURE_DECISION
+              route = $env:LENSOS_SECOND_CAPTURE_ROUTE
+              activation = 'pending_owner_credentials_and_three_day_acceptance'
+            }
           }
           $contract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $diagnosticsDir 'publish-contract.json') -Encoding utf8
           Write-Host "Public deployment is suspended by repository decision. No publication or hosting step was attempted; see $env:DEPLOY_DECISION_ISSUE."
@@ -874,8 +887,8 @@ jobs:
           path: product/dist/site
           if-no-files-found: error
 
-      - name: Upload captured evidence backup
-        if: always()
+      - name: Upload captured evidence recovery backup (private repository only)
+        if: always() && github.event.repository.private == true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: captured-evidence
@@ -896,48 +909,13 @@ jobs:
           BUNDLE_BOUNDARY_OUTCOME: ${{ steps.bundle_boundary.outcome }}
           PUBLISH_OUTCOME: ${{ steps.publish_site.outcome }}
           RECEIPT_OUTCOME: ${{ steps.publication_receipt.outcome }}
+          EVIDENCE_SYNC_ENABLED: ${{ env.LENSOS_EVIDENCE_REPO_SYNC_ENABLED }}
           EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready }}
           DEPLOY_DECISION: ${{ env.LENSOS_DEPLOY_DECISION }}
           DEPLOY_DECISION_ISSUE: ${{ env.LENSOS_DEPLOY_DECISION_ISSUE }}
           SITE_ORIGIN_READY: ${{ steps.config.outputs.site_origin_ready }}
           MONITORING_READY: ${{ steps.config.outputs.monitoring_ready }}
-          FAILURE_WEBHOOK_SECRET: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
-          SUCCESS_HEARTBEAT_SECRET: ${{ secrets.CAPTURE_SUCCESS_HEARTBEAT_URL }}
+          FAILURE_WEBHOOK_READY: ${{ steps.config.outputs.failure_webhook_ready }}
+          SUCCESS_HEARTBEAT_READY: ${{ steps.config.outputs.success_heartbeat_ready }}
         run: |
-          if ($env:CAPTURE_OUTCOME -ne 'success') {
-            throw 'Capture failed. See artifacts/logs/capture-daily-btc.latest.summary.json and artifacts/reports/workflow-failure.json.'
-          }
-          if ($env:BUNDLE_BUILD_OUTCOME -ne 'success') {
-            throw 'Public bundle build failed closed.'
-          }
-          if ($env:BUNDLE_BOUNDARY_OUTCOME -ne 'success') {
-            throw 'Public bundle privacy boundary failed closed.'
-          }
-          if ([string]::IsNullOrWhiteSpace($env:FAILURE_WEBHOOK_SECRET)) {
-            throw 'Failure webhook configuration is missing. Capture was allowed to run so evidence is preserved, but the workflow must still fail closed until CAPTURE_FAILURE_WEBHOOK_URL is configured.'
-          }
-          if ([string]::IsNullOrWhiteSpace($env:SUCCESS_HEARTBEAT_SECRET)) {
-            throw 'Success heartbeat configuration is missing. Capture was allowed to run so evidence is preserved, but the workflow must still fail closed until CAPTURE_SUCCESS_HEARTBEAT_URL is configured. Independent hourly stale_after polling still requires external monitor/domain ownership and is not configured here.'
-          }
-          if ($env:DEPLOY_DECISION -eq 'SUSPENDED') {
-            Write-Host "Public deployment remains suspended; capture and public-bundle verification passed, and no publication, hosting, or receipt step ran. Clear $env:DEPLOY_DECISION_ISSUE only after the owner prerequisites are verified."
-            exit 0
-          }
-          if ($env:LENSOS_EVIDENCE_REPO_SYNC_ENABLED -ne 'true') {
-            throw 'Durable evidence sync is disabled. Capture was allowed to run, but publication is NO-GO until LENSOS_EVIDENCE_REPO_SYNC_ENABLED=true and the private evidence repository are configured.'
-          }
-          if ($env:EVIDENCE_SYNC_READY -ne 'true') {
-            throw 'Durable evidence sync configuration is incomplete. Capture still ran and its workflow artifact was retained, but publication is NO-GO until the private repository slug and push token are configured.'
-          }
-          if ($env:SITE_ORIGIN_READY -ne 'true') {
-            throw 'Canonical public site origin is missing or invalid. Capture still ran, but publication is NO-GO until LENSOS_PUBLIC_SITE_ORIGIN names the final absolute HTTPS origin.'
-          }
-          if ($env:PUBLISH_OUTCOME -ne 'success') {
-            throw 'Publish failed closed. See artifacts/reports/publish-contract.json for the expected command and prerequisites.'
-          }
-          if ($env:RECEIPT_OUTCOME -ne 'success') {
-            throw 'Durable publication receipt was not pushed to the private evidence repository.'
-          }
-          if ($env:MONITORING_READY -ne 'true') {
-            throw 'Monitoring is not independently verified. Publication remains NO-GO until public HTTPS failure/heartbeat endpoints and a fresh external lensos_stale_monitor_attestation.v1 proof bind this origin, health contract, endpoint fingerprints, and a recent failure-delivery drill.'
-          }
+          python tools/check-publish-workflow-gate.py

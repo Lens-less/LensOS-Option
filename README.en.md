@@ -332,7 +332,7 @@ Deribit's 08:00 UTC settlement):
 $repo = "C:\path\to\Option"
 $evidenceRepo = "C:\path\to\LensOS-Option-Evidence"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$repo\tools\capture-daily.ps1`" -RepoRoot `"$repo`" -EnableEvidenceRepoSync -EvidenceRepoRoot `"$evidenceRepo`" -EvidenceRepoRemote origin -HistoryDays 1200 -DvolHistoryDays 1095" `
+  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$repo\tools\capture-daily.ps1`" -RepoRoot `"$repo`" -CaptureOrigin local_windows_scheduler -EnableEvidenceRepoSync -EvidenceRepoRoot `"$evidenceRepo`" -EvidenceRepoRemote origin -HistoryDays 1200 -DvolHistoryDays 1095" `
   -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 17:00
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
@@ -355,6 +355,19 @@ usability reason codes, and consecutive usable/unusable day counts. Two
 consecutive capture days that fail to advance validation trigger the failure
 webhook even when the process itself exits successfully. If snapshot capture
 fails, the independent underlying and DVOL history refreshes still run.
+
+The selected second capture point is the GitHub Actions `08:10 UTC` lane,
+identified as `github_actions_0810_utc`. After the private evidence repository
+and both notification endpoints are configured, verify three consecutive days
+from immutable receipts. Exit codes `0/10/11` mean accepted/collecting/invalid:
+
+```powershell
+python tools/check-dual-capture-acceptance.py `
+  --evidence-root $evidenceRepo `
+  --required-origin local_windows_scheduler `
+  --required-origin github_actions_0810_utc `
+  --days 3
+```
 
 Capture logs go to `artifacts/logs/capture-daily.log`. Running more than once in
 the same day is safe: the validator deduplicates by "date x contract" and
