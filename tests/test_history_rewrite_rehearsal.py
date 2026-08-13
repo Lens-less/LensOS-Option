@@ -1,12 +1,36 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "rehearse-public-history-rewrite.py"
+
+
+def _load_tool():
+    spec = importlib.util.spec_from_file_location("history_rewrite_tool", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _git(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
 
 
 def _plan(*extra: str) -> subprocess.CompletedProcess[str]:
@@ -145,6 +169,91 @@ def test_validation_clone_explicitly_checks_out_rewritten_main() -> None:
     assert 'if validation_head != rewritten_head:' in script
 
 
+def test_registered_identity_scan_detects_utf16_binary_blob() -> None:
+    tool = _load_tool()
+    private_name = "LENS\\" + "28" + "340"
+    payload = b"\x00binary\x00" + private_name.swapcase().encode("utf-16-le") + b"\x00"
+
+    hits = tool._registered_token_hits(payload)
+
+    assert any(hit["token"].casefold() == private_name.casefold() for hit in hits)
+    assert any(hit["encoding"] == "utf-16-le" for hit in hits)
+
+
+def test_reachable_blob_scan_detects_registered_identity_in_binary_git_blob() -> None:
+    tool = _load_tool()
+    with TemporaryDirectory() as temporary_root:
+        repository = Path(temporary_root) / "repository"
+        repository.mkdir()
+        _git("init", "-b", "main", cwd=repository)
+        private_name = "LENS\\" + "28" + "340"
+        (repository / "opaque.bin").write_bytes(
+            b"\x00binary\xff" + private_name.swapcase().encode("utf-16-be") + b"\x00"
+        )
+        _git("add", ".", cwd=repository)
+        _git(
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "Add binary fixture",
+            cwd=repository,
+        )
+
+        hits = tool._scan_reachable_blob_tokens(repository)
+
+    assert any(hit["token"].casefold() == private_name.casefold() for hit in hits)
+    assert any(hit["encoding"] == "utf-16-be" for hit in hits)
+
+
+def test_final_sync_uses_live_origin_instead_of_cached_tracking_ref() -> None:
+    tool = _load_tool()
+    with TemporaryDirectory() as temporary_root:
+        root = Path(temporary_root)
+        remote = root / "remote.git"
+        source = root / "source"
+        peer = root / "peer"
+        source.mkdir()
+        _git("init", "--bare", str(remote), cwd=root)
+        _git("init", "-b", "main", cwd=source)
+        (source / "README.md").write_text("initial\n", encoding="utf-8")
+        _git("add", ".", cwd=source)
+        _git(
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "Initial",
+            cwd=source,
+        )
+        _git("remote", "add", "origin", str(remote), cwd=source)
+        _git("push", "-u", "origin", "main", cwd=source)
+        assert tool._source_sync_state(source)["head_equals_origin_main"] is True
+
+        _git("clone", "--branch", "main", str(remote), str(peer), cwd=root)
+        (peer / "README.md").write_text("advanced remotely\n", encoding="utf-8")
+        _git("add", ".", cwd=peer)
+        _git(
+            "-c",
+            "user.name=Peer",
+            "-c",
+            "user.email=peer@example.invalid",
+            "commit",
+            "-m",
+            "Advance remote",
+            cwd=peer,
+        )
+        _git("push", "origin", "main", cwd=peer)
+
+        assert tool._source_sync_state(source)["head_equals_origin_main"] is True
+        with pytest.raises(tool.RewriteError, match="live origin/main"):
+            tool._assert_final_source_sync(source)
+
+
 def test_current_tracked_tree_contains_no_registered_private_identity_tokens() -> None:
     private_user_id = "28" + "340"
     private_author_id = private_user_id + "0448"
@@ -157,7 +266,7 @@ def test_current_tracked_tree_contains_no_registered_private_identity_tokens() -
 
     for token in tokens:
         completed = subprocess.run(
-            ["git", "grep", "-I", "-F", "-n", "-e", token, "--", "."],
+            ["git", "grep", "-a", "-F", "-n", "-e", token, "--", "."],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -184,7 +293,8 @@ def test_public_cutover_docs_keep_history_and_raw_artifacts_fail_closed() -> Non
     assert "read-only pull-request" in security
     assert "passed_with_remote_blockers" in history
     assert "refs/heads/main" in history
-    assert "new public repository" in history
+    assert "new private repository" in history
+    assert "new empty private repository" in cutover
     assert "Inventory all existing" in cutover
     assert "public-history-rewrite.md" in docs_map
     assert "public-release-cutover.md" in docs_map

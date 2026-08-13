@@ -331,6 +331,6 @@ static/evidence 同步提交、reason code append-only、不触碰
 | # | 决策 | 状态 | 落地 |
 | --- | --- | --- | --- |
 | D-1 | 历史重写后的公开作者身份 | **待 owner** | 需确认公开姓名与已验证 noreply 邮箱；final rewrite 在此之前 fail-closed |
-| D-2 | 第二采集点路线 | **已选** | Actions `08:10 UTC`，origin=`github_actions_0810_utc`；需凭证与三日双车道验收后才 accepted |
+| D-2 | 第二采集点路线 | **已选** | Actions `08:10 UTC`，origin=`github_actions_0810_utc`；需凭证，并从已推送、干净的 private evidence Git ref 验证指定本地/云车道连续至少三日后才 accepted |
 | D-3 | 切 public 时点 | **已选** | 数据止损 + OS-1..5 后切，不等 10 月信号验证；公共站点可继续 `SUSPENDED` |
 | D-4 | issue/PR 模板语言 | **已选** | 中文为主，模板顶部提供英文提交指引 |

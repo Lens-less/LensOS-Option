@@ -31,7 +31,9 @@ acceptance.
 After credentials are configured, close DS-6 only when the private evidence
 repository contains three consecutive UTC dates with usable immutable receipts
 from both `local_windows_scheduler` and `github_actions_0810_utc`, with every
-referenced snapshot hash verified:
+referenced snapshot hash verified. The path must be the clean top-level of the
+private evidence Git repository, on a named branch already pushed byte-for-byte
+to `origin`; a loose or merely local directory cannot pass:
 
 ```powershell
 python tools/check-dual-capture-acceptance.py `

@@ -183,17 +183,22 @@ paper-ledger state, and sizing/order-cap fields.
 
 ## Scheduled workflow admission
 
-The scheduled workflow always attempts capture first, even when deployment
-settings are missing. Capture-lane admission then independently requires a
-successful capture and public-bundle boundary check, durable private evidence
-sync, a valid failure webhook, and a valid success heartbeat. `DEPLOY_SUSPENDED`
-cannot bypass those requirements. Site DNS and the independent stale monitor
-are required only after publication is intentionally activated.
+The scheduled workflow attempts capture before installing Node or any
+publication-only package. Capture-lane admission independently requires a
+successful capture, durable private evidence sync, a valid failure webhook,
+and a valid success heartbeat. A later public-bundle build or boundary failure
+can fail publication verification, but it does not relabel a durable capture as
+failed. `DEPLOY_SUSPENDED` cannot bypass either gate. Site DNS and the
+independent stale monitor are required only after publication is intentionally
+activated.
 
 The selected second lane is `github_actions_0810_utc` at `08:10 UTC`; the
-Windows scheduler uses `local_windows_scheduler`. Three consecutive usable days
-from both lanes must be verified from immutable receipts with
-`tools/check-dual-capture-acceptance.py`. The durable decision and owner handoff
+Windows scheduler uses `local_windows_scheduler`. At least three consecutive
+usable days from exactly those two lanes must be verified from BTC immutable
+receipts with `tools/check-dual-capture-acceptance.py`. The supplied evidence
+root must be a clean Git top-level whose named branch equals the freshly read
+`origin` branch; every receipt and snapshot blob is verified in that remote
+commit. The durable decision and owner handoff
 are recorded in
 [`public-deployment-suspension.md`](public-deployment-suspension.md):
 

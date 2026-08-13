@@ -28,7 +28,8 @@ checked item.
 - [ ] Re-run `git ls-remote --refs origin 'refs/pull/*/head'` and retain the
   response/evidence.
 - [ ] If Support cannot confirm removal, select the safe fallback: create a new
-  public repository and keep this original repository permanently private.
+  private repository, validate it, and keep this original repository
+  permanently private.
 
 ## 3. Rehearse and validate the rewritten repository
 
@@ -60,9 +61,9 @@ checked item.
 - [ ] For the existing-repository route, owner reviews the exact force-push
   targets and pushes only the rewritten `main`; internal branches, archive tags,
   and old clones must never be merged back.
-- [ ] For the recommended fallback route, owner creates a new empty public repo
+- [ ] For the recommended fallback route, owner creates a new empty private repository
   and pushes only `refs/heads/main` from `public-rewritten.bundle`.
-- [ ] Fresh-mirror clone the public destination and repeat every history scan,
+- [ ] Fresh-mirror clone the still-private destination and repeat every history scan,
   ref allowlist check, and full test matrix.
 - [ ] Enable/reapply branch protection after the rewritten `main` exists.
 
@@ -74,7 +75,8 @@ checked item.
   guidance render correctly.
 - [ ] Create and sign `v0.1.0` only from the rewritten public history; verify
   changelog, package version, tag, and release notes agree.
-- [ ] Change visibility only after all preceding checks are recorded green.
+- [ ] Change the validated destination from private to public only after all
+  preceding checks are recorded green.
 
 ## 7. Keep site deployment independent
 

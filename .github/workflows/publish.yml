@@ -47,24 +47,9 @@ jobs:
             product/pyproject.toml
             product/constraints.txt
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22.22.2"
-          cache: npm
-          cache-dependency-path: product/web/package-lock.json
-
-      - name: Install shared Python constraints
-        run: python -m pip install --upgrade -c constraints.txt pip setuptools
-
-      - name: Install package
-        run: python -m pip install --no-build-isolation -c constraints.txt -e .
-
-      - name: Install public bundle dependencies
-        working-directory: product/web
-        run: npm ci
-
       - name: Preflight explicit workflow config
         id: config
+        continue-on-error: true
         shell: pwsh
         env:
           FAILURE_WEBHOOK_SECRET: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
@@ -441,7 +426,9 @@ jobs:
           }
 
       - name: Checkout durable evidence repo
+        id: evidence_checkout
         if: steps.config.outputs.evidence_sync_ready == 'true'
+        continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ${{ env.LENSOS_EVIDENCE_REPO_SLUG }}
@@ -460,7 +447,7 @@ jobs:
           CAPTURE_DAILY_ORIGIN: "github_actions_0810_utc"
           CAPTURE_DAILY_PROVIDER_RUN_ID: "github_actions:${{ github.run_id }}:${{ github.run_attempt }}"
           CAPTURE_DAILY_FAILURE_WEBHOOK_URL: ${{ secrets.CAPTURE_FAILURE_WEBHOOK_URL }}
-          CAPTURE_DAILY_EVIDENCE_SYNC: ${{ steps.config.outputs.evidence_sync_ready }}
+          CAPTURE_DAILY_EVIDENCE_SYNC: ${{ steps.config.outputs.evidence_sync_ready == 'true' && steps.evidence_checkout.outcome == 'success' }}
           CAPTURE_DAILY_EVIDENCE_REPO_ROOT: ${{ github.workspace }}/evidence-repo
           CAPTURE_SUCCESS_HEARTBEAT_URL: ${{ secrets.CAPTURE_SUCCESS_HEARTBEAT_URL }}
         run: |
@@ -472,6 +459,27 @@ jobs:
             )
           }
           ./tools/capture-daily.ps1 -RepoRoot $PWD @syncArgs
+
+      - name: Set up Node for publication verification
+        if: steps.capture.outcome == 'success'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.2"
+          cache: npm
+          cache-dependency-path: product/web/package-lock.json
+
+      - name: Install shared Python constraints
+        if: steps.capture.outcome == 'success'
+        run: python -m pip install --upgrade -c constraints.txt pip setuptools
+
+      - name: Install package
+        if: steps.capture.outcome == 'success'
+        run: python -m pip install --no-build-isolation -c constraints.txt -e .
+
+      - name: Install public bundle dependencies
+        if: steps.capture.outcome == 'success'
+        working-directory: product/web
+        run: npm ci
 
       - name: Build public bundle
         id: bundle_build
@@ -526,7 +534,7 @@ jobs:
           CAPTURE_OUTCOME: ${{ steps.capture.outcome }}
           BUNDLE_BUILD_OUTCOME: ${{ steps.bundle_build.outcome }}
           BUNDLE_BOUNDARY_OUTCOME: ${{ steps.bundle_boundary.outcome }}
-          EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready }}
+          EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready == 'true' && steps.evidence_checkout.outcome == 'success' }}
           SITE_ORIGIN_READY: ${{ steps.config.outputs.site_origin_ready }}
           SITE_ORIGIN: ${{ steps.config.outputs.site_origin }}
         run: |
@@ -672,7 +680,7 @@ jobs:
 
       - name: Record durable publication receipt
         id: publication_receipt
-        if: always() && env.LENSOS_DEPLOY_DECISION != 'SUSPENDED' && steps.config.outputs.evidence_sync_ready == 'true'
+        if: always() && env.LENSOS_DEPLOY_DECISION != 'SUSPENDED' && steps.config.outputs.evidence_sync_ready == 'true' && steps.evidence_checkout.outcome == 'success'
         continue-on-error: true
         shell: pwsh
         env:
@@ -680,7 +688,7 @@ jobs:
           BUNDLE_BUILD_OUTCOME: ${{ steps.bundle_build.outcome }}
           BUNDLE_BOUNDARY_OUTCOME: ${{ steps.bundle_boundary.outcome }}
           PUBLISH_OUTCOME: ${{ steps.publish_site.outcome }}
-          EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready }}
+          EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready == 'true' && steps.evidence_checkout.outcome == 'success' }}
           SITE_ORIGIN_READY: ${{ steps.config.outputs.site_origin_ready }}
           MONITORING_READY: ${{ steps.config.outputs.monitoring_ready }}
           MONITOR_PROOF_JSON: ${{ steps.config.outputs.monitor_proof_json }}
@@ -875,6 +883,7 @@ jobs:
         if: >-
           steps.capture.outcome == 'success' &&
           steps.config.outputs.evidence_sync_ready == 'true' &&
+          steps.evidence_checkout.outcome == 'success' &&
           steps.config.outputs.site_origin_ready == 'true' &&
           steps.config.outputs.monitoring_ready == 'true' &&
           steps.bundle_build.outcome == 'success' &&
@@ -910,7 +919,7 @@ jobs:
           PUBLISH_OUTCOME: ${{ steps.publish_site.outcome }}
           RECEIPT_OUTCOME: ${{ steps.publication_receipt.outcome }}
           EVIDENCE_SYNC_ENABLED: ${{ env.LENSOS_EVIDENCE_REPO_SYNC_ENABLED }}
-          EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready }}
+          EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready == 'true' && steps.evidence_checkout.outcome == 'success' }}
           DEPLOY_DECISION: ${{ env.LENSOS_DEPLOY_DECISION }}
           DEPLOY_DECISION_ISSUE: ${{ env.LENSOS_DEPLOY_DECISION_ISSUE }}
           SITE_ORIGIN_READY: ${{ steps.config.outputs.site_origin_ready }}

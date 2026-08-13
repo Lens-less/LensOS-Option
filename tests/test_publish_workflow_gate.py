@@ -59,6 +59,17 @@ def test_suspended_deploy_still_requires_durable_evidence_sync() -> None:
     assert report["reason_code"] == "EVIDENCE_SYNC_DISABLED"
 
 
+def test_public_bundle_failure_does_not_erase_successful_capture_admission() -> None:
+    completed = _run(BUNDLE_BUILD_OUTCOME="failure", BUNDLE_BOUNDARY_OUTCOME="skipped")
+
+    assert completed.returncode == 10
+    report = json.loads(completed.stdout)
+    assert report["reason_code"] == "PUBLIC_BUNDLE_BUILD_FAILED"
+    assert report["capture_lane_accepted"] is True
+    assert report["publication_verification_accepted"] is False
+    assert report["publication_attempted"] is False
+
+
 def test_nonblank_but_invalid_failure_webhook_is_rejected_by_readiness() -> None:
     completed = _run(FAILURE_WEBHOOK_READY="false")
 

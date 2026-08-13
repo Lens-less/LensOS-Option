@@ -278,7 +278,9 @@ webhook；快照阶段失败时，互不依赖的标的历史和 DVOL 历史仍�
 
 第二采集点已选定为 GitHub Actions 的 `08:10 UTC` 车道，标识为
 `github_actions_0810_utc`。配置私有 evidence repo 与两个通知端点后，用不可变 receipt
-验收连续三天的双车道数据；退出码 `0/10/11` 分别表示通过/继续收集/证据无效：
+验收连续三天的双车道数据。`$evidenceRepo` 必须指向干净、已把当前命名分支完整推送到
+`origin` 的私有 Git 仓顶层；工具会核对远端 commit 中的 receipt 与 snapshot blob。
+退出码 `0/10/11` 分别表示通过/继续收集/证据无效：
 
 ```powershell
 python tools/check-dual-capture-acceptance.py `

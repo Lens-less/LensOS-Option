@@ -52,11 +52,6 @@ def _inputs() -> tuple[dict[str, str | bool], str | None]:
 def evaluate(values: dict[str, str | bool]) -> tuple[dict[str, Any], int]:
     capture_checks = (
         (values["CAPTURE_OUTCOME"] == "success", "CAPTURE_FAILED"),
-        (values["BUNDLE_BUILD_OUTCOME"] == "success", "PUBLIC_BUNDLE_BUILD_FAILED"),
-        (
-            values["BUNDLE_BOUNDARY_OUTCOME"] == "success",
-            "PUBLIC_BUNDLE_BOUNDARY_FAILED",
-        ),
         (values["EVIDENCE_SYNC_ENABLED"] is True, "EVIDENCE_SYNC_DISABLED"),
         (values["EVIDENCE_SYNC_READY"] is True, "EVIDENCE_SYNC_NOT_READY"),
         (values["FAILURE_WEBHOOK_READY"] is True, "FAILURE_WEBHOOK_NOT_READY"),
@@ -74,6 +69,26 @@ def evaluate(values: dict[str, str | bool]) -> tuple[dict[str, Any], int]:
                 10,
             )
 
+    publication_verification_checks = (
+        (values["BUNDLE_BUILD_OUTCOME"] == "success", "PUBLIC_BUNDLE_BUILD_FAILED"),
+        (
+            values["BUNDLE_BOUNDARY_OUTCOME"] == "success",
+            "PUBLIC_BUNDLE_BOUNDARY_FAILED",
+        ),
+    )
+    for passed, reason_code in publication_verification_checks:
+        if not passed:
+            return (
+                _report(
+                    "blocked",
+                    reason_code,
+                    capture_lane_accepted=True,
+                    publication_verification_accepted=False,
+                    publication_attempted=False,
+                ),
+                10,
+            )
+
     decision = str(values["DEPLOY_DECISION"])
     if decision == "SUSPENDED":
         return (
@@ -81,6 +96,7 @@ def evaluate(values: dict[str, str | bool]) -> tuple[dict[str, Any], int]:
                 "capture_lane_accepted_deploy_suspended",
                 "DEPLOY_SUSPENDED",
                 capture_lane_accepted=True,
+                publication_verification_accepted=True,
                 publication_attempted=False,
                 decision_issue=str(values["DEPLOY_DECISION_ISSUE"]),
             ),
@@ -92,6 +108,7 @@ def evaluate(values: dict[str, str | bool]) -> tuple[dict[str, Any], int]:
                 "invalid_configuration",
                 "INVALID_DEPLOY_DECISION",
                 capture_lane_accepted=True,
+                publication_verification_accepted=True,
                 publication_attempted=False,
             ),
             11,
@@ -110,6 +127,7 @@ def evaluate(values: dict[str, str | bool]) -> tuple[dict[str, Any], int]:
                     "blocked",
                     reason_code,
                     capture_lane_accepted=True,
+                    publication_verification_accepted=True,
                     publication_attempted=True,
                 ),
                 10,
@@ -119,6 +137,7 @@ def evaluate(values: dict[str, str | bool]) -> tuple[dict[str, Any], int]:
             "publication_accepted",
             None,
             capture_lane_accepted=True,
+            publication_verification_accepted=True,
             publication_attempted=True,
         ),
         0,

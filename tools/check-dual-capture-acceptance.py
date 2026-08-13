@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from datetime import UTC, date, datetime, timedelta
@@ -16,6 +17,17 @@ from typing import Any
 ORIGIN_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 PROVIDER_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+REQUIRED_ORIGINS = ("local_windows_scheduler", "github_actions_0810_utc")
+EXPECTED_CURRENCY = "BTC"
+EXPECTED_PROTOCOL = "immutable_pre_sync_receipt.v1"
+
+
+class EvidenceBoundaryError(RuntimeError):
+    """The selected evidence tree is not proven durable in its remote Git ref."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -54,6 +66,83 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _git(
+    root: Path, *arguments: str, accepted: tuple[int, ...] = (0,)
+) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        ["git", "-C", str(root), *arguments],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if completed.returncode not in accepted:
+        raise EvidenceBoundaryError("evidence_git_command_failed")
+    return completed
+
+
+def _verify_durable_git_boundary(root: Path) -> dict[str, str]:
+    try:
+        top_level = Path(
+            _git(root, "rev-parse", "--show-toplevel").stdout.strip()
+        ).resolve()
+    except (EvidenceBoundaryError, OSError):
+        raise EvidenceBoundaryError("evidence_root_not_git") from None
+    if top_level != root:
+        raise EvidenceBoundaryError("evidence_root_not_git_top_level")
+    if _git(root, "status", "--porcelain", "--untracked-files=all").stdout.strip():
+        raise EvidenceBoundaryError("evidence_worktree_not_clean")
+    branch_result = _git(
+        root, "symbolic-ref", "--quiet", "--short", "HEAD", accepted=(0, 1)
+    )
+    branch = branch_result.stdout.strip()
+    if branch_result.returncode != 0 or not branch:
+        raise EvidenceBoundaryError("evidence_head_not_named_branch")
+    head = _git(root, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
+    remote_result = _git(
+        root,
+        "ls-remote",
+        "--refs",
+        "origin",
+        f"refs/heads/{branch}",
+        accepted=(0,),
+    )
+    remote_lines = [line for line in remote_result.stdout.splitlines() if line.strip()]
+    if len(remote_lines) != 1:
+        raise EvidenceBoundaryError("evidence_remote_ref_missing")
+    fields = remote_lines[0].split("\t", 1)
+    if len(fields) != 2 or fields[1] != f"refs/heads/{branch}":
+        raise EvidenceBoundaryError("evidence_remote_ref_invalid")
+    remote_head = fields[0]
+    if remote_head != head:
+        raise EvidenceBoundaryError("evidence_remote_out_of_sync")
+    return {
+        "branch": branch,
+        "head": head,
+        "remote": "origin",
+        "remote_ref": f"refs/heads/{branch}",
+        "remote_head": remote_head,
+    }
+
+
+def _remote_blob_matches(root: Path, revision: str, path: Path) -> bool:
+    relative_path = path.relative_to(root).as_posix()
+    remote_blob = _git(
+        root,
+        "rev-parse",
+        "--verify",
+        f"{revision}:{relative_path}",
+        accepted=(0, 128),
+    )
+    if remote_blob.returncode != 0:
+        return False
+    local_blob = _git(
+        root, "hash-object", f"--path={relative_path}", "--", str(path)
+    ).stdout.strip()
+    return remote_blob.stdout.strip() == local_blob
+
+
 def _safe_evidence_path(root: Path, raw: object) -> Path | None:
     if not isinstance(raw, str) or not raw or "\\" in raw:
         return None
@@ -82,14 +171,20 @@ def _capture_date(receipt: dict[str, Any]) -> date | None:
 
 
 def _validate_receipt(
-    root: Path, path: Path, payload: object
+    root: Path, path: Path, payload: object, *, revision: str
 ) -> tuple[dict[str, Any] | None, str | None]:
+    if not _remote_blob_matches(root, revision, path):
+        return None, "receipt_not_in_remote_ref"
     if not isinstance(payload, dict):
         return None, "receipt_not_object"
     if payload.get("schema_version") != "capture_daily_receipt.v1":
         return None, "unexpected_schema"
+    if payload.get("protocol") != EXPECTED_PROTOCOL:
+        return None, "unexpected_protocol"
     if payload.get("status") != "capture_complete":
         return None, "capture_not_complete"
+    if payload.get("currency") != EXPECTED_CURRENCY:
+        return None, "unexpected_currency"
     run_id = payload.get("run_id")
     if not isinstance(run_id, str) or not run_id.strip():
         return None, "missing_run_id"
@@ -112,6 +207,8 @@ def _validate_receipt(
         return None, "snapshot_path_invalid"
     if not snapshot_path.is_file():
         return None, "snapshot_file_missing"
+    if not _remote_blob_matches(root, revision, snapshot_path):
+        return None, "snapshot_not_in_remote_ref"
     expected_hash = snapshot.get("sha256")
     if not isinstance(expected_hash, str) or SHA256_PATTERN.fullmatch(expected_hash) is None:
         return None, "snapshot_hash_invalid"
@@ -124,7 +221,7 @@ def _validate_receipt(
 
 
 def _read_receipts(
-    root: Path,
+    root: Path, *, revision: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     receipts: list[dict[str, Any]] = []
     invalid: list[dict[str, str]] = []
@@ -136,7 +233,7 @@ def _read_receipts(
                 {"path": path.relative_to(root).as_posix(), "reason": "invalid_json"}
             )
             continue
-        validated, reason = _validate_receipt(root, path, payload)
+        validated, reason = _validate_receipt(root, path, payload, revision=revision)
         if reason is not None:
             invalid.append({"path": path.relative_to(root).as_posix(), "reason": reason})
         elif validated is not None:
@@ -243,14 +340,26 @@ def main(argv: list[str] | None = None) -> int:
     if not root.is_dir():
         parser.error(f"evidence root is not a directory: {root}")
     origins = list(dict.fromkeys(args.required_origin))
-    if len(origins) < 2:
-        parser.error("at least two distinct --required-origin values are required")
+    if len(origins) != len(REQUIRED_ORIGINS) or set(origins) != set(REQUIRED_ORIGINS):
+        parser.error(
+            "required origins must exactly match: " + ", ".join(REQUIRED_ORIGINS)
+        )
+    origins = list(REQUIRED_ORIGINS)
     if any(ORIGIN_PATTERN.fullmatch(origin) is None for origin in origins):
         parser.error("required origins must be valid 1-64 character lane identifiers")
-    if not 1 <= args.days <= 31:
-        parser.error("--days must be between 1 and 31")
+    if not 3 <= args.days <= 31:
+        parser.error("--days must be between 3 and 31")
 
-    receipts, invalid_evidence = _read_receipts(root)
+    try:
+        durability = _verify_durable_git_boundary(root)
+    except EvidenceBoundaryError as exc:
+        durability = None
+        receipts = []
+        invalid_evidence = [{"path": "<evidence-root>", "reason": exc.reason}]
+    else:
+        receipts, invalid_evidence = _read_receipts(
+            root, revision=durability["remote_head"]
+        )
     report = build_report(
         receipts,
         origins=origins,
@@ -259,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         invalid_evidence=invalid_evidence,
     )
     report["evidence_root"] = str(root)
+    report["durable_git_boundary"] = durability
     json.dump(report, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     if report["accepted"]:

@@ -24,8 +24,9 @@ Therefore:
 - local rehearsal success is necessary but does not make the existing GitHub
   repository safe to publish;
 - request GitHub Support removal of affected PR refs and cached views; and
-- if Support cannot confirm removal, create a new public repository from the
-  rewritten `main` bundle and keep the old repository permanently private.
+- if Support cannot confirm removal, create a new private repository from the
+  rewritten `main` bundle, validate it, then make only that new repository
+  public while keeping the old repository permanently private.
 
 ## Install the pinned tool outside project dependencies
 
@@ -85,6 +86,9 @@ Outputs include:
 `passed_with_remote_blockers` is expected while GitHub PR refs remain. It is
 not public-cutover approval.
 
+The content audit scans every reachable blob as bytes, including UTF-8,
+UTF-16LE, and UTF-16BE token encodings. Binary-classified blobs are not skipped.
+
 History rewrite removes existing commit/tag signatures. This is expected; do
 not claim that old Verified badges survive. Sign the post-rewrite `v0.1.0`
 release afresh if release policy requires it.
@@ -92,7 +96,8 @@ release afresh if release policy requires it.
 ## Final identity and destination gate
 
 `--identity-mode final` rejects placeholder identities, a dirty source,
-and `HEAD != origin/main`. With the default
+and `HEAD !=` the freshly queried live `origin/main` (a cached tracking ref is
+not sufficient). With the default
 `--cutover-target existing-repository`, it also rejects any remaining GitHub
 PR refs. The owner must first confirm the exact public display name and a
 GitHub-verified noreply address. Never infer or hard-code that address from an
@@ -100,9 +105,10 @@ account ID.
 
 If GitHub Support cannot remove the pull-request refs and cached views, use
 `--cutover-target new-repository` for the final local rewrite. This permits a
-clean `main` bundle for a newly created public repository while the old
-repository remains permanently private. It does not make the old repository
-safe to publish.
+clean `main` bundle for a newly created private repository. Validate that
+destination completely before changing its visibility; the old repository
+remains permanently private. This does not make the old repository safe to
+publish.
 
 The final rewrite is still produced locally with no push. Any force-push,
 repository creation, deletion of old refs/runs, or visibility change is a

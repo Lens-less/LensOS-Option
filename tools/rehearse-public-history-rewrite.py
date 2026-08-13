@@ -154,6 +154,30 @@ def _source_sync_state(source: Path) -> dict[str, Any]:
     }
 
 
+def _live_origin_main(source: Path) -> str:
+    output = _run(
+        ["git", "-C", source, "ls-remote", "--refs", "origin", PUBLIC_REF]
+    ).stdout
+    lines = [line for line in output.splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise RewriteError("live origin/main is missing or ambiguous")
+    fields = lines[0].split("\t", 1)
+    if len(fields) != 2 or fields[1] != PUBLIC_REF:
+        raise RewriteError("live origin/main response is invalid")
+    return fields[0]
+
+
+def _assert_final_source_sync(source: Path) -> str:
+    head = _git(source, "rev-parse", "HEAD")
+    live_origin_main = _live_origin_main(source)
+    if head != live_origin_main:
+        raise RewriteError(
+            "final rewrite requires HEAD to equal live origin/main, not only the "
+            "cached remote-tracking ref"
+        )
+    return live_origin_main
+
+
 def build_plan(
     source: Path,
     *,
@@ -304,6 +328,91 @@ def _copy_filter_report(mirror: Path, output_root: Path, name: str) -> str | Non
     return str(destination)
 
 
+def _registered_token_hits(payload: bytes) -> list[dict[str, str]]:
+    lowered_payload = payload.lower()
+    hits: list[dict[str, str]] = []
+    for token in BANNED_TEXT_TOKENS:
+        for encoding in ("utf-8", "utf-16-le", "utf-16-be"):
+            marker = token.casefold().encode(encoding)
+            if marker in lowered_payload:
+                hits.append({"token": token, "encoding": encoding})
+    return hits
+
+
+def _reachable_blob_ids(mirror: Path) -> list[str]:
+    object_ids = sorted(
+        {
+            line.split(" ", 1)[0]
+            for line in _git(mirror, "rev-list", "--objects", "--all").splitlines()
+            if line.strip()
+        }
+    )
+    if not object_ids:
+        return []
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(mirror),
+            "cat-file",
+            "--batch-check=%(objectname) %(objecttype)",
+        ],
+        input="\n".join(object_ids) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RewriteError(
+            "git cat-file batch-check failed: "
+            + (completed.stderr.strip() or "unknown error")
+        )
+    blobs = []
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == "blob":
+            blobs.append(fields[0])
+    return blobs
+
+
+def _scan_reachable_blob_tokens(mirror: Path) -> list[dict[str, str]]:
+    blob_ids = _reachable_blob_ids(mirror)
+    if not blob_ids:
+        return []
+    completed = subprocess.run(
+        ["git", "-C", str(mirror), "cat-file", "--batch"],
+        input=("\n".join(blob_ids) + "\n").encode(),
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RewriteError(f"git cat-file blob scan failed: {detail or 'unknown error'}")
+    output = completed.stdout
+    cursor = 0
+    findings: list[dict[str, str]] = []
+    for expected_oid in blob_ids:
+        header_end = output.find(b"\n", cursor)
+        if header_end < 0:
+            raise RewriteError("git cat-file blob scan returned a truncated header")
+        header = output[cursor:header_end].decode("ascii", errors="strict").split()
+        if len(header) != 3 or header[0] != expected_oid or header[1] != "blob":
+            raise RewriteError("git cat-file blob scan returned an unexpected object")
+        size = int(header[2])
+        payload_start = header_end + 1
+        payload_end = payload_start + size
+        if payload_end >= len(output) or output[payload_end : payload_end + 1] != b"\n":
+            raise RewriteError("git cat-file blob scan returned truncated content")
+        for hit in _registered_token_hits(output[payload_start:payload_end]):
+            findings.append({"object_id": expected_oid, **hit})
+        cursor = payload_end + 1
+    if cursor != len(output):
+        raise RewriteError("git cat-file blob scan returned trailing data")
+    return findings
+
+
 def _verify_rewritten_history(
     mirror: Path, *, plan: dict[str, Any], name: str, email: str
 ) -> dict[str, Any]:
@@ -341,29 +450,12 @@ def _verify_rewritten_history(
         raise RewriteError("rewritten HEAD did not preserve static asset paths and OIDs")
 
     revisions = _git(mirror, "rev-list", "--all").splitlines()
-    for revision in revisions:
-        for token in BANNED_TEXT_TOKENS:
-            completed = _run(
-                [
-                    "git",
-                    "-C",
-                    mirror,
-                    "grep",
-                    "-I",
-                    "-i",
-                    "-F",
-                    "-n",
-                    "-e",
-                    token,
-                    revision,
-                    "--",
-                ],
-                accepted=(0, 1),
-            )
-            if completed.returncode == 0:
-                raise RewriteError(
-                    f"private token remains in rewritten content: {completed.stdout.splitlines()[0]}"
-                )
+    content_hits = _scan_reachable_blob_tokens(mirror)
+    if content_hits:
+        raise RewriteError(
+            "private token remains in rewritten blob: "
+            + json.dumps(content_hits[0], sort_keys=True)
+        )
 
     messages = _git(mirror, "log", "--all", "--format=%B")
     tag_messages = _git(mirror, "for-each-ref", "refs/tags", "--format=%(contents)")
@@ -415,13 +507,14 @@ def rehearse(
     source = _repository_root(source)
     if _git(source, "status", "--porcelain", "--untracked-files=all"):
         raise RewriteError("source repository must be clean before a rewrite rehearsal")
-    if plan["identity_mode"] == "final" and not plan["source_sync"][
-        "head_equals_origin_main"
-    ]:
-        raise RewriteError("final rewrite requires HEAD to equal origin/main")
     output_root = _assert_output_target(source, output_root)
     _verify_filter_repo(filter_repo)
     remote_pr_refs = _remote_pr_refs(source)
+    live_origin_main = None
+    if plan["identity_mode"] == "final":
+        live_origin_main = _assert_final_source_sync(source)
+        plan["source_sync"]["live_origin_main"] = live_origin_main
+        plan["source_sync"]["head_equals_live_origin_main"] = True
     if (
         plan["identity_mode"] == "final"
         and plan["cutover_target"] == "existing-repository"
@@ -575,6 +668,7 @@ def rehearse(
         "existing_repository_public_cutover_ready": not existing_repository_blockers,
         "existing_repository_blockers": existing_repository_blockers,
         "source_head": plan["source_head"],
+        "live_origin_main": live_origin_main,
         "rewritten_head": rewritten_head,
         "identity_mode": plan["identity_mode"],
         "public_author": plan["public_author"],
@@ -599,6 +693,8 @@ def rehearse(
         "checks": checks,
         "filter_stdout": filter_result.stdout.strip(),
     }
+    if plan["identity_mode"] == "final":
+        report["live_origin_main_after_rehearsal"] = _assert_final_source_sync(source)
     report_path = output_root / "rehearsal-report.json"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"

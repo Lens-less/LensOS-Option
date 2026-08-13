@@ -576,6 +576,7 @@ class CaptureDailyContractTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "capture_daily_usability_state.v1",
+                        "currency": "BTC",
                         "capture_origin": "github_actions_0810_utc",
                         "capture_time": "2026-08-01T08:10:00Z",
                         "usable_for_validation": False,
@@ -583,6 +584,7 @@ class CaptureDailyContractTests(unittest.TestCase):
                         "consecutive_unusable_days": 1,
                         "consecutive_usable_days": 0,
                         "run_id": "capture-daily-btc-github_actions_0810_utc-prior",
+                        "provider_run_id": "github_actions:prior:1",
                     }
                 ),
                 encoding="utf-8",
@@ -667,6 +669,247 @@ class CaptureDailyContractTests(unittest.TestCase):
             )
             self.assertEqual("capture_daily_usability_state.v1", state["schema_version"])
             self.assertEqual(2, state["consecutive_unusable_days"])
+
+    def test_corrupt_portable_state_fails_closed_into_two_day_alert(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell is not available")
+
+        received: queue.Queue[bytes] = queue.Queue()
+
+        class WebhookHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                received.put(self.rfile.read(length))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, format: str, *args: object) -> None:
+                del format, args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), WebhookHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            with TemporaryDirectory() as temporary_root_value:
+                temporary_root = Path(temporary_root_value)
+                product_root = temporary_root / "product"
+                bin_root = temporary_root / "bin"
+                state_dir = product_root / "artifacts" / "logs"
+                state_dir.mkdir(parents=True)
+                bin_root.mkdir()
+                self._write_capture_stub_tooling(bin_root)
+                state_path = (
+                    state_dir
+                    / "capture-daily-btc-github_actions_0810_utc.latest.state.json"
+                )
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "capture_daily_usability_state.v1",
+                            "currency": "BTC",
+                            "capture_origin": "github_actions_0810_utc",
+                            "capture_time": "not-a-timestamp",
+                            "usable_for_validation": False,
+                            "usability_reason_codes": ["MARKET_DATA_QUALITY_FAIL"],
+                            "consecutive_unusable_days": 1,
+                            "consecutive_usable_days": 0,
+                            "run_id": "capture-daily-btc-github_actions_0810_utc-prior",
+                            "provider_run_id": "github_actions:prior:1",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                completed = subprocess.run(
+                    [
+                        powershell,
+                        "-NoProfile",
+                        "-File",
+                        str(self.SCRIPT),
+                        "-RepoRoot",
+                        str(product_root),
+                        "-CaptureOrigin",
+                        "github_actions_0810_utc",
+                        "-FailureWebhookUrl",
+                        f"http://127.0.0.1:{server.server_port}/capture-unusable",
+                    ],
+                    cwd=self.REPO_ROOT,
+                    env={
+                        **os.environ,
+                        "PATH": str(bin_root)
+                        + os.pathsep
+                        + os.environ.get("PATH", ""),
+                        "CAPTURE_DAILY_CAPTURE_DVOL": "true",
+                        "CAPTURE_STUB_CAPTURED_AT": "2026-08-02T08:10:00Z",
+                        "CAPTURE_STUB_USABLE": "0",
+                    },
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                    timeout=30,
+                )
+
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                payload = json.loads(received.get(timeout=5).decode("utf-8-sig"))
+                self.assertEqual(2, payload["consecutive_unusable_days"])
+                capture_log = (state_dir / "capture-daily.log").read_text(
+                    encoding="utf-8-sig"
+                )
+                self.assertIn("previous portability state unavailable", capture_log)
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
+
+    def test_corrupt_legacy_summary_fails_closed_into_two_day_alert(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell is not available")
+
+        received: queue.Queue[bytes] = queue.Queue()
+
+        class WebhookHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                received.put(self.rfile.read(length))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, format: str, *args: object) -> None:
+                del format, args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), WebhookHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            with TemporaryDirectory() as temporary_root_value:
+                temporary_root = Path(temporary_root_value)
+                product_root = temporary_root / "product"
+                bin_root = temporary_root / "bin"
+                state_dir = product_root / "artifacts" / "logs"
+                state_dir.mkdir(parents=True)
+                bin_root.mkdir()
+                self._write_capture_stub_tooling(bin_root)
+                (state_dir / "capture-daily-btc.latest.summary.json").write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "capture_daily_summary.v1",
+                            "currency": "BTC",
+                            "capture_origin": "github_actions_0810_utc",
+                            "capture_time": "not-a-timestamp",
+                            "usable_for_validation": False,
+                            "usability_reason_codes": ["MARKET_DATA_QUALITY_FAIL"],
+                            "consecutive_unusable_days": 1,
+                            "consecutive_usable_days": 0,
+                            "run_id": "capture-daily-btc-github_actions_0810_utc-prior",
+                            "provider_run_id": "github_actions:prior:1",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                completed = subprocess.run(
+                    [
+                        powershell,
+                        "-NoProfile",
+                        "-File",
+                        str(self.SCRIPT),
+                        "-RepoRoot",
+                        str(product_root),
+                        "-CaptureOrigin",
+                        "github_actions_0810_utc",
+                        "-FailureWebhookUrl",
+                        f"http://127.0.0.1:{server.server_port}/capture-unusable",
+                    ],
+                    cwd=self.REPO_ROOT,
+                    env={
+                        **os.environ,
+                        "PATH": str(bin_root)
+                        + os.pathsep
+                        + os.environ.get("PATH", ""),
+                        "CAPTURE_DAILY_CAPTURE_DVOL": "true",
+                        "CAPTURE_STUB_CAPTURED_AT": "2026-08-02T08:10:00Z",
+                        "CAPTURE_STUB_USABLE": "0",
+                    },
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                    timeout=30,
+                )
+
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                payload = json.loads(received.get(timeout=5).decode("utf-8-sig"))
+                self.assertEqual(2, payload["consecutive_unusable_days"])
+                capture_log = (state_dir / "capture-daily.log").read_text(
+                    encoding="utf-8-sig"
+                )
+                self.assertIn("previous usability summary unavailable", capture_log)
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
+
+    def test_portable_state_validator_rejects_missing_provenance_field(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell is not available")
+        source = self.SCRIPT.read_text(encoding="utf-8")
+        function_start = source.index("function Assert-PortableUsabilityState")
+        function_end = source.index("\nfunction New-CaptureSummary", function_start)
+        validator = source[function_start:function_end]
+        payload = json.dumps(
+            {
+                "schema_version": "capture_daily_usability_state.v1",
+                "run_id": "capture-daily-btc-github_actions_0810_utc-prior",
+                "currency": "BTC",
+                "capture_origin": "github_actions_0810_utc",
+                "capture_time": "2026-08-01T08:10:00Z",
+                "usable_for_validation": False,
+                "usability_reason_codes": ["MARKET_DATA_QUALITY_FAIL"],
+                "consecutive_unusable_days": 1,
+                "consecutive_usable_days": 0,
+            }
+        )
+        probe = f"""
+        $state = @'
+        {payload}
+        '@ | ConvertFrom-Json
+        try {{
+          Assert-PortableUsabilityState -State $state -ExpectedOrigin 'github_actions_0810_utc' -ExpectedCurrency 'BTC'
+          throw 'validator accepted missing provenance'
+        }} catch {{
+          if ($_.Exception.Message -notmatch 'missing provider_run_id') {{ throw }}
+          $_.Exception.Message
+        }}
+        """
+
+        completed = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                validator + "\n" + textwrap.dedent(probe),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=30,
+        )
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertIn("missing provider_run_id", completed.stdout)
 
     def test_successful_capture_retries_heartbeat_and_fails_closed_on_delivery_error(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
@@ -2012,7 +2255,7 @@ class PublishWorkflowContractTests(unittest.TestCase):
             "path: product",
             "path: evidence-repo",
             "working-directory: product",
-            "CAPTURE_DAILY_EVIDENCE_SYNC: ${{ steps.config.outputs.evidence_sync_ready }}",
+            "CAPTURE_DAILY_EVIDENCE_SYNC: ${{ steps.config.outputs.evidence_sync_ready == 'true' && steps.evidence_checkout.outcome == 'success' }}",
             "CAPTURE_DAILY_EVIDENCE_REPO_ROOT: ${{ github.workspace }}/evidence-repo",
             "product/artifacts/snapshots",
             "EnableEvidenceRepoSync",
@@ -2108,6 +2351,7 @@ class PublishWorkflowContractTests(unittest.TestCase):
         self.assertLess(preflight_start, capture_start)
         self.assertLess(capture_start, final_gate_start)
         self.assertIn("id: config", preflight)
+        self.assertIn("continue-on-error: true", preflight)
         self.assertIn("evidence_sync_ready", preflight)
         self.assertIn("site_origin_ready", preflight)
         self.assertIn("monitoring_ready", preflight)
@@ -2116,8 +2360,12 @@ class PublishWorkflowContractTests(unittest.TestCase):
             "if: steps.config.outputs.evidence_sync_ready == 'true'",
             workflow[checkout_start:capture_start],
         )
+        self.assertIn("id: evidence_checkout", workflow[checkout_start:capture_start])
         self.assertIn(
-            "EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready }}",
+            "continue-on-error: true", workflow[checkout_start:capture_start]
+        )
+        self.assertIn(
+            "EVIDENCE_SYNC_READY: ${{ steps.config.outputs.evidence_sync_ready == 'true' && steps.evidence_checkout.outcome == 'success' }}",
             workflow[final_gate_start:],
         )
         final_gate = workflow[final_gate_start:]
@@ -2144,6 +2392,21 @@ class PublishWorkflowContractTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("retention-days: 90", workflow)
+
+    def test_irreplaceable_capture_precedes_publication_toolchain_setup(self) -> None:
+        workflow = self.WORKFLOW.read_text(encoding="utf-8")
+
+        capture = workflow.index("- name: Capture evidence")
+        node_setup = workflow.index("uses: actions/setup-node@")
+        python_install = workflow.index("- name: Install package")
+        npm_install = workflow.index("- name: Install public bundle dependencies")
+        bundle_build = workflow.index("- name: Build public bundle")
+        self.assertLess(capture, node_setup)
+        self.assertLess(capture, python_install)
+        self.assertLess(capture, npm_install)
+        self.assertLess(node_setup, bundle_build)
+        self.assertIn("id: evidence_checkout", workflow)
+        self.assertIn("continue-on-error: true", workflow)
 
     def test_publish_workflow_documents_status_history_and_stale_after_contracts(self) -> None:
         workflow = self.WORKFLOW.read_text(encoding="utf-8")

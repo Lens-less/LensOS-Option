@@ -359,7 +359,10 @@ fails, the independent underlying and DVOL history refreshes still run.
 The selected second capture point is the GitHub Actions `08:10 UTC` lane,
 identified as `github_actions_0810_utc`. After the private evidence repository
 and both notification endpoints are configured, verify three consecutive days
-from immutable receipts. Exit codes `0/10/11` mean accepted/collecting/invalid:
+from immutable receipts. `$evidenceRepo` must be the clean top-level of the
+private Git repository, with its current named branch fully pushed to `origin`;
+the verifier checks every receipt and snapshot blob in that live remote commit.
+Exit codes `0/10/11` mean accepted/collecting/invalid:
 
 ```powershell
 python tools/check-dual-capture-acceptance.py `

@@ -1355,6 +1355,88 @@ function Set-CaptureUsability {
         -PreviousCountField 'consecutive_usable_days'
 }
 
+function Assert-PortableUsabilityState {
+    param(
+        [Parameter(Mandatory)] $State,
+        [Parameter(Mandatory)] [string] $ExpectedOrigin,
+        [Parameter(Mandatory)] [string] $ExpectedCurrency,
+        [string] $ExpectedSchemaVersion = 'capture_daily_usability_state.v1',
+        [string] $RecordLabel = 'portable usability state'
+    )
+
+    $requiredFields = @(
+        'schema_version',
+        'run_id',
+        'provider_run_id',
+        'currency',
+        'capture_origin',
+        'capture_time',
+        'usable_for_validation',
+        'usability_reason_codes',
+        'consecutive_unusable_days',
+        'consecutive_usable_days'
+    )
+    foreach ($field in $requiredFields) {
+        if ($null -eq $State.PSObject.Properties[$field]) {
+            throw "$RecordLabel is missing $field"
+        }
+    }
+    if (
+        [string] $State.schema_version -ne $ExpectedSchemaVersion -or
+        [string] $State.capture_origin -ne $ExpectedOrigin -or
+        [string] $State.currency -ne $ExpectedCurrency
+    ) {
+        throw "$RecordLabel schema, origin, or currency mismatch"
+    }
+    if (
+        [string] $State.run_id -notmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$' -or
+        [string] $State.provider_run_id -notmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    ) {
+        throw "$RecordLabel run provenance is invalid"
+    }
+    [DateTimeOffset] $parsedCaptureTime = [DateTimeOffset]::MinValue
+    if (
+        [string] $State.capture_time -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$' -or
+        -not [DateTimeOffset]::TryParse([string] $State.capture_time, [ref] $parsedCaptureTime)
+    ) {
+        throw "$RecordLabel capture_time is invalid"
+    }
+    if ($State.usable_for_validation -isnot [bool]) {
+        throw "$RecordLabel usable_for_validation must be boolean"
+    }
+    foreach ($field in @('consecutive_unusable_days', 'consecutive_usable_days')) {
+        $value = $State.$field
+        if (
+            ($value -isnot [int] -and $value -isnot [long]) -or
+            [long] $value -lt 0
+        ) {
+            throw "$RecordLabel $field must be a non-negative integer"
+        }
+    }
+    $reasonCodes = @($State.usability_reason_codes)
+    foreach ($reasonCode in $reasonCodes) {
+        if ($reasonCode -isnot [string] -or [string]::IsNullOrWhiteSpace($reasonCode)) {
+            throw "$RecordLabel reason codes must be non-empty strings"
+        }
+    }
+    if ([bool] $State.usable_for_validation) {
+        if (
+            [long] $State.consecutive_usable_days -lt 1 -or
+            [long] $State.consecutive_unusable_days -ne 0 -or
+            $reasonCodes.Count -ne 0
+        ) {
+            throw "$RecordLabel usable counters or reasons are inconsistent"
+        }
+    }
+    elseif (
+        [long] $State.consecutive_unusable_days -lt 1 -or
+        [long] $State.consecutive_usable_days -ne 0 -or
+        $reasonCodes.Count -eq 0
+    ) {
+        throw "$RecordLabel unusable counters or reasons are inconsistent"
+    }
+}
+
 function New-CaptureSummary {
     Update-UnsyncedLocalCaptureCount
     $receiptSyncStatus = if ($evidenceRepoSyncEnabled) { 'pending' } else { 'not_requested' }
@@ -1642,12 +1724,10 @@ try {
         try {
             $candidateState = Get-Content -Raw -LiteralPath $usabilityStatePath -ErrorAction Stop |
                 ConvertFrom-Json -ErrorAction Stop
-            if (
-                [string] $candidateState.schema_version -ne 'capture_daily_usability_state.v1' -or
-                [string] $candidateState.capture_origin -ne $resolvedCaptureOrigin
-            ) {
-                throw 'portable usability state schema or origin mismatch'
-            }
+            Assert-PortableUsabilityState `
+                -State $candidateState `
+                -ExpectedOrigin $resolvedCaptureOrigin `
+                -ExpectedCurrency $Currency
             $previousSummary = $candidateState
         }
         catch {
@@ -1659,9 +1739,13 @@ try {
         try {
             $candidateSummary = Get-Content -Raw -LiteralPath $latestSummaryPath -ErrorAction Stop |
                 ConvertFrom-Json -ErrorAction Stop
-            if ([string] $candidateSummary.capture_origin -eq $resolvedCaptureOrigin) {
-                $previousSummary = $candidateSummary
-            }
+            Assert-PortableUsabilityState `
+                -State $candidateSummary `
+                -ExpectedOrigin $resolvedCaptureOrigin `
+                -ExpectedCurrency $Currency `
+                -ExpectedSchemaVersion 'capture_daily_summary.v1' `
+                -RecordLabel 'legacy usability summary'
+            $previousSummary = $candidateSummary
         }
         catch {
             $previousSummaryUnavailable = $true
