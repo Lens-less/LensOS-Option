@@ -119,6 +119,13 @@ def test_plan_can_select_a_new_repository_cutover() -> None:
     assert json.loads(completed.stdout)["cutover_target"] == "new-repository"
 
 
+def test_rewrite_mirror_disables_local_clone_optimization() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert '["git", "clone", "--mirror", "--no-local"' in script
+    assert '["git", "clone", "--mirror", "--no-hardlinks", archive_mirror' not in script
+
+
 def test_current_tracked_tree_contains_no_registered_private_identity_tokens() -> None:
     private_user_id = "28" + "340"
     private_author_id = private_user_id + "0448"

@@ -481,9 +481,10 @@ def rehearse(
         json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     _run(["git", "-C", archive_mirror, "bundle", "create", original_bundle, "--all"])
-    _run(
-        ["git", "clone", "--mirror", "--no-hardlinks", archive_mirror, rewritten_mirror]
-    )
+    # git-filter-repo's fresh-clone safety check requires a real transport copy.
+    # ``--no-hardlinks`` alone still uses Git's local-clone optimization and is
+    # therefore rejected before any rewrite can start.
+    _run(["git", "clone", "--mirror", "--no-local", archive_mirror, rewritten_mirror])
     _git(rewritten_mirror, "update-ref", "-d", "refs/tags/archive/options-coordination-v2-20260713")
     replacements, mailmap = _write_filter_inputs(output_root, name=name, email=email)
 
