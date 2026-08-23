@@ -23,6 +23,26 @@ owner's public-author identity decision.
 - A credential-free newcomer path using only repository fixtures, plus public
   contribution and conduct guidance.
 
+### Fixed
+
+- Alert cooldown timestamps without a timezone are now rejected fail-closed
+  instead of being interpreted in the process-local timezone (an 8-hour shift
+  on UTC+8 that could suppress or repeat alerts).
+- Independent-window counts in realized-vol and path-risk now derive from the
+  actual strided sample, so an exact-multiple observation count can no longer
+  cross the `MIN_INDEPENDENT_WINDOWS` gate with one window too few.
+- Percent formatting no longer guesses units from magnitude: a 1.5%
+  strike-distance field rendered as 150% before; unit semantics are now carried
+  by the formatter choice per field contract.
+- The candidate workbench narrows `edge_components` per entry and all three app
+  roots gained an error boundary, so malformed payloads degrade one panel
+  instead of white-screening the app.
+- Descending sorts keep unavailable rows at the bottom; the payoff curve
+  refuses three-leg ids and non-positive spread widths instead of drawing a
+  wrong chart; signal/series artifact loading distinguishes HTTP failures from
+  an unreachable engine; the internal default artifact URLs are gone from the
+  public bundle.
+
 ### Changed
 
 - Daily capture refreshes independent underlying and DVOL histories even when

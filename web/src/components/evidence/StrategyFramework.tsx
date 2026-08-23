@@ -16,6 +16,7 @@ import {
 import {
   formatDecimal,
   formatExpiry,
+  formatFractionAsPercent,
   formatPercent,
   formatUsd,
 } from "./marketModel";
@@ -143,7 +144,7 @@ function formatConditionObserved(id: string, value: unknown): string {
   }
   if (id === "leg_liquidity" && typeof value === "object") {
     const ratios = value as { buy?: number | null; sell?: number | null };
-    return `卖 ${formatPercent(ratios.sell ?? null, 1)} · 买 ${formatPercent(
+    return `卖 ${formatFractionAsPercent(ratios.sell ?? null, 1)} · 买 ${formatFractionAsPercent(
       ratios.buy ?? null,
       1,
     )}`;
@@ -382,7 +383,11 @@ export function StrategyFrameworkSection({
                 <div>
                   <dt>覆盖口径</dt>
                   <dd>
-                    {formatPercent(coverage?.coverage_ratio ?? null, 2)} 研究样本
+                    {formatFractionAsPercent(
+                      coverage?.coverage_ratio ?? null,
+                      2,
+                    )}{" "}
+                    研究样本
                   </dd>
                 </div>
                 <div>
@@ -542,7 +547,7 @@ export function StrategyFrameworkSection({
                 <dd>{formatDecimal(finiteNumber(candidate?.model_delta), 3)}</dd>
                 <small>
                   RN P(ITM){" "}
-                  {formatPercent(
+                  {formatFractionAsPercent(
                     finiteNumber(candidate?.risk_neutral_p_itm),
                     1,
                   )}
@@ -616,7 +621,7 @@ export function StrategyFrameworkSection({
                   <div>
                     <span>单一价差损失预算</span>
                     <strong>
-                      {formatPercent(
+                      {formatFractionAsPercent(
                         finiteNumber(riskBudget?.max_single_spread_loss_nav),
                         2,
                       )}{" "}
@@ -626,7 +631,7 @@ export function StrategyFrameworkSection({
                   <div>
                     <span>新增保证金上限</span>
                     <strong>
-                      {formatPercent(
+                      {formatFractionAsPercent(
                         finiteNumber(riskBudget?.max_new_margin_nav),
                         1,
                       )}{" "}
@@ -636,7 +641,7 @@ export function StrategyFrameworkSection({
                   <div>
                     <span>市场深度占比</span>
                     <strong>
-                      {formatPercent(
+                      {formatFractionAsPercent(
                         finiteNumber(riskBudget?.max_depth_fraction),
                         1,
                       )}

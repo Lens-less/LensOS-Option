@@ -7,6 +7,7 @@ import {
   formatDecimal,
   formatDvol,
   formatExpiry,
+  formatFractionAsPercent,
   formatPercent,
   formatTimestamp,
   formatUsd,
@@ -45,7 +46,15 @@ export interface CandidateRow {
   noArbPass: boolean | null;
 }
 
-export { formatDecimal, formatDvol, formatExpiry, formatPercent, formatTimestamp, formatUsd };
+export {
+  formatDecimal,
+  formatDvol,
+  formatExpiry,
+  formatFractionAsPercent,
+  formatPercent,
+  formatTimestamp,
+  formatUsd,
+};
 
 export function marketFacts(report: ResearchReport): MarketFacts {
   const expiries = report.vol_surface_status?.expiries ?? [];
@@ -61,11 +70,14 @@ export function marketFacts(report: ResearchReport): MarketFacts {
     null;
   const qualitySummary = report.data_status?.quality_gate?.summary;
   const candidateSummary = report.candidate_research?.summary;
+  // The vol-index endpoint carries a fraction (`volatility_unit: "fraction"`;
+  // the backend normalizes Deribit's percent points), while the VRP fallback
+  // is already percent points. Normalize here so `dvol` has one unit and the
+  // display layer never rescales by magnitude.
+  const volIndexVolatility = finiteNumber(volIndex?.volatility);
+  const dvolFromVrp = finiteNumber(report.vrp_status?.current_dvol_percent);
   return {
-    dvol: finiteNumber(
-      report.data_status?.public_response_contract?.endpoints?.vol_index
-        ?.volatility ?? report.vrp_status?.current_dvol_percent,
-    ),
+    dvol: volIndexVolatility !== null ? volIndexVolatility * 100 : dvolFromVrp,
     coverageRatio: finiteNumber(collectionScope?.coverage_ratio),
     eligibleExpiries: finiteNumber(
       report.vol_surface_status?.summary?.eligible_expiries ??

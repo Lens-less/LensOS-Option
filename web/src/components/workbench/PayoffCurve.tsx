@@ -39,6 +39,17 @@ export function PayoffCurve({
 
   const isSpread = structureKind === "spread" && longStrikeUsdc !== null;
   const spreadWidth = isSpread ? (longStrikeUsdc as number) - shortStrikeUsdc : null;
+  // A non-positive width means the strike pair cannot be a call-style
+  // short-below-long spread (e.g. a put credit spread reached this legacy
+  // fallback). Drawing it would show the max loss as profit, so withhold the
+  // curve instead.
+  if (spreadWidth !== null && spreadWidth <= 0) {
+    return (
+      <div className="payoff-unavailable" role="status">
+        该价差的行权价顺序无法用两腿上行结构表达，暂不绘制到期盈亏图。
+      </div>
+    );
+  }
   const breakevenUsdc = shortStrikeUsdc + creditUsdc;
   const maxLossUsdc =
     isSpread && spreadWidth !== null ? spreadWidth - creditUsdc : null;

@@ -5,6 +5,7 @@ import { APP_INDEX_HREF, RAW_REPORT_HREF, VIEW_LINKS } from "../../publicPaths";
 import { SectionNavigation } from "../evidence/Shell";
 import type { Freshness } from "../evidence/reportModel";
 import { formatCutoffTime } from "../evidence/reportModel";
+import { formatDurationHours } from "../../report/display";
 import { PublishedEditionBar } from "./PublishedEditionBar";
 import { ReplayBanner } from "./ReplayBanner";
 import { SiteFooter } from "./SiteFooter";
@@ -54,6 +55,12 @@ export function AppShell({
   const cutoff = report.publish_edition?.captured_at ?? report.generated_at ?? null;
   const publishedStale =
     report.runtime_context?.mode === "published" && freshness?.phase === "expired";
+  // The boundary comes from the report's own stale_after contract; hardcoding
+  // "48 hours" here would contradict PublicShell when the publisher picks a
+  // different window.
+  const staleBoundaryLabel = publishedStale
+    ? formatDurationHours(freshness?.maxAgeSec ?? Number.NaN)
+    : null;
   const refreshLabel =
     report.runtime_context?.mode === "published" ? "重新载入本版" : "刷新";
 
@@ -143,7 +150,8 @@ export function AppShell({
             <p className="section-kicker">publication stalled / fail closed</p>
             <h1>发布已停摆</h1>
             <p>
-              当前公开版已超过 48 小时时效边界。VRP、DVOL、曲面、候选与历史验证数值均已收起，
+              当前公开版已超过 {staleBoundaryLabel}
+              时效边界。VRP、DVOL、曲面、候选与历史验证数值均已收起，
               直到下一版通过数据质量门禁并完成发布。
             </p>
             {onRefresh ? (

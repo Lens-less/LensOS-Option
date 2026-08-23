@@ -215,7 +215,14 @@ def build_path_risk_report_from_underlying_history(
         for row in observations
     ]
     horizon = candidate_spec.horizon_days
-    independent_windows = len(observations) // horizon if horizon else 0
+    # A non-overlapping window spans `horizon` daily steps (horizon + 1
+    # quotes), so stride the valid start range the same way realized_vol does.
+    # This can trail `len(observations) // horizon` by one when the observation
+    # count is an exact multiple of the horizon; both modules must report the
+    # strided count so the same history yields the same sample size.
+    independent_windows = (
+        len(range(0, len(observations) - horizon, horizon)) if horizon > 0 else 0
+    )
     if independent_windows < MIN_INDEPENDENT_UNDERLYING_WINDOWS:
         return _blocked_underlying_path_report(
             candidate=candidate_spec,

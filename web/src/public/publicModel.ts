@@ -12,6 +12,8 @@ import {
 } from "../components/evidence/marketModel";
 import {
   formatCutoffTime,
+  formatDurationHours,
+  formatFractionAsPercent,
   friendlySource,
   marketDisplayState as publicMarketDisplayState,
 } from "../report/display";
@@ -44,6 +46,7 @@ export {
   formatDecimal,
   formatDvol,
   formatExpiry,
+  formatFractionAsPercent,
   formatPercent,
   formatTimestamp,
   formatUsd,
@@ -60,17 +63,9 @@ export function formatPublishedAge(ageSec: number | null | undefined): string {
   return `距今 ${formatDurationHours(ageSec)}`;
 }
 
-export function formatDurationHours(durationSec: number): string {
-  if (!Number.isFinite(durationSec) || durationSec < 0) {
-    return "时长不可验证";
-  }
-  if (durationSec < 3_600) {
-    return "不足 1 小时";
-  }
-  const hours = durationSec / 3_600;
-  const maximumFractionDigits = hours < 24 && !Number.isInteger(hours) ? 1 : 0;
-  return `${hours.toLocaleString("zh-CN", { maximumFractionDigits })} 小时`;
-}
+// Moved to report/display.ts so internal shells can share the exact
+// duration wording; re-exported here for the public view imports.
+export { formatDurationHours } from "../report/display";
 
 export function marketFacts(report: ResearchReport): PublicMarketFacts {
   return sharedMarketFacts(report);

@@ -5,6 +5,10 @@ import {
   matchesExpectedArtifactCapture,
 } from "../artifactCapture";
 import { money, ratio, signed } from "../candidate/format";
+import {
+  artifactFailureDetail,
+  readArtifactJson,
+} from "../../transport/artifactJson";
 import { DivergingBars } from "../viz/DivergingBars";
 import type { DivergingRow } from "../viz/DivergingBars";
 import { VIZ } from "../viz/tokens";
@@ -435,7 +439,7 @@ function MeasuredSections({
 
 /** Loads one capture-bound artifact and never renders an older URL while refetching. */
 export function useSignalArtifact(
-  url: string | null = "/research/signal",
+  url: string | null,
   expectedCapturedAt?: string,
 ): SignalArtifact | null {
   const [loaded, setLoaded] = useState<LoadedSignalArtifact | null>(null);
@@ -448,7 +452,7 @@ export function useSignalArtifact(
       cache: "no-store",
       headers: { Accept: "application/json" },
     })
-      .then((response) => (response.ok ? response.json() : null))
+      .then(readArtifactJson)
       .then((payload) => {
         if (!cancelled) {
           const artifact =
@@ -464,10 +468,10 @@ export function useSignalArtifact(
           setLoaded({ artifact, expectedCapturedAt, url });
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!cancelled) {
           setLoaded({
-            artifact: { status: "not_configured", detail: "本地引擎不可达。" },
+            artifact: { status: "not_configured", detail: artifactFailureDetail(error) },
             expectedCapturedAt,
             url,
           });

@@ -126,6 +126,50 @@ function parseDominatedExplanation(value: unknown): DominatedExplanation | null 
   };
 }
 
+function parseEdgeComponent(value: unknown): EdgeComponent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const status = value.status;
+  if (
+    typeof status !== "string" ||
+    (status !== "OK" &&
+      status !== "CAUTION" &&
+      status !== "UNKNOWN" &&
+      status !== "BLOCKED")
+  ) {
+    return null;
+  }
+  return {
+    status,
+    value: asNumberOrNull(value.value),
+    unit: asString(value.unit) ?? null,
+    reason_code: asString(value.reason_code) ?? null,
+    direction: asString(value.direction) ?? null,
+  };
+}
+
+// Each entry is narrowed independently: an unrenderable component must be
+// dropped, never cast through to `value.toLocaleString` in the panel.
+function parseEdgeComponents(
+  value: unknown,
+): Record<string, EdgeComponent> | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const parsed: Record<string, EdgeComponent> = {};
+  for (const [name, raw] of Object.entries(value)) {
+    const component = parseEdgeComponent(raw);
+    if (component !== null) {
+      parsed[name] = component;
+    }
+  }
+  return parsed;
+}
+
 function parseRankedCandidate(value: unknown): RankedCandidate | null {
   if (!isRecord(value)) {
     return null;
@@ -135,12 +179,7 @@ function parseRankedCandidate(value: unknown): RankedCandidate | null {
   if (!candidateId || !action) {
     return null;
   }
-  const edgeComponents =
-    value.edge_components === null
-      ? null
-      : isRecord(value.edge_components)
-        ? (value.edge_components as Record<string, EdgeComponent>)
-        : undefined;
+  const edgeComponents = parseEdgeComponents(value.edge_components);
   return {
     candidate_id: candidateId,
     action,
@@ -237,10 +276,16 @@ function extractStrike(instrumentName: string): number | null {
 
 export function parseCandidateLegs(candidateId: string): CandidateLegs {
   if (candidateId.includes("->")) {
-    const [shortRaw, longRaw] = candidateId.split("->");
+    const parts = candidateId.split("->");
+    // Only a two-leg short/long pair can be drawn from an id; a 3+ leg id
+    // (put spread, iron condor) must fall through to "unavailable" rather
+    // than silently drop its extra legs.
+    if (parts.length !== 2) {
+      return { shortStrikeUsdc: null, longStrikeUsdc: null, kind: "unknown" };
+    }
     return {
-      shortStrikeUsdc: extractStrike(stripTag(shortRaw ?? "")),
-      longStrikeUsdc: extractStrike(stripTag(longRaw ?? "")),
+      shortStrikeUsdc: extractStrike(stripTag(parts[0] ?? "")),
+      longStrikeUsdc: extractStrike(stripTag(parts[1] ?? "")),
       kind: "spread",
     };
   }
@@ -348,6 +393,18 @@ export function sortCandidateRows(
   sort: SortState,
 ): CandidateViewRow[] {
   const sorted = [...rows].sort((left, right) => {
+    // "Unavailable" (null) rows sink to the bottom regardless of direction;
+    // sorting a descending column must not lead with a wall of nulls while
+    // the real extreme value hides beneath them.
+    if (left[sort.key] === null && right[sort.key] === null) {
+      return 0;
+    }
+    if (left[sort.key] === null) {
+      return 1;
+    }
+    if (right[sort.key] === null) {
+      return -1;
+    }
     const comparison = compareNullable(left[sort.key], right[sort.key]);
     return sort.direction === "asc" ? comparison : -comparison;
   });

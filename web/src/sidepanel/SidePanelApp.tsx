@@ -2,6 +2,7 @@ import React from "react";
 import { selectContractComparison, selectSidePanelViewModel } from "../report";
 import type { LoadedReport } from "../transport";
 import type { DeribitContext } from "../extension/messages";
+import { ResearchErrorBoundary } from "../components/shell/ResearchErrorBoundary";
 import {
   chromeSidePanelRuntime,
   type SidePanelRuntime,
@@ -205,24 +206,26 @@ export function SidePanelApp({
         <span className="panel-chip panel-chip-readonly">NO_TRADE</span>
       </div>
 
-      <SidePanelStatusSections
-        context={panel.context}
-        effectiveInstrument={effectiveInstrument}
-        error={panel.error}
-        evidenceUrl={evidenceUrl}
-        isStaleOffline={isStaleOffline}
-        manualInstrument={manualInstrument}
-        model={model}
-        onManualInstrumentChange={setManualInstrument}
-        onRetry={() => void load(true)}
-        onSyncContext={() => void syncContext()}
-        status={panel.status}
-      />
-      <SidePanelComparisonSection
-        comparison={comparison}
-        onSelectInstrument={setManualInstrument}
-      />
-      <SidePanelResearchSections model={model} />
+      <ResearchErrorBoundary label="研究数据区">
+        <SidePanelStatusSections
+          context={panel.context}
+          effectiveInstrument={effectiveInstrument}
+          error={panel.error}
+          evidenceUrl={evidenceUrl}
+          isStaleOffline={isStaleOffline}
+          manualInstrument={manualInstrument}
+          model={model}
+          onManualInstrumentChange={setManualInstrument}
+          onRetry={() => void load(true)}
+          onSyncContext={() => void syncContext()}
+          status={panel.status}
+        />
+        <SidePanelComparisonSection
+          comparison={comparison}
+          onSelectInstrument={setManualInstrument}
+        />
+        <SidePanelResearchSections model={model} />
+      </ResearchErrorBoundary>
 
       <section className="panel-settings-toggle" aria-label="本地设置">
         <button

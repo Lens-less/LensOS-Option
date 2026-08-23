@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "include": [
     "src/contracts.ts",
+    "src/components/shell/ResearchErrorBoundary.tsx",
     "src/extension/**/*.ts",
     "src/sidepanel/**/*.ts",
     "src/sidepanel/**/*.tsx",

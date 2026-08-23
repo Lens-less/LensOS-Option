@@ -8,6 +8,7 @@ import {
 } from "./components/evidence/EvidenceConsole";
 import { AppShell } from "./components/shell/AppShell";
 import type { AppView } from "./components/shell/AppShell";
+import { ResearchErrorBoundary } from "./components/shell/ResearchErrorBoundary";
 import {
   SeriesHistoryView,
   useSeriesArtifact,
@@ -111,8 +112,8 @@ export function App({
   const [state, setState] = useState<AppState>({ status: "loading" });
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [view, setView] = useState<AppView>(() => readViewFromLocation());
-  const signalArtifact = useSignalArtifact();
-  const seriesArtifact = useSeriesArtifact();
+  const signalArtifact = useSignalArtifact("/research/signal");
+  const seriesArtifact = useSeriesArtifact("/research/series");
   const requestSequence = useRef(0);
 
   useEffect(() => {
@@ -209,13 +210,21 @@ export function App({
       view={view}
     >
       {view === "signal" ? (
-        <SignalValidationView artifact={signalArtifact} />
+        <ResearchErrorBoundary label="信号验证视图">
+          <SignalValidationView artifact={signalArtifact} />
+        </ResearchErrorBoundary>
       ) : view === "series" ? (
-        <SeriesHistoryView artifact={seriesArtifact} />
+        <ResearchErrorBoundary label="序列历史视图">
+          <SeriesHistoryView artifact={seriesArtifact} />
+        </ResearchErrorBoundary>
       ) : view === "workbench" ? (
-        <ResearchWorkbench {...consoleProps} embedded />
+        <ResearchErrorBoundary label="候选研究工作台">
+          <ResearchWorkbench {...consoleProps} embedded />
+        </ResearchErrorBoundary>
       ) : (
-        <EvidenceConsole {...consoleProps} embedded />
+        <ResearchErrorBoundary label="证据控制台">
+          <EvidenceConsole {...consoleProps} embedded />
+        </ResearchErrorBoundary>
       )}
     </AppShell>
   );

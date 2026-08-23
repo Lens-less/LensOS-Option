@@ -54,6 +54,20 @@ class AlertsAndOpsTests(unittest.TestCase):
         self.assertEqual(0, second["summary"]["fired"])
         self.assertGreaterEqual(second["summary"]["suppressed"], 1)
 
+    def test_alert_eval_rejects_generated_at_without_timezone(self):
+        report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+        report["generated_at"] = "2026-07-07T00:01:30"
+
+        with self.assertRaisesRegex(ValueError, "timezone"):
+            evaluate_alerts(report, cooldown_sec=0)
+
+    def test_alert_eval_rejects_non_string_generated_at(self):
+        report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
+        report["generated_at"] = 1783584090000
+
+        with self.assertRaisesRegex(ValueError, "RFC3339"):
+            evaluate_alerts(report, cooldown_sec=0)
+
     def test_release_alert_tracks_publication_not_permanent_execution_boundary(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")
         for gate in report["full_system_surface"]["release_gates"]:

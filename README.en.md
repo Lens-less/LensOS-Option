@@ -267,7 +267,7 @@ structure each, **without any notion of size**:
 - Marginal contribution is computed by "remove this member" rather than by the
   member's own worst case.
 
-### Is this strike still that expensive yesterday?
+### Was this strike also this expensive yesterday?
 
 Daily capture started as a way to accumulate validation samples, but it also
 answers a different question.
