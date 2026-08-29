@@ -4,15 +4,35 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to validate and publish
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+      - name: Verify release tag
+        shell: bash
+        run: |
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *) echo "Release tag must start with v: $RELEASE_TAG" >&2; exit 1 ;;
+          esac
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -62,7 +82,7 @@ jobs:
           test -f web/dist/chrome-extension/sidepanel.html
           (
             cd web/dist/chrome-extension
-            zip -q -r "../../../release/lensos-option-chrome-extension-${GITHUB_REF_NAME}.zip" .
+            zip -q -r "../../../release/lensos-option-chrome-extension-${RELEASE_TAG}.zip" .
           )
           (
             cd release
@@ -83,6 +103,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-assets
@@ -91,9 +113,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "$GITHUB_REF_NAME"
+          gh release create "$RELEASE_TAG"
           release-assets/*
           --repo "$GITHUB_REPOSITORY"
           --verify-tag
-          --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
-          --title "$GITHUB_REF_NAME"
+          --notes-file "docs/releases/${RELEASE_TAG}.md"
+          --title "$RELEASE_TAG"
