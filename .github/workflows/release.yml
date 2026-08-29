@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            constraints.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.2"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Verify Python release surface
+        run: |
+          python -m pip install --upgrade -c constraints.txt pip setuptools
+          python -m pip install --no-build-isolation -c constraints.txt -e ".[dev]"
+          python -m ruff check crypto_options_report tools tests
+          python -m pytest -q
+          python -m crypto_options_report.api --smoke >/dev/null
+
+      - name: Build and verify wheel
+        run: |
+          mkdir release
+          python -m pip wheel --no-build-isolation --no-deps . -w release
+          python -m venv wheel-venv
+          wheel-venv/bin/python -m pip install --no-deps release/*.whl
+          wheel-venv/bin/python -m pip check
+          wheel-venv/bin/crypto-options-report demo --help >/dev/null
+
+      - name: Verify and build web release surfaces
+        working-directory: web
+        run: |
+          npm ci
+          npm audit --omit=dev --registry=https://registry.npmjs.org --audit-level=high
+          npm test
+          npm run lint
+          npm run build
+          npm run build:public
+          npm run test:public-bundle
+          npm run build:extension
+
+      - name: Package Chrome extension and checksums
+        run: |
+          git diff --exit-code -- crypto_options_report/static/evidence
+          test -f web/dist/chrome-extension/manifest.json
+          test -f web/dist/chrome-extension/sidepanel.html
+          (
+            cd web/dist/chrome-extension
+            zip -q -r "../../../release/lensos-option-chrome-extension-${GITHUB_REF_NAME}.zip" .
+          )
+          (
+            cd release
+            sha256sum -- *.whl *.zip > SHA256SUMS
+          )
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release-assets/*
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --generate-notes
+          --title "$GITHUB_REF_NAME"

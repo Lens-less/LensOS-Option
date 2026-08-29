@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { formatDvol, formatFractionAsPercent, formatPercent } from "./display";
+import {
+  formatDvol,
+  formatFractionAsPercent,
+  formatPercent,
+  friendlySource,
+} from "./display";
 
 // The two percent formatters exist so unit semantics are carried by the call
 // site instead of guessed from magnitude. These tests pin the regression that
@@ -22,5 +27,12 @@ describe("percent formatting carries unit semantics", () => {
     expect(formatDvol(45.23)).toBe("45.23%");
     expect(formatDvol(0.85)).toBe("0.85%");
     expect(formatDvol(null)).toBe("不可用");
+  });
+
+  it("labels demo sources explicitly", () => {
+    expect(friendlySource("demo:bundled-option-chain")).toBe("演示数据");
+    expect(friendlySource("fixture:deribit-btc-option-chain")).toBe(
+      "验证回放数据",
+    );
   });
 });

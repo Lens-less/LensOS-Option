@@ -28,6 +28,10 @@ def test_wheel_declares_public_legal_pages_and_both_license_files() -> None:
     )
     assert "static/evidence/en/*.html" in package_data
     assert "resources/*.json" in package_data
+    assert (ROOT / "crypto_options_report/resources/demo-snapshot.json").is_file()
+    assert (
+        ROOT / "crypto_options_report/resources/demo-underlying-history.json"
+    ).is_file()
 
 
 def test_direct_setup_contract_declares_its_build_backend_as_a_test_tool() -> None:

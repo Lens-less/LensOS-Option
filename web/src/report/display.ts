@@ -35,6 +35,9 @@ export function friendlySource(value: string | null | undefined): string {
   if (value === "deribit_published_snapshot") {
     return "Deribit 日更快照";
   }
+  if (value.startsWith("demo:")) {
+    return "演示数据";
+  }
   if (value.startsWith("fixture:")) {
     return "验证回放数据";
   }

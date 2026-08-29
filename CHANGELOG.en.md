@@ -12,6 +12,11 @@ owner's public-author identity decision.
 
 ### Added
 
+- A wheel-installed `crypto-options-report demo` with redacted packaged data,
+  an explicitly labeled read-only UI, and no Node.js, credentials, network, or
+  repository-fixture dependency.
+- A minimal `v*` GitHub Release workflow that produces the Python wheel, Chrome
+  extension ZIP, and `SHA256SUMS` without publishing to a package or app store.
 - Deterministic fixture replay across the CLI, HTTP API, Evidence Console, and
   Chrome research companion.
 - Fail-closed public publication with explicit privacy allowlists, immutable
@@ -25,6 +30,11 @@ owner's public-author identity decision.
 
 ### Fixed
 
+- Local HTTP aliases now serve the workbench, Evidence Console, methodology,
+  disclaimer, privacy, terms, and status links without navigation 404s.
+- Daily capture now normalizes PowerShell 7.6's automatic RFC3339 JSON date
+  conversion, preserving the current usability streak even when webhook
+  delivery fails closed.
 - Alert cooldown timestamps without a timezone are now rejected fail-closed
   instead of being interpreted in the process-local timezone (an 8-hour shift
   on UTC+8 that could suppress or repeat alerts).

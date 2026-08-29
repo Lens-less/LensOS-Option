@@ -6,6 +6,9 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 ![Python >=3.12](https://img.shields.io/badge/Python-%3E%3D3.12-3776AB?logo=python&logoColor=white)
 
+[文档](docs/README.md) · [参与贡献](CONTRIBUTING.md) · [安全政策](SECURITY.md) ·
+[社区行为准则](CODE_OF_CONDUCT.md) · [变更记录](CHANGELOG.md)
+
 一个**期权入场前的研究工具**：它读取 Deribit 的公开行情，判断“现在有没有一个
 值得考虑的卖方机会”，并把结论所依赖的每一份证据都摊开给你看。
 
@@ -20,6 +23,10 @@
 - **evidence-first**：每个结论都能追溯到具体证据。没有证据支撑的数字不会被编造出来，
   而是显式标记为“缺失”。
 - **fail-closed**：证据缺失、过期或校验失败时，一律降级为“阻断”。**没有信号 ≠ 放行。**
+
+![LensOS Option 离线演示中的只读候选工作台](docs/assets/lensos-option-demo.png)
+
+_wheel 内置快照的真实演示界面：演示标识、`RESEARCH_ONLY · NO_TRADE` 与阻断原因保持可见。_
 
 ## 两种使用形态
 
@@ -49,42 +56,20 @@ CLI 与 HTTP API 是驱动这两个界面的**本地引擎接口**，供集成�
 
 ## 快速开始
 
-需要 Git 与 Python ≥ 3.12。运行时零第三方依赖；以下路径不需要凭证、本地采集产物
-或任何 owner 基础设施。
+需要 Git 与 Python ≥ 3.12。运行时零第三方依赖；以下演示不需要 Node、API 密钥、外网、
+本地采集产物或任何 owner 基础设施。
 
 ```powershell
 git clone https://github.com/Lens-less/LensOS-Option.git
 Set-Location LensOS-Option
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade -c constraints.txt pip setuptools
-python -m pip install --no-build-isolation -c constraints.txt -e ".[test]"
-python -m pytest -q
+python -m pip install .
+crypto-options-report demo
 ```
 
-用仓库自带的固定快照跑一次完整分析（确定性回放，不联网）：
-
-```powershell
-python -m crypto_options_report.cli analysis `
-  --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json `
-  --generated-at 2026-07-07T00:01:30Z --compact
-```
-
-启动本地服务并打开证据控制台。**要在浏览器里读一份录制快照，必须加 `--replay`**：
-
-```powershell
-python -m crypto_options_report.api --host 127.0.0.1 --port 8000 --replay `
-  --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json
-```
-
-然后访问 <http://127.0.0.1:8000/evidence>。
-
-`--replay` 把评估时钟固定到快照自己的采集时刻。没有它，任何超过 60 秒的录制文件都会
-被新鲜度门禁挡掉——这是 CLI 一直在做的事（`--generated-at` 默认取 `captured_at`），
-HTTP 侧此前没有对应机制。**回放会让页面上所有新鲜度指标读起来都像“当前”**，所以它是
-启动参数而不是浏览器参数，并且每个界面都会显示一条无法关闭的回放横幅标出被固定的时刻。
-
-不带 `--replay` 时服务按实时模式运行，快照过期就如实阻断。
+命令默认只监听 `127.0.0.1`，并用 wheel 内置的脱敏固定快照启动只读界面；页面会始终
+标明“演示 / 快照数据”，不会把回放伪装成实时行情。按 `Ctrl+C` 即可退出。端口被占用时，
+命令会给出明确错误，不会静默改用其他端口。打开命令输出的链接（默认
+<http://127.0.0.1:8000/index.html?view=workbench>）即可开始。
 
 > **没有配置市场数据源时会看到大量“不可用 / 缺失”，这是正常的。** 产品按设计拒绝
 > 编造任何数值。空状态会列出缺什么、以及补齐它的确切命令。
@@ -441,6 +426,10 @@ API 进程只读取脱敏后的 JSON。生产 HTTP 禁止浏览器指定 fixture
 ## 开发
 
 ```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade -c constraints.txt pip setuptools
+python -m pip install --no-build-isolation -c constraints.txt -e ".[dev]"
 python -m pytest -q
 python -m ruff check crypto_options_report tools tests
 
@@ -448,10 +437,23 @@ cd web
 npm ci && npm test && npm run lint && npm run build
 ```
 
+用仓库测试 fixture 做一次确定性 CLI 回放：
+
+```powershell
+python -m crypto_options_report.cli analysis `
+  --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json `
+  --generated-at 2026-07-07T00:01:30Z --compact
+```
+
+浏览器回放及完整接口说明见 [API 参考](docs/api-reference.md)；录制数据必须通过 operator
+控制的 `--replay` 启动参数进入服务，不能由浏览器绕过新鲜度门禁。
+
 `npm run build` 会更新 `crypto_options_report/static/evidence/`，该产物随 wheel 和
 容器一起发布，**必须与源码一起提交**（CI 会校验一致性）。
 
-贡献流程与设计红线见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+贡献流程与设计红线见 [CONTRIBUTING.md](CONTRIBUTING.md)；社区约定见
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)，安全问题请按 [SECURITY.md](SECURITY.md)
+私下报告，版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 项目地图
 

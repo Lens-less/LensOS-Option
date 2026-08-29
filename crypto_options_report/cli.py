@@ -126,6 +126,23 @@ def build_parser() -> argparse.ArgumentParser:
     _add_report_replay_args(analysis)
     analysis.add_argument("--output", help="optional path to write JSON")
 
+    demo = subcommands.add_parser(
+        "demo",
+        help="serve a bundled read-only demo from packaged snapshot data",
+    )
+    demo.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="loopback port for the local demo server (default 8000)",
+    )
+    demo.add_argument(
+        "--open-browser",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="open the demo URL in your default browser after startup",
+    )
+
     publish = subcommands.add_parser(
         "publish",
         help="build one deterministic static public publication tree",
@@ -436,6 +453,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "demo":
+            from .demo import run_demo
+
+            return run_demo(port=args.port, open_browser=args.open_browser)
         if args.command == "pull-snapshot":
             return _cmd_pull_snapshot(args)
         if args.command == "alert-eval":

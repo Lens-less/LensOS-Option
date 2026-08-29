@@ -511,6 +511,7 @@ export interface RuntimeContext {
   profile?: string;
   mode?: "live" | "replay" | "published";
   replay?: boolean;
+  demo_mode?: boolean;
   evaluation_clock?: string | null;
   snapshot_fixture?: string | null;
   live_fetch_allowed?: boolean;

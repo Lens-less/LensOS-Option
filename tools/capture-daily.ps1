@@ -141,6 +141,52 @@ function Get-IsoTimestamp {
     return (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 }
 
+function ConvertTo-UtcTimestampString {
+    param(
+        [AllowNull()] $Value,
+        [string] $Context = 'timestamp'
+    )
+
+    if ($null -eq $Value) {
+        throw "$Context is missing"
+    }
+    if ($Value -is [DateTimeOffset]) {
+        return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    }
+    if ($Value -is [DateTime]) {
+        $resolved = if ($Value.Kind -eq [DateTimeKind]::Unspecified) {
+            [DateTimeOffset]::new([DateTime]::SpecifyKind($Value, [DateTimeKind]::Utc))
+        }
+        else {
+            [DateTimeOffset] $Value
+        }
+        return $resolved.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    }
+
+    $text = [string] $Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        throw "$Context must not be empty"
+    }
+    try {
+        return ([DateTimeOffset]::Parse($text)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    }
+    catch {
+        throw "$Context is invalid"
+    }
+}
+
+function ConvertFrom-JsonCompat {
+    param(
+        [Parameter(Mandatory)] [string] $Text
+    )
+
+    $command = Get-Command -Name 'ConvertFrom-Json' -ErrorAction Stop
+    if ($command.Parameters.ContainsKey('DateKind')) {
+        return $Text | ConvertFrom-Json -DateKind String -ErrorAction Stop
+    }
+    return $Text | ConvertFrom-Json -ErrorAction Stop
+}
+
 function Resolve-NormalizedPath {
     param([Parameter(Mandatory)] [string] $Path)
 
@@ -824,7 +870,7 @@ function Parse-JsonText {
         throw "$Context was empty"
     }
     try {
-        return $Text | ConvertFrom-Json -ErrorAction Stop
+        return ConvertFrom-JsonCompat -Text $Text
     }
     catch {
         throw "$Context was not valid JSON"
@@ -1316,8 +1362,20 @@ function Get-ConsecutiveUsabilityDayCount {
         return 1
     }
     try {
-        $currentDate = [DateTimeOffset]::Parse($CaptureTime).UtcDateTime.Date
-        $previousDate = [DateTimeOffset]::Parse([string] $PreviousSummary.capture_time).UtcDateTime.Date
+        $currentDate = (
+            [DateTimeOffset]::Parse(
+                (ConvertTo-UtcTimestampString -Value $CaptureTime -Context 'current capture_time')
+            )
+        ).UtcDateTime.Date
+        $previousDate = (
+            [DateTimeOffset]::Parse(
+                (
+                    ConvertTo-UtcTimestampString `
+                        -Value $PreviousSummary.capture_time `
+                        -Context 'previous capture_time'
+                )
+            )
+        ).UtcDateTime.Date
     }
     catch {
         return 1
@@ -1394,13 +1452,21 @@ function Assert-PortableUsabilityState {
     ) {
         throw "$RecordLabel run provenance is invalid"
     }
-    [DateTimeOffset] $parsedCaptureTime = [DateTimeOffset]::MinValue
+    try {
+        $normalizedCaptureTime = ConvertTo-UtcTimestampString `
+            -Value $State.capture_time `
+            -Context "$RecordLabel capture_time"
+    }
+    catch {
+        throw "$RecordLabel capture_time is invalid"
+    }
     if (
-        [string] $State.capture_time -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$' -or
-        -not [DateTimeOffset]::TryParse([string] $State.capture_time, [ref] $parsedCaptureTime)
+        $normalizedCaptureTime -notmatch
+        '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$'
     ) {
         throw "$RecordLabel capture_time is invalid"
     }
+    $State.capture_time = $normalizedCaptureTime
     if ($State.usable_for_validation -isnot [bool]) {
         throw "$RecordLabel usable_for_validation must be boolean"
     }
@@ -1452,7 +1518,7 @@ function New-CaptureSummary {
         currency = $Currency
         capture_origin = $resolvedCaptureOrigin
         provider_run_id = $resolvedProviderRunId
-        capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { $snapshotResult.details.captured_at } else { $runStartedAt }
+        capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { ConvertTo-UtcTimestampString -Value $snapshotResult.details.captured_at -Context 'capture summary capture_time' } else { $runStartedAt }
         run_started_at = $runStartedAt
         repo_root = $RepoRoot
         summary_path = $summaryPath
@@ -1528,7 +1594,7 @@ function Write-UsabilityState {
         provider_run_id = $resolvedProviderRunId
         currency = $Currency
         capture_origin = $resolvedCaptureOrigin
-        capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { $snapshotResult.details.captured_at } else { $runStartedAt }
+        capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { ConvertTo-UtcTimestampString -Value $snapshotResult.details.captured_at -Context 'usability state capture_time' } else { $runStartedAt }
         usable_for_validation = $usableForValidation
         usability_reason_codes = @($usabilityReasonCodes)
         consecutive_unusable_days = $consecutiveUnusableDays
@@ -1587,7 +1653,7 @@ function Write-CaptureReceipt {
         currency = $Currency
         capture_origin = $resolvedCaptureOrigin
         provider_run_id = $resolvedProviderRunId
-        capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { $snapshotResult.details.captured_at } else { $runStartedAt }
+        capture_time = if ($snapshotResult -and $snapshotResult.details -and $snapshotResult.details.captured_at) { ConvertTo-UtcTimestampString -Value $snapshotResult.details.captured_at -Context 'capture receipt capture_time' } else { $runStartedAt }
         run_started_at = $runStartedAt
         usable_for_validation = $usableForValidation
         usability_reason_codes = @($usabilityReasonCodes)
@@ -1722,8 +1788,9 @@ try {
 
     if (Test-Path -LiteralPath $usabilityStatePath -PathType Leaf) {
         try {
-            $candidateState = Get-Content -Raw -LiteralPath $usabilityStatePath -ErrorAction Stop |
-                ConvertFrom-Json -ErrorAction Stop
+            $candidateState = ConvertFrom-JsonCompat -Text (
+                Get-Content -Raw -LiteralPath $usabilityStatePath -ErrorAction Stop
+            )
             Assert-PortableUsabilityState `
                 -State $candidateState `
                 -ExpectedOrigin $resolvedCaptureOrigin `
@@ -1737,8 +1804,9 @@ try {
     }
     elseif (Test-Path -LiteralPath $latestSummaryPath -PathType Leaf) {
         try {
-            $candidateSummary = Get-Content -Raw -LiteralPath $latestSummaryPath -ErrorAction Stop |
-                ConvertFrom-Json -ErrorAction Stop
+            $candidateSummary = ConvertFrom-JsonCompat -Text (
+                Get-Content -Raw -LiteralPath $latestSummaryPath -ErrorAction Stop
+            )
             Assert-PortableUsabilityState `
                 -State $candidateSummary `
                 -ExpectedOrigin $resolvedCaptureOrigin `
@@ -1776,7 +1844,7 @@ try {
             return [ordered]@{
                 output_path = $script:snapshotPath
                 details = [ordered]@{
-                    captured_at = $response.payload.captured_at
+                    captured_at = ConvertTo-UtcTimestampString -Value $response.payload.captured_at -Context 'snapshot captured_at'
                     row_count = $response.payload.row_count
                     fetch_errors = $response.payload.fetch_errors
                     market_data_status = $response.payload.market_data_status
@@ -1793,7 +1861,7 @@ try {
         $snapshotStageFailure = $_
     }
     $analysisTimestamp = if ($snapshotResult -and $snapshotResult.details) {
-        [string] $snapshotResult.details.captured_at
+        ConvertTo-UtcTimestampString -Value $snapshotResult.details.captured_at -Context 'analysis timestamp'
     }
     else {
         $null

@@ -385,6 +385,17 @@ class CaptureDailyContractTests(unittest.TestCase):
                 self.assertEqual(0, summary["consecutive_unusable_days"])
                 self.assertEqual(1, summary["consecutive_usable_days"])
                 self.assertEqual([], summary["usability_reason_codes"])
+                stage_commands = {
+                    stage["name"]: stage["command"] for stage in summary["stages"]
+                }
+                self.assertIn(
+                    "--generated-at 2026-08-02T09:00:14Z",
+                    stage_commands["series_history"],
+                )
+                self.assertIn(
+                    "--generated-at 2026-08-02T09:00:14Z",
+                    stage_commands["signal_preflight"],
+                )
                 receipt_path = Path(summary["evidence_receipt"]["path"])
                 receipt = json.loads(receipt_path.read_text(encoding="utf-8-sig"))
                 self.assertEqual("local_windows", receipt["capture_origin"])
@@ -521,6 +532,13 @@ class CaptureDailyContractTests(unittest.TestCase):
                         "error": "delivery failed",
                     },
                     summary["webhook"],
+                )
+                capture_log = (
+                    product_root / "artifacts" / "logs" / "capture-daily.log"
+                ).read_text(encoding="utf-8-sig")
+                self.assertNotIn(
+                    "previous portability state unavailable; alert streak will fail closed",
+                    capture_log,
                 )
         finally:
             server.shutdown()
@@ -2732,7 +2750,7 @@ class PublishWorkflowContractTests(unittest.TestCase):
                 document,
             )
 
-    def test_newcomer_quickstarts_use_only_tracked_fixtures(self) -> None:
+    def test_newcomer_quickstarts_favor_the_packaged_demo(self) -> None:
         readme = (self.REPO_ROOT / "README.md").read_text(encoding="utf-8")
         readme_en = (self.REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
         quickstarts = (
@@ -2741,15 +2759,13 @@ class PublishWorkflowContractTests(unittest.TestCase):
         )
 
         for quickstart in quickstarts:
-            with self.subTest(language="zh" if "访问" in quickstart else "en"):
+            with self.subTest(language="zh" if "演示" in quickstart else "en"):
                 self.assertIn("git clone", quickstart)
-                self.assertIn("python -m venv .venv", quickstart)
-                self.assertGreaterEqual(
-                    quickstart.count(
-                        "tests/fixtures/deribit_btc_option_chain_snapshot.json"
-                    ),
-                    2,
-                )
+                self.assertIn("python -m pip install .", quickstart)
+                self.assertIn("crypto-options-report demo", quickstart)
+                self.assertIn("127.0.0.1", quickstart)
+                self.assertNotIn("python -m pytest -q", quickstart)
+                self.assertNotIn("tests/fixtures/", quickstart)
                 self.assertNotIn("artifacts/", quickstart)
 
     def test_capture_docs_distinguish_process_success_from_validation_usability(

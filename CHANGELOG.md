@@ -13,6 +13,10 @@
 
 ### 新增
 
+- 新增可从 wheel 独立运行的 `crypto-options-report demo`：内置脱敏快照与只读研究产物，
+  不依赖 Node、凭证、网络或仓库测试 fixture；界面显式标记演示数据并保留全部阻断门禁。
+- 新增 `v*` tag 触发的最小 GitHub Release 自动化，产出 Python wheel、Chrome 扩展 ZIP
+  与 `SHA256SUMS`，不向 PyPI、镜像仓或浏览器商店发布。
 - 采集摘要、failure webhook 与 dead-man heartbeat 现在显式报告验证可用性；连续两个
   采集日不可用会告警，即使进程本身退出成功。快照失败也不再跳过独立的标的与 DVOL
   历史刷新。
@@ -235,6 +239,11 @@
   状态徽章边框改用满足 WCAG 1.4.11 对比度的颜色。
 
 ### 修复
+
+- Python 本地服务补齐首页、Evidence Console、方法论、免责声明、隐私、条款和状态页的
+  公开导航别名，工作台与页脚的相对链接不再落到 404。
+- PowerShell 7.6 将 RFC3339 JSON 字段自动解析为日期对象时，日采集的连续可用/不可用
+  状态现会先归一化为 UTC 字符串；webhook 投递失败的 fail-closed 摘要不再丢失当天 streak。
 
 - **告警冷却的时钟不再接受无时区时间戳**。`alerts._parse_ms` 此前把不带时区的
   `generated_at` 按进程本地时区解释（UTC+8 上整体偏移 8 小时），向未来平移会错误
