@@ -6,6 +6,6 @@ colorama==0.4.6 ; sys_platform == "win32"
 iniconfig==2.3.0
 packaging==26.0
 pluggy==1.6.0
-Pygments==2.20.0
+Pygments==2.21.0
 ruff==0.16.0
 setuptools==80.10.2
