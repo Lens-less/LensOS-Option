@@ -27,6 +27,7 @@ def test_wheel_declares_public_legal_pages_and_both_license_files() -> None:
         classifier.startswith("License ::") for classifier in project["classifiers"]
     )
     assert "static/evidence/en/*.html" in package_data
+    assert "static/evidence/*.css" in package_data
     assert "resources/*.json" in package_data
     assert (ROOT / "crypto_options_report/resources/demo-snapshot.json").is_file()
     assert (
