@@ -3,7 +3,7 @@
 The canonical detailed changelog is maintained in Chinese in
 [CHANGELOG.md](CHANGELOG.md). This file provides the public release summary.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-08-29
 
 The first public release is an auditable research-console tool, not a validated
 trading signal. Pre-registered signal validation is still accumulating at 1/8

@@ -6,7 +6,7 @@
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.1.0] - 待发布
+## [0.1.0] - 2026-08-29
 
 > 首个公开版本定位为“可审计的 research console 工具”，不是已验证的交易信号。
 > 预登记信号验证仍处于 1/8 cohort 的积累阶段；历史净化与公开身份确定前不打 tag。
