@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import metadata
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -82,6 +83,10 @@ STATIC_PAGE_STYLESHEET_PATHS = {
     f"{EVIDENCE_PAGE_PATH}/static-page.css",
     f"{EVIDENCE_PAGE_PATH}/en/static-page.css",
 }
+PUBLIC_LICENSE_PATHS = {
+    "/LICENSE": "LICENSE",
+    "/LICENSE-DATA": "LICENSE-DATA",
+}
 PUBLIC_EVIDENCE_STATIC_PAGES = {
     "/methodology.html": "methodology.html",
     "/disclaimer.html": "disclaimer.html",
@@ -106,6 +111,12 @@ PUBLIC_STATUS_PAGE_PATHS.update(
     {
         f"{EVIDENCE_PAGE_PATH}{path}": language
         for path, language in tuple(PUBLIC_STATUS_PAGE_PATHS.items())
+    }
+)
+PUBLIC_LICENSE_PATHS.update(
+    {
+        f"{EVIDENCE_PAGE_PATH}/{name}": name
+        for name in tuple(PUBLIC_LICENSE_PATHS.values())
     }
 )
 GET_SURFACE_PATHS = {
@@ -650,6 +661,14 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 evidence_static_page_asset("static-page.css"),
                 content_type="text/css; charset=utf-8",
+            )
+            return
+        if parsed.path in PUBLIC_LICENSE_PATHS:
+            body = public_license_asset(PUBLIC_LICENSE_PATHS[parsed.path])
+            self._write_response(
+                HTTPStatus.OK,
+                body,
+                content_type="text/plain; charset=utf-8",
             )
             return
         if parsed.path.startswith(EVIDENCE_ASSET_PREFIX):
@@ -1296,6 +1315,19 @@ def evidence_static_page_asset(name: str) -> bytes:
     )
 
 
+def public_license_asset(name: str) -> bytes:
+    for distribution_name in ("crypto-options-report", "crypto_options_report"):
+        try:
+            distribution = metadata.distribution(distribution_name)
+        except metadata.PackageNotFoundError:
+            continue
+        for package_file in distribution.files or ():
+            if package_file.name != name:
+                continue
+            return distribution.locate_file(package_file).read_bytes()
+    return Path(__file__).resolve().parent.parent.joinpath(name).read_bytes()
+
+
 def evidence_asset(asset_name: str) -> tuple[bytes, str]:
     if not _EVIDENCE_ASSET_NAME.fullmatch(asset_name):
         raise ValueError("invalid evidence asset name")
@@ -1347,6 +1379,8 @@ def validate_evidence_bundle() -> None:
     for relative_path in PUBLIC_EVIDENCE_STATIC_PAGES.values():
         evidence_static_page_html(relative_path)
     evidence_static_page_asset("static-page.css")
+    for name in PUBLIC_LICENSE_PATHS.values():
+        public_license_asset(name)
     for language in PUBLIC_STATUS_PAGE_PATHS.values():
         local_status_page_html(language=language)
 

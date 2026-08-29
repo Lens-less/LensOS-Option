@@ -36,6 +36,10 @@ class EvidenceConsoleDeliveryTests(unittest.TestCase):
                 f"{EVIDENCE_PAGE_PATH}/privacy.html": "loopback",
                 "/terms.html": "LensOS Option",
                 f"{EVIDENCE_PAGE_PATH}/terms.html": "LensOS Option",
+                "/LICENSE": "Apache License",
+                f"{EVIDENCE_PAGE_PATH}/LICENSE": "Apache License",
+                "/LICENSE-DATA": "Creative Commons Attribution 4.0 International",
+                f"{EVIDENCE_PAGE_PATH}/LICENSE-DATA": "Creative Commons Attribution 4.0 International",
                 "/status.html": "LOCAL_PREVIEW",
                 f"{EVIDENCE_PAGE_PATH}/status.html": "LOCAL_PREVIEW",
                 "/en/methodology.html": "Methodology",
@@ -54,7 +58,12 @@ class EvidenceConsoleDeliveryTests(unittest.TestCase):
                     status, headers, body = self._request(server.server_port, path)
                     self.assertEqual(200, status)
                     self.assertEqual(
-                        "text/html; charset=utf-8",
+                        (
+                            "text/plain; charset=utf-8"
+                            if path.startswith("/LICENSE")
+                            or path.startswith(f"{EVIDENCE_PAGE_PATH}/LICENSE")
+                            else "text/html; charset=utf-8"
+                        ),
                         headers["content-type"],
                     )
                     self.assertIn(expected, body.decode("utf-8"))
