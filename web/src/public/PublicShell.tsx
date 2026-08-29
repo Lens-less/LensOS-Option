@@ -53,18 +53,21 @@ function ReplayBanner({
     return null;
   }
   const clock = context.evaluation_clock ?? null;
+  const isDemo = context.demo_mode === true;
   return (
     <div className="replay-banner" role="status">
-      <span className="replay-banner-tag">回放</span>
+      <span className="replay-banner-tag">{isDemo ? "演示 / 快照数据" : "回放"}</span>
       <p>
-        评估时钟已固定在快照采集时刻
+        {isDemo ? "当前界面显示的是随安装包提供的演示快照。" : "评估时钟已固定在快照采集时刻"}
         {clock ? (
           <>
             {" "}
             <time dateTime={clock}>{clock}</time>
           </>
         ) : null}
-        ，页面上的新鲜度描述的是那一刻，不是现在。
+        {isDemo
+          ? " 它只用于本地只读演示；页面上的新鲜度与阻断逻辑仍会继续生效，不会伪装成当前行情。"
+          : "，页面上的新鲜度描述的是那一刻，不是现在。"}
       </p>
     </div>
   );

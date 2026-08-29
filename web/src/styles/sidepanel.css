@@ -562,6 +562,24 @@ a {
   }
 }
 
+.panel-error {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px dashed var(--rule-strong);
+  border-top: 3px solid var(--danger);
+}
+
+.panel-error h3 {
+  font-size: 14px;
+}
+
+.panel-error p {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 @media (max-width: 640px) {
   .panel-header-actions,
   .panel-inline-actions,

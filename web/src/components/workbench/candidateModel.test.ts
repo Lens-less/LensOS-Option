@@ -192,6 +192,17 @@ describe("parseCandidateLegs", () => {
     expect(legs.kind).toBe("unknown");
     expect(legs.shortStrikeUsdc).toBeNull();
   });
+
+  it("refuses three-leg ids instead of silently dropping the extra legs", () => {
+    const legs = parseCandidateLegs(
+      "BTC-7AUG26-66000-P->BTC-7AUG26-71000-P->BTC-7AUG26-76000-P:condor",
+    );
+    expect(legs).toEqual({
+      shortStrikeUsdc: null,
+      longStrikeUsdc: null,
+      kind: "unknown",
+    });
+  });
 });
 
 describe("dominanceExplanationFor", () => {
@@ -242,9 +253,79 @@ describe("sortCandidateRows", () => {
     expect(sorted.map((row) => row.rankingScore)).toEqual([0.41, 0.82, null]);
   });
 
+  it("keeps unavailable rows at the bottom in descending order too", () => {
+    const sorted = sortCandidateRows(rows, {
+      key: "rankingScore",
+      direction: "desc",
+    });
+    expect(sorted.map((row) => row.rankingScore)).toEqual([0.82, 0.41, null]);
+  });
+
   it("never mutates the input array or any row's action", () => {
     const before = rows.map((row) => row.action);
     sortCandidateRows(rows, { key: "evAfterCostUsdc", direction: "desc" });
     expect(rows.map((row) => row.action)).toEqual(before);
+  });
+});
+
+describe("edge_components narrowing", () => {
+  function reportWithEdgeComponents(edgeComponents: unknown) {
+    return reportWithScanner({
+      ...validatedScanner,
+      ranked_candidates: [
+        {
+          ...validatedScanner.ranked_candidates[0],
+          edge_components: edgeComponents,
+        },
+      ],
+    });
+  }
+
+  it("narrows each entry and drops unrenderable ones instead of casting them through", () => {
+    const report = reportWithEdgeComponents({
+      theta_efficiency: { value: 1.2, unit: "usdc/day", status: "OK" },
+      liquidity_cost_ratio: { value: "0.4", status: "OK" },
+      hazard_gap: { value: 2, status: "NOT_A_REAL_STATUS" },
+      otm_buffer: { value: true, status: "CAUTION", unit: null },
+    });
+    const candidate = candidateById(report, "BTC-7AUG26-73000-C:naked");
+    expect(candidate?.raw.edge_components).toEqual({
+      theta_efficiency: {
+        value: 1.2,
+        unit: "usdc/day",
+        status: "OK",
+        reason_code: null,
+        direction: null,
+      },
+      liquidity_cost_ratio: {
+        value: null,
+        unit: null,
+        status: "OK",
+        reason_code: null,
+        direction: null,
+      },
+      otm_buffer: {
+        value: null,
+        unit: null,
+        status: "CAUTION",
+        reason_code: null,
+        direction: null,
+      },
+    });
+  });
+
+  it("keeps the null/absent distinction the panel renders differently", () => {
+    expect(
+      candidateById(
+        reportWithEdgeComponents(null),
+        "BTC-7AUG26-73000-C:naked",
+      )?.raw.edge_components,
+    ).toBeNull();
+    expect(
+      candidateById(
+        reportWithEdgeComponents("garbage"),
+        "BTC-7AUG26-73000-C:naked",
+      )?.raw.edge_components,
+    ).toBeUndefined();
   });
 });

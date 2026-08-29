@@ -11,6 +11,7 @@ import {
   formatDurationHours,
   formatDvol,
   formatExpiry,
+  formatFractionAsPercent,
   formatPercent,
   formatPublishedAge,
   formatTimestamp,
@@ -1022,7 +1023,10 @@ function PublicStrategySection({
                 <dd>{formatDecimal(finiteNumber(candidate.model_delta), 3)}</dd>
                 <small>
                   RN P(ITM){" "}
-                  {formatPercent(finiteNumber(candidate.risk_neutral_p_itm), 1)}
+                  {formatFractionAsPercent(
+                    finiteNumber(candidate.risk_neutral_p_itm),
+                    1,
+                  )}
                 </small>
               </div>
             </dl>

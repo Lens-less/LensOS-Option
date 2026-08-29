@@ -13,6 +13,10 @@
 
 ### 新增
 
+- 新增可从 wheel 独立运行的 `crypto-options-report demo`：内置脱敏快照与只读研究产物，
+  不依赖 Node、凭证、网络或仓库测试 fixture；界面显式标记演示数据并保留全部阻断门禁。
+- 新增 `v*` tag 触发的最小 GitHub Release 自动化，产出 Python wheel、Chrome 扩展 ZIP
+  与 `SHA256SUMS`，不向 PyPI、镜像仓或浏览器商店发布。
 - 采集摘要、failure webhook 与 dead-man heartbeat 现在显式报告验证可用性；连续两个
   采集日不可用会告警，即使进程本身退出成功。快照失败也不再跳过独立的标的与 DVOL
   历史刷新。
@@ -236,6 +240,41 @@
 
 ### 修复
 
+- Python 本地服务补齐首页、Evidence Console、方法论、免责声明、隐私、条款和状态页的
+  公开导航别名，工作台与页脚的相对链接不再落到 404。
+- PowerShell 7.6 将 RFC3339 JSON 字段自动解析为日期对象时，日采集的连续可用/不可用
+  状态现会先归一化为 UTC 字符串；webhook 投递失败的 fail-closed 摘要不再丢失当天 streak。
+
+- **告警冷却的时钟不再接受无时区时间戳**。`alerts._parse_ms` 此前把不带时区的
+  `generated_at` 按进程本地时区解释（UTC+8 上整体偏移 8 小时），向未来平移会错误
+  抑制告警、向过去平移会重复触发。现在与全项目其余时间入口一致：缺时区即拒绝，
+  fail-closed。
+- **独立窗口计数与门禁统一按实际 stride 计算**。`realized_vol` 与 `path_risk` 此前用
+  `观测数 // horizon` 作独立窗口数，在观测数恰为 horizon 整数倍时比实际可用的
+  非重叠窗口多报 1（360÷18 报 20 实为 19），可能以 19 个窗口越过
+  `MIN_INDEPENDENT_WINDOWS=20` 门禁。两个模块现在都按同一 stride 表达式计数，
+  同一份历史必然得到同一样本量。
+- **前端百分比显示不再靠数值大小猜单位**。`formatPercent`/`formatDvol` 此前用
+  `abs(value) <= 2` 猜测"分数还是百分数"，会把已是百分数的
+  `sell_strike_distance_percent`（如 1.5%）放大 100 倍显示成 150%。现在拆分为
+  `formatPercent`（入参已是百分数）与 `formatFractionAsPercent`（入参是分数），
+  按字段契约逐一归类；`vol_index.volatility`（后端契约为 fraction）在
+  `marketFacts` 层统一归一为百分数。
+- **候选工作台对畸形数据白屏的防护**。`edge_components` 此前整块 `as` 断言、
+  内层值不校验，一条脏数据即可让 React 卸载整棵树。现在逐条窄化解析（状态非法
+  丢弃、数值非法显示"无数值"），并在三个应用根（内部工作台、公开站、Chrome 侧栏）
+  加 ErrorBoundary，渲染失败只降级当前区域并显式提示，不吞错误。
+- **内部停摆文案与公开版同源**。AppShell 停摆卡片不再硬编码"48 小时"，改由报告
+  自带的 `stale_after` 契约动态渲染，与公开站同口径。
+- **候选排序在降序时"不可用"行不再置顶**。null 行现在恒排最后，按"税后 EV 降序"
+  时真正的极值不被一排"不可用"挤下去。
+- **到期盈亏图不再画错多腿与反向价差**。id 兜底解析遇到 3 腿以上结构返回
+  `unknown` 而不是静默丢腿；行权价顺序推出非正价差宽时（如 put 信用价差走到
+  legacy 路径）改为显式"暂不绘制"，不再把最大损失画成收益。
+- **信号 / 序列产物加载区分三类失败**。HTTP 非 2xx、响应非 JSON、引擎不可达此前
+  折叠为同一句"尚未接入 / 本地引擎不可达"；现在各自给出带 HTTP 状态码的明确文案。
+  共享 hook 的内部默认 URL（`/research/signal` 等）从公开 bundle 移除，边界由
+  必填参数保证而非调用纪律。
 - **绝对预期价值不再建立在写死的 50% 波动率上**。`ev_scanner` 曾把
   `target_realized_vol: 0.5` 塞进 path-risk，后者据此把**每一条历史路径**按
   `目标/该窗口自身实现波动率` 缩放。这既是这个项目里唯一一个无证据来源的关键数字，也在

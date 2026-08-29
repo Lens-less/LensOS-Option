@@ -695,6 +695,15 @@ const replayReport: ResearchReport = {
   },
 };
 
+const demoReport: ResearchReport = {
+  ...replayReport,
+  runtime_context: {
+    ...replayReport.runtime_context,
+    demo_mode: true,
+    snapshot_fixture: "crypto_options_report/resources/demo-snapshot.json",
+  },
+};
+
 const missingVrpReport: ResearchReport = {
   ...publishedReport,
   vrp_status: {
@@ -1426,6 +1435,24 @@ describe("EvidenceConsole", () => {
     expect((await screen.findAllByText("回放")).length).toBeGreaterThan(0);
     expect(
       screen.getByText(/页面载入后继续计时，超限仍会阻断/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/距采集 \d+(\.\d)? 小时/)).not.toBeInTheDocument();
+  });
+
+  it("labels packaged demo snapshots as demo data instead of live market data", async () => {
+    render(
+      <App
+        loadReport={() =>
+          Promise.resolve(
+            loadedReport(demoReport, Date.parse("2026-07-24T10:25:04Z")),
+          )
+        }
+      />,
+    );
+
+    expect((await screen.findAllByText("演示 / 快照数据")).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/只用于本地只读演示；新鲜度与阻断逻辑仍会继续生效/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/距采集 \d+(\.\d)? 小时/)).not.toBeInTheDocument();
   });

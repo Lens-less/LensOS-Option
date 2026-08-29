@@ -216,6 +216,31 @@ class DistributionTests(unittest.TestCase):
             report["independent_sample_bound"]["independent_windows"],
         )
 
+    def test_exact_multiple_observation_count_counts_real_strided_windows(self):
+        """`360 // 18 == 20` overstates: the 20th stride window would start
+        past the last observation. Both modules must count the real 19 and
+        fail closed against the `MIN_INDEPENDENT_WINDOWS` gate on it.
+        """
+        payload = history(360)
+        distribution = build_realized_return_distribution(
+            history=payload, horizon_days=18, generated_at="2026-07-26T00:00:00Z"
+        )
+        report = build_path_risk_report_from_underlying_history(
+            payload, CANDIDATE, generated_at="2026-07-26T00:00:00Z"
+        )
+
+        self.assertEqual(19, distribution["independent_window_count"])
+        self.assertEqual("unavailable", distribution["status"])
+        self.assertEqual(
+            ["INSUFFICIENT_INDEPENDENT_WINDOWS"], distribution["reason_codes"]
+        )
+        self.assertEqual(
+            19, report["input_evidence"]["sample_coverage"]["independent_windows"]
+        )
+        self.assertIn(
+            "INSUFFICIENT_INDEPENDENT_UNDERLYING_WINDOWS", report["reason_codes"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

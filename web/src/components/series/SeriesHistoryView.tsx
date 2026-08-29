@@ -5,6 +5,10 @@ import {
   matchesExpectedArtifactCapture,
 } from "../artifactCapture";
 import { money, ratio, signed } from "../candidate/format";
+import {
+  artifactFailureDetail,
+  readArtifactJson,
+} from "../../transport/artifactJson";
 import { ResidualHeatmap } from "../viz/ResidualHeatmap";
 import type { HeatmapRow } from "../viz/ResidualHeatmap";
 import { VIZ } from "../viz/tokens";
@@ -275,7 +279,7 @@ function InstrumentDetail({
 
 /** Loads one capture-bound artifact and never renders an older URL while refetching. */
 export function useSeriesArtifact(
-  url: string | null = "/research/series",
+  url: string | null,
   expectedCapturedAt?: string,
 ): SeriesArtifact | null {
   const [loaded, setLoaded] = useState<LoadedSeriesArtifact | null>(null);
@@ -288,7 +292,7 @@ export function useSeriesArtifact(
       cache: "no-store",
       headers: { Accept: "application/json" },
     })
-      .then((response) => (response.ok ? response.json() : null))
+      .then(readArtifactJson)
       .then((payload) => {
         if (!cancelled) {
           const artifact =
@@ -304,10 +308,13 @@ export function useSeriesArtifact(
           setLoaded({ artifact, expectedCapturedAt, url });
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!cancelled) {
           setLoaded({
-            artifact: { status: "not_configured", detail: "本地引擎不可达。" },
+            artifact: {
+              status: "not_configured",
+              detail: artifactFailureDetail(error),
+            },
             expectedCapturedAt,
             url,
           });

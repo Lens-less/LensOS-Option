@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ResearchReport } from "../contracts";
 import { SeriesHistoryView, useSeriesArtifact } from "../components/series/SeriesHistoryView";
 import { SignalValidationView, useSignalArtifact } from "../components/signal/SignalValidationView";
+import { ResearchErrorBoundary } from "../components/shell/ResearchErrorBoundary";
 import { loadPublicReport, type LoadedPublicReport } from "./loadPublicReport";
 import { PublicEvidenceView } from "./PublicEvidenceView";
 import { PublicShell } from "./PublicShell";
@@ -190,18 +191,24 @@ export function PublicApp(): React.JSX.Element {
       view={view}
     >
       {view === "signal" ? (
-        <SignalValidationView artifact={signalArtifact} />
+        <ResearchErrorBoundary label="信号验证视图">
+          <SignalValidationView artifact={signalArtifact} />
+        </ResearchErrorBoundary>
       ) : view === "series" ? (
-        <SeriesHistoryView artifact={seriesArtifact} />
+        <ResearchErrorBoundary label="序列历史视图">
+          <SeriesHistoryView artifact={seriesArtifact} />
+        </ResearchErrorBoundary>
       ) : (
-        <PublicEvidenceView
-          freshness={freshness}
-          report={report}
-          signalSection={
-            <SignalValidationView artifact={signalArtifact} embedded />
-          }
-          summary={state.loaded.summary}
-        />
+        <ResearchErrorBoundary label="公开证据视图">
+          <PublicEvidenceView
+            freshness={freshness}
+            report={report}
+            signalSection={
+              <SignalValidationView artifact={signalArtifact} embedded />
+            }
+            summary={state.loaded.summary}
+          />
+        </ResearchErrorBoundary>
       )}
     </PublicShell>
   );

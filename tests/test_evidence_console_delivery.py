@@ -12,6 +12,68 @@ from crypto_options_report.api import (
 
 
 class EvidenceConsoleDeliveryTests(unittest.TestCase):
+    def test_public_navigation_aliases_serve_every_clickable_page_without_404(self):
+        server = ResearchHTTPServer(
+            ("127.0.0.1", 0),
+            ResearchReportHandler,
+            runtime=RuntimeConfig(profile="development"),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            html_paths = {
+                "/": '<div id="root"></div>',
+                "/index.html": '<div id="root"></div>',
+                "/index.html?view=workbench": '<div id="root"></div>',
+                EVIDENCE_PAGE_PATH: '<div id="root"></div>',
+                f"{EVIDENCE_PAGE_PATH}/": '<div id="root"></div>',
+                f"{EVIDENCE_PAGE_PATH}/index.html?view=signal": '<div id="root"></div>',
+                "/methodology.html": "LensOS Option",
+                f"{EVIDENCE_PAGE_PATH}/methodology.html": "LensOS Option",
+                "/disclaimer.html": "LensOS Option / research only",
+                f"{EVIDENCE_PAGE_PATH}/disclaimer.html": "LensOS Option / research only",
+                "/privacy.html": "loopback",
+                f"{EVIDENCE_PAGE_PATH}/privacy.html": "loopback",
+                "/terms.html": "LensOS Option",
+                f"{EVIDENCE_PAGE_PATH}/terms.html": "LensOS Option",
+                "/status.html": "LOCAL_PREVIEW",
+                f"{EVIDENCE_PAGE_PATH}/status.html": "LOCAL_PREVIEW",
+                "/en/methodology.html": "Methodology",
+                f"{EVIDENCE_PAGE_PATH}/en/methodology.html": "Methodology",
+                "/en/disclaimer.html": "Disclaimer",
+                f"{EVIDENCE_PAGE_PATH}/en/disclaimer.html": "Disclaimer",
+                "/en/privacy.html": "Privacy",
+                f"{EVIDENCE_PAGE_PATH}/en/privacy.html": "Privacy",
+                "/en/terms.html": "Terms",
+                f"{EVIDENCE_PAGE_PATH}/en/terms.html": "Terms",
+                "/en/status.html": "LOCAL_PREVIEW",
+                f"{EVIDENCE_PAGE_PATH}/en/status.html": "LOCAL_PREVIEW",
+            }
+            for path, expected in html_paths.items():
+                with self.subTest(path=path):
+                    status, headers, body = self._request(server.server_port, path)
+                    self.assertEqual(200, status)
+                    self.assertEqual(
+                        "text/html; charset=utf-8",
+                        headers["content-type"],
+                    )
+                    self.assertIn(expected, body.decode("utf-8"))
+
+            for path in (
+                "/static-page.css",
+                f"{EVIDENCE_PAGE_PATH}/static-page.css",
+                f"{EVIDENCE_PAGE_PATH}/en/static-page.css",
+            ):
+                with self.subTest(path=path):
+                    status, headers, body = self._request(server.server_port, path)
+                    self.assertEqual(200, status)
+                    self.assertEqual("text/css; charset=utf-8", headers["content-type"])
+                    self.assertIn(b".page-shell", body)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
     def test_evidence_page_and_built_assets_are_served_from_the_same_origin(self):
         server = ResearchHTTPServer(
             ("127.0.0.1", 0),

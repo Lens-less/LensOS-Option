@@ -3275,6 +3275,23 @@ p {
   line-height: 1.6;
 }
 
+.panel-error {
+  padding: 18px;
+  border: 1px dashed var(--rule-strong);
+  border-top: 3px solid var(--red);
+}
+
+.panel-error h3 {
+  font-size: 16px;
+}
+
+.panel-error p {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .absolute-ev-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

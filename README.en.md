@@ -6,6 +6,10 @@ English · [中文](README.md)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 ![Python >=3.12](https://img.shields.io/badge/Python-%3E%3D3.12-3776AB?logo=python&logoColor=white)
 
+[Documentation](docs/README.md) · [Contributing](CONTRIBUTING.md) ·
+[Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
+[Changelog](CHANGELOG.en.md)
+
 A **pre-entry research tool for crypto options**. It reads public Deribit
 market data, decides whether there is currently an option-selling opportunity
 worth considering, and lays out every piece of evidence that conclusion rests
@@ -28,6 +32,11 @@ Two properties define it:
   missing.
 - **Fail-closed** - missing, expired, or unverifiable evidence always degrades
   to "blocked". **No signal is not the same as permission to proceed.**
+
+![Read-only candidate workbench in the LensOS Option offline demo](docs/assets/lensos-option-demo.png)
+
+_The real UI using the wheel's bundled snapshot: demo labeling,
+`RESEARCH_ONLY · NO_TRADE`, and the blocking reason remain visible._
 
 ## Two Ways To Use It
 
@@ -60,48 +69,23 @@ part of the public bundle.
 
 ## Quickstart
 
-Requires Git and Python 3.12 or newer. There are no third-party runtime
-dependencies, and this path needs no credentials, locally captured output, or
-owner infrastructure.
+Requires Git and Python 3.12 or newer. There are no third-party runtime dependencies,
+and this demo needs no Node.js, API keys, network access, locally captured
+output, or owner infrastructure.
 
 ```powershell
 git clone https://github.com/Lens-less/LensOS-Option.git
 Set-Location LensOS-Option
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade -c constraints.txt pip setuptools
-python -m pip install --no-build-isolation -c constraints.txt -e ".[test]"
-python -m pytest -q
+python -m pip install .
+crypto-options-report demo
 ```
 
-Run one deterministic analysis against the bundled fixture:
-
-```powershell
-python -m crypto_options_report.cli analysis `
-  --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json `
-  --generated-at 2026-07-07T00:01:30Z --compact
-```
-
-Start the local service and open the evidence console. To read a recorded
-snapshot in a browser, you must add `--replay`:
-
-```powershell
-python -m crypto_options_report.api --host 127.0.0.1 --port 8000 --replay `
-  --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json
-```
-
-Then visit <http://127.0.0.1:8000/evidence>.
-
-`--replay` pins the evaluation clock to the snapshot's own capture time. Without
-it, any recorded file older than 60 seconds is blocked by freshness checks - the
-CLI has always done this via `--generated-at` defaulting to `captured_at`, but
-the HTTP side used to have no equivalent. **Replay makes every freshness number
-on the page look like "now"**, so it is a startup parameter, not a browser
-parameter, and every surface shows an unclosable replay banner with the pinned
-time.
-
-Without `--replay`, the service runs in real-time mode and expired snapshots are
-blocked as-is.
+The command binds only to `127.0.0.1` by default and starts a read-only UI using
+a redacted fixed snapshot bundled in the wheel. The page always identifies
+itself as demo / snapshot data; replay is never presented as live market data.
+Press `Ctrl+C` to stop. If the port is occupied, the command reports a clear
+error instead of silently choosing another port. Open the URL it prints (by
+default, <http://127.0.0.1:8000/index.html?view=workbench>) to begin.
 
 > **Seeing lots of "unavailable" and "missing" on a first run is expected.**
 > With no market data source configured, the product refuses to fabricate
@@ -267,7 +251,7 @@ structure each, **without any notion of size**:
 - Marginal contribution is computed by "remove this member" rather than by the
   member's own worst case.
 
-### Is this strike still that expensive yesterday?
+### Was this strike also this expensive yesterday?
 
 Daily capture started as a way to accumulate validation samples, but it also
 answers a different question.
@@ -544,6 +528,10 @@ variable reference is [`.env.example`](.env.example).
 ## Development
 
 ```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade -c constraints.txt pip setuptools
+python -m pip install --no-build-isolation -c constraints.txt -e ".[dev]"
 python -m pytest -q
 python -m ruff check crypto_options_report tools tests
 
@@ -551,11 +539,26 @@ cd web
 npm ci && npm test && npm run lint && npm run build
 ```
 
+Run a deterministic CLI replay against the repository test fixture:
+
+```powershell
+python -m crypto_options_report.cli analysis `
+  --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json `
+  --generated-at 2026-07-07T00:01:30Z --compact
+```
+
+See the [API reference](docs/api-reference.md) for browser replay and the full
+interface. Recorded data enters the service only through the operator-controlled
+`--replay` startup flag; a browser cannot bypass the freshness gate.
+
 `npm run build` updates `crypto_options_report/static/evidence/`. That build
 output ships inside the wheel and the container and **must be committed along
 with the source** - CI verifies the two match.
 
-Contribution workflow and design red lines: [CONTRIBUTING.md](CONTRIBUTING.md).
+Contribution workflow and design red lines are in
+[CONTRIBUTING.md](CONTRIBUTING.md). See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+for community expectations, [SECURITY.md](SECURITY.md) for private vulnerability
+reporting, and [CHANGELOG.en.md](CHANGELOG.en.md) for release changes.
 
 ## Project Map
 

@@ -69,26 +69,28 @@ def build_realized_return_distribution(
 
     observation_count = len(closes)
     overlapping_count = max(0, observation_count - horizon_days)
-    independent_count = observation_count // horizon_days if horizon_days else 0
+    # Stride by the horizon so no two windows share an observation. The strided
+    # count can trail `observation_count // horizon_days` by one when the
+    # observation count is an exact multiple of the horizon, so the gate and
+    # every reported count must derive from this actual sample.
+    independent_returns = [
+        (closes[index + horizon_days] / closes[index]) - 1.0
+        for index in range(0, overlapping_count, horizon_days)
+    ]
 
-    if overlapping_count <= 0 or independent_count < MIN_INDEPENDENT_WINDOWS:
+    if overlapping_count <= 0 or len(independent_returns) < MIN_INDEPENDENT_WINDOWS:
         return {
             **base,
             **_blocked(INSUFFICIENT_HISTORY),
             "observation_count": observation_count,
             "overlapping_window_count": overlapping_count,
-            "independent_window_count": independent_count,
+            "independent_window_count": len(independent_returns),
             "minimum_independent_windows": MIN_INDEPENDENT_WINDOWS,
         }
 
     overlapping_returns = [
         (closes[index + horizon_days] / closes[index]) - 1.0
         for index in range(overlapping_count)
-    ]
-    # Stride by the horizon so no two windows share an observation.
-    independent_returns = [
-        (closes[index + horizon_days] / closes[index]) - 1.0
-        for index in range(0, observation_count - horizon_days, horizon_days)
     ]
 
     daily_log_returns = [

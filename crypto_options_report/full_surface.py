@@ -8,6 +8,7 @@ FULL_SYSTEM_SURFACE_SCHEMA_VERSION = "full_system_surface_report.v1"
 
 CLI_COMMANDS = [
     "analysis",
+    "demo",
     "report",
     "ingest",
     "ingestion-status",

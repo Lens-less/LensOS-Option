@@ -619,4 +619,9 @@ def _utc_now() -> str:
 def _parse_ms(value: str | None) -> int:
     if not value:
         return int(datetime.now(UTC).timestamp() * 1000)
-    return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
+    if not isinstance(value, str):
+        raise ValueError("generated_at must be an RFC3339 timestamp")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("generated_at must include a timezone")
+    return int(parsed.timestamp() * 1000)

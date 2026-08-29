@@ -18,18 +18,21 @@ export function ReplayBanner({
     return null;
   }
   const clock = context.evaluation_clock ?? null;
+  const isDemo = context.demo_mode === true;
   return (
     <div className="replay-banner" role="status">
-      <span className="replay-banner-tag">回放</span>
+      <span className="replay-banner-tag">{isDemo ? "演示 / 快照数据" : "回放"}</span>
       <p>
-        评估时钟已固定在快照采集时刻
+        {isDemo ? "当前界面显示的是随安装包提供的演示快照。" : "评估时钟已固定在快照采集时刻"}
         {clock ? (
           <>
             {" "}
             <time dateTime={clock}>{clock}</time>
           </>
         ) : null}
-        ；新鲜度从该时刻的报告读数起算，页面载入后继续计时，超限仍会阻断。这不是当前行情。
+        {isDemo
+          ? " 它只用于本地只读演示；新鲜度与阻断逻辑仍会继续生效，不会伪装成当前行情。"
+          : "；新鲜度从该时刻的报告读数起算，页面载入后继续计时，超限仍会阻断。这不是当前行情。"}
       </p>
       {context.snapshot_fixture ? (
         <code className="replay-banner-source">{context.snapshot_fixture}</code>

@@ -13,7 +13,7 @@ function emitManifest(): Plugin {
     name: "emit-extension-manifest",
     generateBundle() {
       const manifest = readFileSync(
-        resolve(__dirname, "extension/manifest.json"),
+        resolve(import.meta.dirname, "extension/manifest.json"),
         "utf8",
       );
       this.emitFile({
@@ -26,12 +26,12 @@ function emitManifest(): Plugin {
         this.emitFile({
           type: "asset",
           fileName: `icons/${name}`,
-          source: readFileSync(resolve(__dirname, "extension/icons", name)),
+          source: readFileSync(resolve(import.meta.dirname, "extension/icons", name)),
         });
       }
     },
     writeBundle() {
-      const distDir = resolve(__dirname, "dist/chrome-extension");
+      const distDir = resolve(import.meta.dirname, "dist/chrome-extension");
       const nestedDir = resolve(distDir, "extension");
       const nestedSidepanel = resolve(nestedDir, "sidepanel.html");
       const rootSidepanel = resolve(distDir, "sidepanel.html");
@@ -61,9 +61,9 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       input: {
-        sidepanel: resolve(__dirname, "extension/sidepanel.html"),
-        "service-worker": resolve(__dirname, "src/extension/service-worker.ts"),
-        "content-script": resolve(__dirname, "src/extension/content-script.ts"),
+        sidepanel: resolve(import.meta.dirname, "extension/sidepanel.html"),
+        "service-worker": resolve(import.meta.dirname, "src/extension/service-worker.ts"),
+        "content-script": resolve(import.meta.dirname, "src/extension/content-script.ts"),
       },
       output: {
         entryFileNames: "assets/[name].js",

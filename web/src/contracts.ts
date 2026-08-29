@@ -39,6 +39,7 @@ export interface EvidenceDataStatus {
     endpoints?: {
       vol_index?: {
         status?: string;
+        /** Fraction of one (`volatility_unit: "fraction"`); 0.3766 = 37.66%. */
         volatility?: number | null;
         index_name?: string;
         age_sec?: number | null;
@@ -510,6 +511,7 @@ export interface RuntimeContext {
   profile?: string;
   mode?: "live" | "replay" | "published";
   replay?: boolean;
+  demo_mode?: boolean;
   evaluation_clock?: string | null;
   snapshot_fixture?: string | null;
   live_fetch_allowed?: boolean;

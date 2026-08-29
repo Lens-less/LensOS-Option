@@ -60,6 +60,7 @@ include = ["crypto_options_report*"]
 crypto_options_report = [
     "static/*.html",
     "static/evidence/*.html",
+    "static/evidence/*.css",
     "static/evidence/en/*.html",
     "static/evidence/assets/*.css",
     "static/evidence/assets/*.js",

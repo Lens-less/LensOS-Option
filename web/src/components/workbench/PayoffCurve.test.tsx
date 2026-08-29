@@ -19,6 +19,21 @@ describe("PayoffCurve", () => {
     );
   });
 
+  it("withholds the curve when the strike order implies a negative width", () => {
+    render(
+      <PayoffCurve
+        creditUsdc={400}
+        longStrikeUsdc={66_000}
+        shortStrikeUsdc={71_000}
+        spotUsdc={65_000}
+        structureKind="spread"
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "无法用两腿上行结构表达",
+    );
+  });
+
   it("draws a naked short call with an honest unbounded loss tail", () => {
     render(
       <PayoffCurve

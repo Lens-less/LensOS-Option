@@ -54,6 +54,7 @@ from .market_data import (
     snapshot_trust_state_path,
     validate_deribit_base_url,
 )
+from .public_status_page import render_public_status_html
 from .sidecar_auth import (
     authenticate_sidecar_payload,
     authenticated_projection,
@@ -68,10 +69,45 @@ SERIES_PATH = "/research/series"
 REPORT_ALIASES = {REPORT_PATH, "/report"}
 ANALYSIS_RESULT_PATH = "/analysis/result"
 DASHBOARD_PAGE_PATH = "/dashboard.html"
-DASHBOARD_PAGE_ALIASES = {"/", DASHBOARD_PAGE_PATH, "/dashboard/page"}
+DASHBOARD_PAGE_ALIASES = {"/", "/index.html", DASHBOARD_PAGE_PATH, "/dashboard/page"}
 EVIDENCE_PAGE_PATH = "/evidence"
-EVIDENCE_PAGE_ALIASES = {EVIDENCE_PAGE_PATH, f"{EVIDENCE_PAGE_PATH}/"}
+EVIDENCE_PAGE_ALIASES = {
+    EVIDENCE_PAGE_PATH,
+    f"{EVIDENCE_PAGE_PATH}/",
+    f"{EVIDENCE_PAGE_PATH}/index.html",
+}
 EVIDENCE_ASSET_PREFIX = f"{EVIDENCE_PAGE_PATH}/assets/"
+STATIC_PAGE_STYLESHEET_PATHS = {
+    "/static-page.css",
+    f"{EVIDENCE_PAGE_PATH}/static-page.css",
+    f"{EVIDENCE_PAGE_PATH}/en/static-page.css",
+}
+PUBLIC_EVIDENCE_STATIC_PAGES = {
+    "/methodology.html": "methodology.html",
+    "/disclaimer.html": "disclaimer.html",
+    "/privacy.html": "privacy.html",
+    "/terms.html": "terms.html",
+    "/en/methodology.html": "en/methodology.html",
+    "/en/disclaimer.html": "en/disclaimer.html",
+    "/en/privacy.html": "en/privacy.html",
+    "/en/terms.html": "en/terms.html",
+}
+PUBLIC_STATUS_PAGE_PATHS = {
+    "/status.html": "zh-CN",
+    "/en/status.html": "en",
+}
+PUBLIC_EVIDENCE_STATIC_PAGES.update(
+    {
+        f"{EVIDENCE_PAGE_PATH}{path}": relative_path
+        for path, relative_path in tuple(PUBLIC_EVIDENCE_STATIC_PAGES.items())
+    }
+)
+PUBLIC_STATUS_PAGE_PATHS.update(
+    {
+        f"{EVIDENCE_PAGE_PATH}{path}": language
+        for path, language in tuple(PUBLIC_STATUS_PAGE_PATHS.items())
+    }
+)
 GET_SURFACE_PATHS = {
     ANALYSIS_RESULT_PATH,
     SIGNAL_PATH,
@@ -225,6 +261,7 @@ class RuntimeConfig:
     # operator controlled; a browser cannot turn an arbitrary fixture into a
     # published edition.
     published: bool = False
+    demo_mode: bool = False
     access_log: bool | None = None
     historical_fixture: str | None = None
     underlying_history_fixture: str | None = None
@@ -369,8 +406,9 @@ class ResearchHTTPServer(ThreadingHTTPServer):
 
     def server_close(self) -> None:
         try:
-            if self.backtest_jobs is not None:
-                self.backtest_jobs.close()
+            backtest_jobs = getattr(self, "backtest_jobs", None)
+            if backtest_jobs is not None:
+                backtest_jobs.close()
         finally:
             super().server_close()
 
@@ -594,6 +632,25 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
             return
         if parsed.path in EVIDENCE_PAGE_ALIASES:
             self._write_evidence_html(HTTPStatus.OK, evidence_page_html())
+            return
+        if parsed.path in PUBLIC_EVIDENCE_STATIC_PAGES:
+            self._write_evidence_html(
+                HTTPStatus.OK,
+                evidence_static_page_html(PUBLIC_EVIDENCE_STATIC_PAGES[parsed.path]),
+            )
+            return
+        if parsed.path in PUBLIC_STATUS_PAGE_PATHS:
+            self._write_evidence_html(
+                HTTPStatus.OK,
+                local_status_page_html(language=PUBLIC_STATUS_PAGE_PATHS[parsed.path]),
+            )
+            return
+        if parsed.path in STATIC_PAGE_STYLESHEET_PATHS:
+            self._write_response(
+                HTTPStatus.OK,
+                evidence_static_page_asset("static-page.css"),
+                content_type="text/css; charset=utf-8",
+            )
             return
         if parsed.path.startswith(EVIDENCE_ASSET_PREFIX):
             asset_name = parsed.path.removeprefix(EVIDENCE_ASSET_PREFIX)
@@ -1223,6 +1280,22 @@ def evidence_page_html() -> str:
     )
 
 
+def evidence_static_page_html(relative_path: str) -> str:
+    return (
+        files("crypto_options_report")
+        .joinpath("static", "evidence", *relative_path.split("/"))
+        .read_text(encoding="utf-8")
+    )
+
+
+def evidence_static_page_asset(name: str) -> bytes:
+    return (
+        files("crypto_options_report")
+        .joinpath("static", "evidence", name)
+        .read_bytes()
+    )
+
+
 def evidence_asset(asset_name: str) -> tuple[bytes, str]:
     if not _EVIDENCE_ASSET_NAME.fullmatch(asset_name):
         raise ValueError("invalid evidence asset name")
@@ -1243,6 +1316,27 @@ def evidence_asset(asset_name: str) -> tuple[bytes, str]:
     )
 
 
+def local_status_page_html(*, language: str) -> str:
+    return render_public_status_html(
+        {
+            "published_at": "local_preview_not_published",
+            "next_expected_at": "local_preview_not_scheduled",
+            "stale_after": "local_preview_not_applicable",
+            "research_publication_status": "LOCAL_PREVIEW",
+            "execution_authorization_status": "NO-GO",
+            "is_stale_at_publish": False,
+            "publish_manifest_status": "not_applicable",
+            "publication_history": {
+                "status": "collecting",
+                "window_days": 30,
+                "history": [],
+                "reason": "Local API preview has no durable publication receipts yet.",
+            },
+        },
+        language=language,
+    )
+
+
 def validate_evidence_bundle() -> None:
     html = evidence_page_html()
     asset_names = _EVIDENCE_BUNDLE_REFERENCE.findall(html)
@@ -1250,6 +1344,11 @@ def validate_evidence_bundle() -> None:
         raise FileNotFoundError("evidence bundle has no static assets")
     for asset_name in asset_names:
         evidence_asset(asset_name)
+    for relative_path in PUBLIC_EVIDENCE_STATIC_PAGES.values():
+        evidence_static_page_html(relative_path)
+    evidence_static_page_asset("static-page.css")
+    for language in PUBLIC_STATUS_PAGE_PATHS.values():
+        local_status_page_html(language=language)
 
 
 def readiness_payload(
@@ -1781,18 +1880,29 @@ def _runtime_context(runtime: RuntimeConfig) -> dict[str, Any]:
         "profile": runtime.profile,
         "mode": mode,
         "replay": bool(replay_clock),
+        "demo_mode": runtime.demo_mode,
         "evaluation_clock": evaluation_clock,
-        "snapshot_fixture": runtime.snapshot_fixture if evaluation_clock else None,
+        "snapshot_fixture": (
+            "packaged:demo-snapshot.json"
+            if runtime.demo_mode and evaluation_clock
+            else (runtime.snapshot_fixture if evaluation_clock else None)
+        ),
         "live_fetch_allowed": runtime.allow_live_fetch,
         "notice": (
-            "Evaluation clock pinned to the snapshot's capture time. Freshness "
-            "figures describe that instant, not now."
-            if replay_clock
+            "Bundled demo snapshot: evaluation is pinned to the snapshot's "
+            "capture time, and every surface remains read-only. This is not "
+            "live market data or a trade conclusion."
+            if runtime.demo_mode and replay_clock
             else (
-                "Published edition evaluated at the capture time; wall-clock age "
-                "and publication-stall state are declared separately."
-                if published_clock
-                else None
+                "Evaluation clock pinned to the snapshot's capture time. Freshness "
+                "figures describe that instant, not now."
+                if replay_clock
+                else (
+                    "Published edition evaluated at the capture time; wall-clock age "
+                    "and publication-stall state are declared separately."
+                    if published_clock
+                    else None
+                )
             )
         ),
     }
