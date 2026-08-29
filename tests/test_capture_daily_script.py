@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import shutil
+import stat
 import subprocess
 import sys
 import textwrap
@@ -137,15 +138,33 @@ class CaptureDailyContractTests(unittest.TestCase):
             encoding="utf-8",
         )
         commands = {
-            "crypto-options-report.cmd": "snapshot",
-            "crypto-options-underlying-history.cmd": "underlying",
-            "crypto-options-dvol-history.cmd": "dvol",
+            "crypto-options-report": "snapshot",
+            "crypto-options-underlying-history": "underlying",
+            "crypto-options-dvol-history": "dvol",
         }
         for command_name, tool_name in commands.items():
-            (bin_root / command_name).write_text(
+            (bin_root / f"{command_name}.cmd").write_text(
                 f'@echo off\r\n"{sys.executable}" "%~dp0capture_stub.py" {tool_name} %*\r\n',
                 encoding="utf-8",
             )
+            if os.name != "nt":
+                executable = bin_root / command_name
+                executable.write_text(
+                    f"#!{sys.executable}\n"
+                    "import os\n"
+                    "import sys\n\n"
+                    f"os.execv({sys.executable!r}, ["
+                    f"{sys.executable!r}, "
+                    "os.path.join(os.path.dirname(__file__), 'capture_stub.py'), "
+                    f"{tool_name!r}, *sys.argv[1:]])\n",
+                    encoding="utf-8",
+                )
+                executable.chmod(
+                    executable.stat().st_mode
+                    | stat.S_IXUSR
+                    | stat.S_IXGRP
+                    | stat.S_IXOTH
+                )
 
     def test_capture_script_declares_hardened_stages_and_summary_contract(self) -> None:
         source = self.SCRIPT.read_text(encoding="utf-8")
