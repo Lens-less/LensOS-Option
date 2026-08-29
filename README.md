@@ -3,11 +3,13 @@
 [English](README.en.md) · 中文
 
 [![CI](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml/badge.svg)](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Lens-less/LensOS-Option)](https://github.com/Lens-less/LensOS-Option/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 ![Python >=3.12](https://img.shields.io/badge/Python-%3E%3D3.12-3776AB?logo=python&logoColor=white)
 
 [文档](docs/README.md) · [参与贡献](CONTRIBUTING.md) · [安全政策](SECURITY.md) ·
-[社区行为准则](CODE_OF_CONDUCT.md) · [变更记录](CHANGELOG.md)
+[社区行为准则](CODE_OF_CONDUCT.md) · [变更记录](CHANGELOG.md) ·
+[v0.1.0 发布说明](docs/releases/v0.1.0.md)
 
 一个**期权入场前的研究工具**：它读取 Deribit 的公开行情，判断“现在有没有一个
 值得考虑的卖方机会”，并把结论所依赖的每一份证据都摊开给你看。
@@ -43,6 +45,8 @@ CLI 与 HTTP API 是驱动这两个界面的**本地引擎接口**，供集成�
 
 ## 公开发布
 
+- 当前稳定版本是 [`v0.1.0`](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0)；
+  wheel、Chrome 扩展 ZIP、校验和与完整说明均从 GitHub Release 提供。
 - 代码以 `Apache-2.0` 许可发布，见 [`LICENSE`](LICENSE)。
 - 公开数据产物与生成的公开研究内容以 `CC BY 4.0` 许可发布，见
   [`LICENSE-DATA`](LICENSE-DATA)。
@@ -56,8 +60,15 @@ CLI 与 HTTP API 是驱动这两个界面的**本地引擎接口**，供集成�
 
 ## 快速开始
 
-需要 Git 与 Python ≥ 3.12。运行时零第三方依赖；以下演示不需要 Node、API 密钥、外网、
-本地采集产物或任何 owner 基础设施。
+只需 Python ≥ 3.12。以下两条命令直接安装正式 wheel 并打开演示：
+
+```powershell
+python -m pip install https://github.com/Lens-less/LensOS-Option/releases/download/v0.1.0/crypto_options_research_console-0.1.0-py3-none-any.whl
+crypto-options-report demo
+```
+
+wheel 安装完成后，演示运行时零第三方依赖，不需要 Node、API 密钥、外网、本地采集产物
+或任何 owner 基础设施。若要从源码安装：
 
 ```powershell
 git clone https://github.com/Lens-less/LensOS-Option.git
@@ -397,7 +408,13 @@ Evidence Console 与 API **固定同源**，避免跨源配置和浏览器参数
 
 ### Chrome 研究伴侣（个人本地）
 
-面向个人本地使用的 Manifest V3 侧边栏（Chrome 114+）：
+面向个人本地使用的 Manifest V3 侧边栏（Chrome 114+）。从
+[`v0.1.0` Release](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0)
+下载 `lensos-option-chrome-extension-v0.1.0.zip` 并解压；先运行
+`crypto-options-report demo`，再在 `chrome://extensions` 打开“开发者模式”→
+“加载已解压的扩展程序”→选择解压后的目录。
+
+从源码构建时：
 
 ```powershell
 cd web
@@ -405,8 +422,7 @@ npm ci
 npm run build:extension
 ```
 
-在 `chrome://extensions` 打开“开发者模式”→“加载已解压的扩展程序”→ 选择
-`web/dist/chrome-extension/`，然后在 Deribit 页面点击工具栏图标。
+选择 `web/dist/chrome-extension/`，然后在 Deribit 页面点击工具栏图标。
 
 侧边栏只读取 `http://127.0.0.1:<port>/research/report`，只识别当前 Deribit 合约并
 展示研究上下文；**不包含订单、交易、张数或 sizing 控件**。合约上下文按标签页隔离。

@@ -1316,15 +1316,15 @@ def evidence_static_page_asset(name: str) -> bytes:
 
 
 def public_license_asset(name: str) -> bytes:
-    for distribution_name in ("crypto-options-report", "crypto_options_report"):
-        try:
-            distribution = metadata.distribution(distribution_name)
-        except metadata.PackageNotFoundError:
+    try:
+        distribution = metadata.distribution("crypto-options-research-console")
+    except metadata.PackageNotFoundError:
+        distribution = None
+    package_files = (distribution.files or ()) if distribution is not None else ()
+    for package_file in package_files:
+        if package_file.name != name:
             continue
-        for package_file in distribution.files or ():
-            if package_file.name != name:
-                continue
-            return distribution.locate_file(package_file).read_bytes()
+        return distribution.locate_file(package_file).read_bytes()
     return Path(__file__).resolve().parent.parent.joinpath(name).read_bytes()
 
 

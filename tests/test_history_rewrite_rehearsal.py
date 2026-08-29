@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,10 +14,20 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "rehearse-public-history-rewrite.py"
 
 
+def _private_env() -> dict[str, str]:
+    return {
+        "LENSOS_HISTORY_REWRITE_PRIVATE_USER_ID": "local-" + "user-123",
+        "LENSOS_HISTORY_REWRITE_PRIVATE_AUTHOR_ID": "author-" + "456",
+        "LENSOS_HISTORY_REWRITE_PRIVATE_EMAIL": "maintainer-" + "private@example.invalid",
+        "LENSOS_HISTORY_REWRITE_PRIVATE_NAME": "Local " + "Maintainer",
+    }
+
+
 def _load_tool():
     spec = importlib.util.spec_from_file_location("history_rewrite_tool", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -33,7 +44,12 @@ def _git(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _plan(*extra: str) -> subprocess.CompletedProcess[str]:
+def _plan(*extra: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    process_env = os.environ.copy()
+    for variable in _private_env():
+        process_env.pop(variable, None)
+    if env is not None:
+        process_env.update(env)
     return subprocess.run(
         [
             sys.executable,
@@ -55,12 +71,18 @@ def _plan(*extra: str) -> subprocess.CompletedProcess[str]:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=process_env,
         timeout=30,
     )
 
 
+def _private_identity(tool):
+    return tool._load_private_identity(_private_env())
+
+
 def test_plan_preserves_only_the_current_static_bundle_and_never_pushes() -> None:
-    completed = _plan()
+    private_env = _private_env()
+    completed = _plan(env=private_env)
 
     assert completed.returncode == 0, completed.stderr
     plan = json.loads(completed.stdout)
@@ -139,20 +161,49 @@ def test_plan_preserves_only_the_current_static_bundle_and_never_pushes() -> Non
     assert plan["sensitive_data_removal_mode"] is True
     assert plan["public_ref_allowlist"] == ["refs/heads/main"]
     assert plan["remote_pr_refs_checked"] is False
+    assert plan["replacement_marker_categories"] == [
+        "private_user_id",
+        "private_author_id",
+        "private_email",
+        "private_name",
+    ]
+    assert plan["replacement_marker_count"] == 4
+    for value in private_env.values():
+        assert value not in completed.stdout
 
 
 def test_final_mode_rejects_a_placeholder_public_identity() -> None:
-    completed = _plan("--identity-mode", "final")
+    completed = _plan("--identity-mode", "final", env=_private_env())
 
     assert completed.returncode != 0
     assert "final identity must not use a placeholder domain" in completed.stderr
 
 
 def test_plan_can_select_a_new_repository_cutover() -> None:
-    completed = _plan("--cutover-target", "new-repository")
+    completed = _plan("--cutover-target", "new-repository", env=_private_env())
 
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout)["cutover_target"] == "new-repository"
+
+
+def test_plan_fails_closed_without_private_identity_environment() -> None:
+    completed = _plan()
+
+    assert completed.returncode != 0
+    assert "set all four variables" in completed.stderr
+
+
+def test_plan_fails_closed_with_partial_private_identity_environment() -> None:
+    completed = _plan(
+        env={
+            key: value
+            for key, value in _private_env().items()
+            if key != "LENSOS_HISTORY_REWRITE_PRIVATE_NAME"
+        }
+    )
+
+    assert completed.returncode != 0
+    assert "set all four variables" in completed.stderr
 
 
 def test_rewrite_mirror_disables_local_clone_optimization() -> None:
@@ -171,22 +222,42 @@ def test_validation_clone_explicitly_checks_out_rewritten_main() -> None:
 
 def test_registered_identity_scan_detects_utf16_binary_blob() -> None:
     tool = _load_tool()
-    private_name = "LENS\\" + "28" + "340"
+    private_identity = _private_identity(tool)
+    private_name = private_identity.private_name
     payload = b"\x00binary\x00" + private_name.swapcase().encode("utf-16-le") + b"\x00"
 
-    hits = tool._registered_token_hits(payload)
+    hits = tool._registered_token_hits(payload, private_identity)
 
-    assert any(hit["token"].casefold() == private_name.casefold() for hit in hits)
+    assert any(hit["category"] == "private_name" for hit in hits)
     assert any(hit["encoding"] == "utf-16-le" for hit in hits)
+
+
+@pytest.mark.parametrize("encoding", ("utf-8", "utf-16-le", "utf-16-be"))
+def test_registered_identity_scan_casefolds_unicode_binary_tokens(
+    encoding: str,
+) -> None:
+    tool = _load_tool()
+    private_identity = tool._private_identity_from_values(
+        private_user_id="local-" + "user-123",
+        private_author_id="author-" + "456",
+        private_email="maintainer-" + "private@example.invalid",
+        private_name="Éclair " + "Maintainer",
+    )
+    payload = b"\xff" + "ÉCLAIR MAINTAINER".encode(encoding) + b"\xff"
+
+    hits = tool._registered_token_hits(payload, private_identity)
+
+    assert {"category": "private_name", "encoding": encoding} in hits
 
 
 def test_reachable_blob_scan_detects_registered_identity_in_binary_git_blob() -> None:
     tool = _load_tool()
+    private_identity = _private_identity(tool)
     with TemporaryDirectory() as temporary_root:
         repository = Path(temporary_root) / "repository"
         repository.mkdir()
         _git("init", "-b", "main", cwd=repository)
-        private_name = "LENS\\" + "28" + "340"
+        private_name = private_identity.private_name
         (repository / "opaque.bin").write_bytes(
             b"\x00binary\xff" + private_name.swapcase().encode("utf-16-be") + b"\x00"
         )
@@ -202,9 +273,9 @@ def test_reachable_blob_scan_detects_registered_identity_in_binary_git_blob() ->
             cwd=repository,
         )
 
-        hits = tool._scan_reachable_blob_tokens(repository)
+        hits = tool._scan_reachable_blob_tokens(repository, private_identity)
 
-    assert any(hit["token"].casefold() == private_name.casefold() for hit in hits)
+    assert any(hit["category"] == "private_name" for hit in hits)
     assert any(hit["encoding"] == "utf-16-be" for hit in hits)
 
 
@@ -255,14 +326,7 @@ def test_final_sync_uses_live_origin_instead_of_cached_tracking_ref() -> None:
 
 
 def test_current_tracked_tree_contains_no_registered_private_identity_tokens() -> None:
-    private_user_id = "28" + "340"
-    private_author_id = private_user_id + "0448"
-    tokens = (
-        private_user_id,
-        private_author_id,
-        f"{private_author_id}@qq.com",
-        "LENS\\" + private_user_id,
-    )
+    tokens = tuple(_private_env().values())
 
     for token in tokens:
         completed = subprocess.run(
@@ -294,6 +358,8 @@ def test_public_cutover_docs_keep_history_and_raw_artifacts_fail_closed() -> Non
     assert "passed_with_remote_blockers" in history
     assert "refs/heads/main" in history
     assert "new private repository" in history
+    assert "LENSOS_HISTORY_REWRITE_PRIVATE_EMAIL" in history
+    assert "replacement marker categories and counts" in history
     assert "new empty private repository" in cutover
     assert "Inventory all existing" in cutover
     assert "public-history-rewrite.md" in docs_map
