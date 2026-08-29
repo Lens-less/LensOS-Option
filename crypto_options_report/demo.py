@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import socket
 import sys
 import webbrowser
 from collections.abc import Iterator, Sequence
@@ -19,6 +20,22 @@ DEMO_SNAPSHOT_RESOURCE = "demo-snapshot.json"
 DEMO_UNDERLYING_RESOURCE = "demo-underlying-history.json"
 DEMO_SIGNAL_RESOURCE = "demo-signal-preflight.json"
 DEMO_SERIES_RESOURCE = "demo-series-history.json"
+
+
+class DemoHTTPServer(ResearchHTTPServer):
+    """Loopback server that reserves its demo port for one process."""
+
+    _exclusive_address_use = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+    allow_reuse_address = _exclusive_address_use is None
+
+    def server_bind(self) -> None:
+        if self._exclusive_address_use is not None:
+            self.socket.setsockopt(
+                socket.SOL_SOCKET,
+                self._exclusive_address_use,
+                1,
+            )
+        super().server_bind()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,7 +95,7 @@ def run_demo(
 
     with demo_runtime() as runtime:
         try:
-            server = ResearchHTTPServer(
+            server = DemoHTTPServer(
                 (DEMO_HOST, port),
                 ResearchReportHandler,
                 runtime=runtime,

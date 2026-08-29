@@ -94,13 +94,64 @@ def test_demo_reports_port_conflict_clearly() -> None:
     assert demo.DEMO_HOST in stderr.getvalue()
 
 
+def test_demo_server_rejects_a_second_demo_on_the_same_port() -> None:
+    with demo.demo_runtime() as runtime:
+        server = demo.DemoHTTPServer(
+            (demo.DEMO_HOST, 0),
+            ResearchReportHandler,
+            runtime=runtime,
+        )
+        duplicate = None
+        try:
+            try:
+                duplicate = demo.DemoHTTPServer(
+                    (demo.DEMO_HOST, server.server_port),
+                    ResearchReportHandler,
+                    runtime=runtime,
+                )
+            except OSError as exc:
+                assert demo._is_address_in_use(exc)
+            else:
+                raise AssertionError("a second demo unexpectedly reused the occupied port")
+        finally:
+            if duplicate is not None:
+                duplicate.server_close()
+            server.server_close()
+
+
+def test_demo_server_can_restart_on_the_same_port_after_serving_a_request() -> None:
+    with demo.demo_runtime() as runtime:
+        server = demo.DemoHTTPServer(
+            (demo.DEMO_HOST, 0),
+            ResearchReportHandler,
+            runtime=runtime,
+        )
+        port = server.server_port
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, _, _ = _request(port, "/status.html")
+            assert status == 200
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        restarted = demo.DemoHTTPServer(
+            (demo.DEMO_HOST, port),
+            ResearchReportHandler,
+            runtime=runtime,
+        )
+        restarted.server_close()
+
+
 def test_demo_ctrl_c_shuts_down_cleanly() -> None:
     server = mock.Mock(server_port=8000)
     server.serve_forever.side_effect = KeyboardInterrupt
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    with mock.patch.object(demo, "ResearchHTTPServer", return_value=server):
+    with mock.patch.object(demo, "DemoHTTPServer", return_value=server):
         exit_code = demo.run_demo(
             port=8000,
             open_browser=False,
