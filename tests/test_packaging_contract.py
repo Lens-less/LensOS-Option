@@ -78,6 +78,7 @@ def test_shared_constraints_pin_the_toolchain_used_by_ci_and_the_wheel_builds() 
     assert "wheel-venv\\Scripts\\python.exe -m pip install --no-deps -c constraints.txt $wheel" in ci_workflow
     assert "pip install" not in dockerfile
     assert "COPY --chown=app:app crypto_options_report ./crypto_options_report" in dockerfile
+    assert "COPY --chown=app:app LICENSE LICENSE-DATA ./" in dockerfile
 
 
 def _run_build_py(build_lib: Path) -> subprocess.CompletedProcess[str]:

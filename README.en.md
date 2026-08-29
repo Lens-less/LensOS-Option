@@ -3,12 +3,13 @@
 English · [中文](README.md)
 
 [![CI](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml/badge.svg)](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Lens-less/LensOS-Option)](https://github.com/Lens-less/LensOS-Option/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 ![Python >=3.12](https://img.shields.io/badge/Python-%3E%3D3.12-3776AB?logo=python&logoColor=white)
 
 [Documentation](docs/README.md) · [Contributing](CONTRIBUTING.md) ·
 [Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
-[Changelog](CHANGELOG.en.md)
+[Changelog](CHANGELOG.en.md) · [v0.1.0 release notes](docs/releases/v0.1.0.md)
 
 A **pre-entry research tool for crypto options**. It reads public Deribit
 market data, decides whether there is currently an option-selling opportunity
@@ -54,6 +55,8 @@ part of the public bundle.
 
 ## Public Release
 
+- The current stable release is [`v0.1.0`](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0),
+  with the wheel, Chrome extension ZIP, checksums, and full notes on GitHub.
 - Code is licensed under `Apache-2.0`; see [`LICENSE`](LICENSE).
 - Public data artifacts and generated public research content are licensed
   under `CC BY 4.0`; see [`LICENSE-DATA`](LICENSE-DATA).
@@ -69,9 +72,17 @@ part of the public bundle.
 
 ## Quickstart
 
-Requires Git and Python 3.12 or newer. There are no third-party runtime dependencies,
-and this demo needs no Node.js, API keys, network access, locally captured
-output, or owner infrastructure.
+Requires Python 3.12 or newer. Install the release wheel and open the demo in
+two commands:
+
+```powershell
+python -m pip install https://github.com/Lens-less/LensOS-Option/releases/download/v0.1.0/crypto_options_research_console-0.1.0-py3-none-any.whl
+crypto-options-report demo
+```
+
+After the wheel is installed, the demo has no third-party runtime dependencies
+and needs no Node.js, API keys, network access, locally captured output, or
+owner infrastructure. To install from source instead:
 
 ```powershell
 git clone https://github.com/Lens-less/LensOS-Option.git
@@ -494,7 +505,13 @@ contracts are in the [API reference](docs/api-reference.md).
 
 ### Chrome research companion (personal, local)
 
-A Manifest V3 side panel for Chrome 114+, intended for personal local use:
+A Manifest V3 side panel for Chrome 114+, intended for personal local use.
+Download and extract `lensos-option-chrome-extension-v0.1.0.zip` from the
+[`v0.1.0` Release](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0).
+Start `crypto-options-report demo`, then enable Developer mode in
+`chrome://extensions`, choose "Load unpacked", and select the extracted folder.
+
+To build it from source:
 
 ```powershell
 cd web
@@ -502,8 +519,8 @@ npm ci
 npm run build:extension
 ```
 
-In `chrome://extensions`, enable Developer mode -> "Load unpacked" -> select
-`web/dist/chrome-extension/`, then click the toolbar icon on a Deribit page.
+Select `web/dist/chrome-extension/`, then click the toolbar icon on a Deribit
+page.
 
 The side panel only reads `http://127.0.0.1:<port>/research/report`. It
 identifies the current Deribit contract and shows research context; it contains

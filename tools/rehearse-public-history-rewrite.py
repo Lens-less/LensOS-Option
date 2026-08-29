@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -17,7 +18,7 @@ import sys
 from collections.abc import Sequence
 from email.utils import parseaddr
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 FILTER_REPO_VERSION = "2.47.0"
 FILTER_REPO_BUILD_ID = "a40bce548d2c"
@@ -42,12 +43,13 @@ BASE_REMOVED_PATHS = (
     "tests/test_options_platform_projection_v2.py",
     "tests/test_options_platform_remote_cli_v2.py",
 )
-PRIVATE_USER_ID = "28" + "340"
-PRIVATE_AUTHOR_ID = PRIVATE_USER_ID + "0448"
-PRIVATE_EMAIL = f"{PRIVATE_AUTHOR_ID}@qq.com"
-PRIVATE_NAME = "LENS\\" + PRIVATE_USER_ID
-PRIVATE_TOKENS = (PRIVATE_USER_ID, PRIVATE_AUTHOR_ID, PRIVATE_EMAIL, PRIVATE_NAME)
-BANNED_TEXT_TOKENS = PRIVATE_TOKENS
+PRIVATE_ENVIRONMENT_VARIABLES = {
+    "private_user_id": "LENSOS_HISTORY_REWRITE_PRIVATE_USER_ID",
+    "private_author_id": "LENSOS_HISTORY_REWRITE_PRIVATE_AUTHOR_ID",
+    "private_email": "LENSOS_HISTORY_REWRITE_PRIVATE_EMAIL",
+    "private_name": "LENSOS_HISTORY_REWRITE_PRIVATE_NAME",
+}
+PRIVATE_TOKEN_LABELS = tuple(PRIVATE_ENVIRONMENT_VARIABLES)
 ALLOWED_BOT_IDENTITIES = {
     "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
     "GitHub <noreply@github.com>",
@@ -56,6 +58,59 @@ ALLOWED_BOT_IDENTITIES = {
 
 class RewriteError(RuntimeError):
     """Expected fail-closed rehearsal error."""
+
+
+class PrivateIdentity(NamedTuple):
+    private_user_id: str
+    private_author_id: str
+    private_email: str
+    private_name: str
+
+    def items(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("private_user_id", self.private_user_id),
+            ("private_author_id", self.private_author_id),
+            ("private_email", self.private_email),
+            ("private_name", self.private_name),
+        )
+
+    def token_values(self) -> tuple[str, ...]:
+        return tuple(value for _label, value in self.items())
+
+
+def _private_identity_from_values(
+    *, private_user_id: str, private_author_id: str, private_email: str, private_name: str
+) -> PrivateIdentity:
+    values = {
+        "private_user_id": private_user_id.strip(),
+        "private_author_id": private_author_id.strip(),
+        "private_email": private_email.strip(),
+        "private_name": private_name.strip(),
+    }
+    if any(not value for value in values.values()):
+        raise RewriteError("private identity values must be non-empty")
+    if any("\n" in value or "\r" in value for value in values.values()):
+        raise RewriteError("private identity values must be single-line")
+    parsed_name, parsed_email = parseaddr(values["private_email"])
+    if parsed_name or parsed_email != values["private_email"] or "@" not in values["private_email"]:
+        raise RewriteError("private email must be one bare valid address")
+    return PrivateIdentity(**values)
+
+
+def _load_private_identity(env: dict[str, str] | None = None) -> PrivateIdentity:
+    environment = os.environ if env is None else env
+    values = {
+        label: environment.get(variable, "")
+        for label, variable in PRIVATE_ENVIRONMENT_VARIABLES.items()
+    }
+    present = [label for label, value in values.items() if value.strip()]
+    if len(present) != len(values):
+        required = ", ".join(PRIVATE_ENVIRONMENT_VARIABLES.values())
+        raise RewriteError(
+            "private identity environment is incomplete; set all four variables: "
+            + required
+        )
+    return _private_identity_from_values(**values)
 
 
 def _run(
@@ -92,7 +147,9 @@ def _repository_root(source: Path) -> Path:
     return root
 
 
-def _validate_identity(name: str, email: str, mode: str) -> tuple[str, str]:
+def _validate_identity(
+    name: str, email: str, mode: str, private_identity: PrivateIdentity
+) -> tuple[str, str]:
     name = name.strip()
     email = email.strip()
     parsed_name, parsed_email = parseaddr(email)
@@ -101,7 +158,7 @@ def _validate_identity(name: str, email: str, mode: str) -> tuple[str, str]:
     if not name or "\n" in name or "\r" in name:
         raise RewriteError("public author name must be non-empty and single-line")
     identity = f"{name}\n{email}".casefold()
-    if any(token.casefold() in identity for token in PRIVATE_TOKENS):
+    if any(token.casefold() in identity for token in private_identity.token_values()):
         raise RewriteError("public identity must not contain a private identity token")
     domain = email.rsplit("@", 1)[1].casefold()
     placeholder = (
@@ -185,6 +242,7 @@ def build_plan(
     email: str,
     mode: str,
     cutover_target: str,
+    private_identity: PrivateIdentity,
 ) -> dict[str, Any]:
     source = _repository_root(source)
     current_assets = _current_static_assets(source)
@@ -230,7 +288,8 @@ def build_plan(
         "retained_static_bundles": sorted(current_assets),
         "retained_static_assets": current_assets,
         "retained_index": {"path": index_path, "oid": head_manifest[index_path]},
-        "replacement_markers": list(PRIVATE_TOKENS),
+        "replacement_marker_categories": list(PRIVATE_TOKEN_LABELS),
+        "replacement_marker_count": len(private_identity.token_values()),
         "public_ref_allowlist": [PUBLIC_REF],
         "remote_pr_refs_checked": False,
         "private_archive_required": True,
@@ -241,28 +300,30 @@ def build_plan(
 
 
 def _write_filter_inputs(
-    output_root: Path, *, name: str, email: str
+    output_root: Path, *, name: str, email: str, private_identity: PrivateIdentity
 ) -> tuple[Path, Path]:
     replacements = output_root / "replace-text.txt"
     home_pattern = (
-        r"regex:(?i)/?C:[\\/]+Users[\\/]+" + PRIVATE_USER_ID
+        r"regex:(?i)/?C:[\\/]+Users[\\/]+" + private_identity.private_user_id
         + "==><LOCAL_USER_HOME>"
     )
     replacements.write_text(
         "\n".join(
             (
                 home_pattern,
-                f"literal:{PRIVATE_EMAIL}==>{email}",
-                f"literal:{PRIVATE_AUTHOR_ID}==><REDACTED_AUTHOR_ID>",
-                f"literal:{PRIVATE_NAME}==>{name}",
-                f"literal:{PRIVATE_USER_ID}==><LOCAL_USER_ID>",
+                f"literal:{private_identity.private_email}==>{email}",
+                f"literal:{private_identity.private_author_id}==><REDACTED_AUTHOR_ID>",
+                f"literal:{private_identity.private_name}==>{name}",
+                f"literal:{private_identity.private_user_id}==><LOCAL_USER_ID>",
             )
         )
         + "\n",
         encoding="utf-8",
     )
     mailmap = output_root / "rewrite.mailmap"
-    mailmap.write_text(f"{name} <{email}> <{PRIVATE_EMAIL}>\n", encoding="utf-8")
+    mailmap.write_text(
+        f"{name} <{email}> <{private_identity.private_email}>\n", encoding="utf-8"
+    )
     return replacements, mailmap
 
 
@@ -328,15 +389,36 @@ def _copy_filter_report(mirror: Path, output_root: Path, name: str) -> str | Non
     return str(destination)
 
 
-def _registered_token_hits(payload: bytes) -> list[dict[str, str]]:
-    lowered_payload = payload.lower()
+def _registered_token_hits(
+    payload: bytes, private_identity: PrivateIdentity
+) -> list[dict[str, str]]:
+    decoded_payloads = {
+        "utf-8": (payload.decode("utf-8", errors="ignore").casefold(),),
+        "utf-16-le": tuple(
+            payload[offset:].decode("utf-16-le", errors="ignore").casefold()
+            for offset in (0, 1)
+        ),
+        "utf-16-be": tuple(
+            payload[offset:].decode("utf-16-be", errors="ignore").casefold()
+            for offset in (0, 1)
+        ),
+    }
     hits: list[dict[str, str]] = []
-    for token in BANNED_TEXT_TOKENS:
-        for encoding in ("utf-8", "utf-16-le", "utf-16-be"):
-            marker = token.casefold().encode(encoding)
-            if marker in lowered_payload:
-                hits.append({"token": token, "encoding": encoding})
+    for category, token in private_identity.items():
+        marker = token.casefold()
+        for encoding, decoded_views in decoded_payloads.items():
+            if any(marker in decoded_view for decoded_view in decoded_views):
+                hits.append({"category": category, "encoding": encoding})
     return hits
+
+
+def _text_token_categories(text: str, private_identity: PrivateIdentity) -> list[str]:
+    lowered_text = text.casefold()
+    return [
+        category
+        for category, token in private_identity.items()
+        if token.casefold() in lowered_text
+    ]
 
 
 def _reachable_blob_ids(mirror: Path) -> list[str]:
@@ -377,7 +459,9 @@ def _reachable_blob_ids(mirror: Path) -> list[str]:
     return blobs
 
 
-def _scan_reachable_blob_tokens(mirror: Path) -> list[dict[str, str]]:
+def _scan_reachable_blob_tokens(
+    mirror: Path, private_identity: PrivateIdentity
+) -> list[dict[str, str]]:
     blob_ids = _reachable_blob_ids(mirror)
     if not blob_ids:
         return []
@@ -405,7 +489,9 @@ def _scan_reachable_blob_tokens(mirror: Path) -> list[dict[str, str]]:
         payload_end = payload_start + size
         if payload_end >= len(output) or output[payload_end : payload_end + 1] != b"\n":
             raise RewriteError("git cat-file blob scan returned truncated content")
-        for hit in _registered_token_hits(output[payload_start:payload_end]):
+        for hit in _registered_token_hits(
+            output[payload_start:payload_end], private_identity
+        ):
             findings.append({"object_id": expected_oid, **hit})
         cursor = payload_end + 1
     if cursor != len(output):
@@ -414,7 +500,12 @@ def _scan_reachable_blob_tokens(mirror: Path) -> list[dict[str, str]]:
 
 
 def _verify_rewritten_history(
-    mirror: Path, *, plan: dict[str, Any], name: str, email: str
+    mirror: Path,
+    *,
+    plan: dict[str, Any],
+    name: str,
+    email: str,
+    private_identity: PrivateIdentity,
 ) -> dict[str, Any]:
     historical_paths = set(_all_historical_paths(mirror))
     path_violations = [
@@ -430,10 +521,14 @@ def _verify_rewritten_history(
     private_paths = [
         path
         for path in historical_paths
-        if any(token.casefold() in path.casefold() for token in BANNED_TEXT_TOKENS)
+        if _text_token_categories(path, private_identity)
     ]
     if private_paths:
-        raise RewriteError(f"private token remains in rewritten pathname: {private_paths[0]}")
+        categories = _text_token_categories(private_paths[0], private_identity)
+        raise RewriteError(
+            "private token category remains in rewritten pathname: "
+            + ",".join(categories)
+        )
 
     rewritten_manifest = _tree_manifest(mirror)
     source_manifest = _tree_manifest(Path(plan["source_repository"]))
@@ -450,21 +545,22 @@ def _verify_rewritten_history(
         raise RewriteError("rewritten HEAD did not preserve static asset paths and OIDs")
 
     revisions = _git(mirror, "rev-list", "--all").splitlines()
-    content_hits = _scan_reachable_blob_tokens(mirror)
+    content_hits = _scan_reachable_blob_tokens(mirror, private_identity)
     if content_hits:
         raise RewriteError(
-            "private token remains in rewritten blob: "
+            "private token category remains in rewritten blob: "
             + json.dumps(content_hits[0], sort_keys=True)
         )
 
     messages = _git(mirror, "log", "--all", "--format=%B")
     tag_messages = _git(mirror, "for-each-ref", "refs/tags", "--format=%(contents)")
     all_messages = f"{messages}\n{tag_messages}".casefold()
-    message_hits = [
-        token for token in BANNED_TEXT_TOKENS if token.casefold() in all_messages
-    ]
+    message_hits = _text_token_categories(all_messages, private_identity)
     if message_hits:
-        raise RewriteError(f"private token remains in commit/tag messages: {message_hits}")
+        raise RewriteError(
+            "private token categories remain in commit/tag messages: "
+            + ",".join(message_hits)
+        )
 
     # Lowercase placeholders are deliberately raw; uppercase variants apply mailmap.
     identity_lines = _git(
@@ -503,6 +599,7 @@ def rehearse(
     filter_repo: Path,
     name: str,
     email: str,
+    private_identity: PrivateIdentity,
 ) -> dict[str, Any]:
     source = _repository_root(source)
     if _git(source, "status", "--porcelain", "--untracked-files=all"):
@@ -579,7 +676,9 @@ def rehearse(
     # therefore rejected before any rewrite can start.
     _run(["git", "clone", "--mirror", "--no-local", archive_mirror, rewritten_mirror])
     _git(rewritten_mirror, "update-ref", "-d", "refs/tags/archive/options-coordination-v2-20260713")
-    replacements, mailmap = _write_filter_inputs(output_root, name=name, email=email)
+    replacements, mailmap = _write_filter_inputs(
+        output_root, name=name, email=email, private_identity=private_identity
+    )
 
     filter_arguments: list[str | Path] = [
         filter_repo,
@@ -603,7 +702,11 @@ def rehearse(
     )
     filter_result = _run(filter_arguments, cwd=rewritten_mirror)
     checks = _verify_rewritten_history(
-        rewritten_mirror, plan=plan, name=name, email=email
+        rewritten_mirror,
+        plan=plan,
+        name=name,
+        email=email,
+        private_identity=private_identity,
     )
 
     rewritten_bundle = output_root / "public-rewritten.bundle"
@@ -728,8 +831,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        private_identity = _load_private_identity()
         name, email = _validate_identity(
-            args.public_author_name, args.public_author_email, args.identity_mode
+            args.public_author_name,
+            args.public_author_email,
+            args.identity_mode,
+            private_identity,
         )
         source = _repository_root(args.source)
         plan = build_plan(
@@ -738,6 +845,7 @@ def main(argv: list[str] | None = None) -> int:
             email=email,
             mode=args.identity_mode,
             cutover_target=args.cutover_target,
+            private_identity=private_identity,
         )
         if args.plan_only:
             json.dump(plan, sys.stdout, indent=2, sort_keys=True)
@@ -760,6 +868,7 @@ def main(argv: list[str] | None = None) -> int:
             filter_repo=filter_repo.resolve(),
             name=name,
             email=email,
+            private_identity=private_identity,
         )
         json.dump(report, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")

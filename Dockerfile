@@ -8,6 +8,7 @@ RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app
 
 WORKDIR /app
+COPY --chown=app:app LICENSE LICENSE-DATA ./
 COPY --chown=app:app crypto_options_report ./crypto_options_report
 
 USER app

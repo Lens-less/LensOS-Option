@@ -3,12 +3,12 @@
 The canonical detailed changelog is maintained in Chinese in
 [CHANGELOG.md](CHANGELOG.md). This file provides the public release summary.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-08-29
 
 The first public release is an auditable research-console tool, not a validated
 trading signal. Pre-registered signal validation is still accumulating at 1/8
-settled cohorts. The tag must wait for the one-time history sanitization and the
-owner's public-author identity decision.
+settled cohorts; this release publishes the tool and methodology without
+presenting that progress as a validated trading signal.
 
 ### Added
 
@@ -62,3 +62,5 @@ owner's public-author identity decision.
 - Public DTE conflicts now return only a blocking verdict, uncollected macro
   events are represented as `null` / `not_collected`, and selection fallback is
   visible as a non-blocking advisory reason code.
+
+[0.1.0]: https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0

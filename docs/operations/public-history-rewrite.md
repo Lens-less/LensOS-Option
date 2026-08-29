@@ -41,6 +41,23 @@ python -m venv .wheel-verify\git-filter-repo-2.47.0
 
 Expected build ID: `a40bce548d2c`.
 
+## Load the private identity from local environment variables
+
+The rehearsal tool no longer stores any private identity token in tracked
+source. Before running it, set all four task-specific variables in the current
+shell with local-only placeholder names:
+
+```powershell
+$env:LENSOS_HISTORY_REWRITE_PRIVATE_USER_ID = "<PRIVATE_LOCAL_USER_ID>"
+$env:LENSOS_HISTORY_REWRITE_PRIVATE_AUTHOR_ID = "<PRIVATE_AUTHOR_ID>"
+$env:LENSOS_HISTORY_REWRITE_PRIVATE_EMAIL = "<PRIVATE_EMAIL>"
+$env:LENSOS_HISTORY_REWRITE_PRIVATE_NAME = "<PRIVATE_DISPLAY_NAME>"
+```
+
+All four are required every time. Missing or partially populated variables fail
+closed. Do not commit these values, paste them into issues, or save them in
+tracked repo files.
+
 ## Inspect the plan
 
 The public identity below is intentionally a rehearsal placeholder:
@@ -56,7 +73,8 @@ python tools/rehearse-public-history-rewrite.py `
 
 The plan must say `push_allowed=false`, retain exactly the current hash-named
 CSS and JS blobs, remove all historical internal paths, and allow only
-`refs/heads/main` in the public bundle.
+`refs/heads/main` in the public bundle. Public plan and report JSON only expose
+replacement marker categories and counts, never the private token values.
 
 ## Run an isolated rehearsal
 

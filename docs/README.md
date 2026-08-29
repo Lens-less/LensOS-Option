@@ -26,6 +26,7 @@
 | [`operations/public-deployment-suspension.md`](operations/public-deployment-suspension.md) | 公开部署的显式挂起决议与解除前置条件。 |
 | [`operations/public-history-rewrite.md`](operations/public-history-rewrite.md) | 历史净化的隔离演练、固定工具版本、PR refs 阻塞与验收契约。 |
 | [`operations/public-release-cutover.md`](operations/public-release-cutover.md) | 切 public 前的一次性冻结、历史、Actions、GitHub 设置与 v0.1.0 清单。 |
+| [`releases/v0.1.0.md`](releases/v0.1.0.md) | 首个公开版本的安装、产物、完整性校验与研究边界说明。 |
 
 ## 一级目录归属
 
@@ -41,6 +42,7 @@
 ## 历史归档
 
 - [`archive/`](archive/) - 已完成或已替代的调研、报告与旧规格。
+- [`releases/`](releases/) - 已发布版本的正式说明与资产使用指引。
 
 ## 语言约定
 
