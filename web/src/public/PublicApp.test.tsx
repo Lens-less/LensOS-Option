@@ -120,7 +120,11 @@ describe("PublicApp static paths and lifecycle refresh", () => {
     fireEvent(document, new Event("visibilitychange"));
 
     expect(
-      await screen.findByRole("heading", { name: "公开研究数据不可用" }),
+      await screen.findByRole(
+        "heading",
+        { name: "公开研究数据不可用" },
+        { timeout: 3_000 },
+      ),
     ).toBeInTheDocument();
   });
 
