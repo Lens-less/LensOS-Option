@@ -625,6 +625,7 @@ export interface ResearchReport {
   };
   candidate_research?: CandidateResearch;
   strategy_research?: StrategyResearch;
+  strategy_brief?: unknown;
   /**
    * Raw, not-yet-formally-contracted scanner payload. A separate module
    * (`report/projection.ts`) already narrows this defensively for the side

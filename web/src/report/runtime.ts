@@ -1,4 +1,5 @@
 import type { ResearchReport, StrategyResearch } from "../contracts";
+import { validateStrategyBrief } from "./strategyBrief";
 
 export const REQUIRED_BLOCKED_OUTPUTS = [
   "trade_recommendation",
@@ -112,6 +113,9 @@ export function validateResearchReport(payload: unknown): ResearchReport {
 
   if (report.strategy_research) {
     validateStrategySafety(report.strategy_research);
+  }
+  if (report.strategy_brief) {
+    validateStrategyBrief(report.strategy_brief);
   }
   validatePublishedSafety(report);
 

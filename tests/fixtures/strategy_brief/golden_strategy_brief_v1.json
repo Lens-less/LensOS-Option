@@ -1,0 +1,292 @@
+{
+  "action": "STRATEGIES_AVAILABLE",
+  "analysis_run_id": "analysis:brief-contract",
+  "brief_id": "brief:39c3dfb9d44e98b3564edca7ff661d2e0b5bf322d2f0cfe9cd41237e1c3a264c",
+  "evidence_summary": {
+    "as_of": "2026-08-30T14:30:05Z",
+    "candidate_count": 2,
+    "default_structure_family": "IRON_CONDOR",
+    "hard_gate_pass_count": 2,
+    "items": [
+      {
+        "artifact_id": null,
+        "detail_zh": "组合入场使用 short bid / long ask 的冻结成本模型，不使用 mid 或 mark。",
+        "label": "市场证据",
+        "status": "PASS",
+        "summary_zh": "执行口径与报价同步通过硬门禁"
+      },
+      {
+        "artifact_id": null,
+        "detail_zh": "未验证或未对齐的历史结果自动退化为状态标签。",
+        "label": "历史证据",
+        "status": "PASS",
+        "summary_zh": "只有 VALIDATED 才显示历史胜率"
+      },
+      {
+        "artifact_id": null,
+        "detail_zh": "未校准、过期或超出适用范围的预测不会显示概率区间。",
+        "label": "预测胜率",
+        "status": "WARN",
+        "summary_zh": "只有 CALIBRATED 才显示预测区间"
+      }
+    ],
+    "primary_reason_codes": [
+      "FORECAST_NOT_CALIBRATED",
+      "HISTORICAL_EVIDENCE_INSUFFICIENT"
+    ],
+    "recommended_count": 1,
+    "rejection_counts": {},
+    "selected_count": 2,
+    "summary_zh": "当前有 1 个有限风险策略通过推荐门槛。",
+    "surface": {
+      "freshness_status": "UNAVAILABLE",
+      "presented_as": "published",
+      "source_kind": "fallback",
+      "source_label": "Presentation context unavailable"
+    },
+    "valid_until": "2026-08-30T14:35:05Z",
+    "watch_count": 1
+  },
+  "execution_allowed": false,
+  "generated_at": "2026-08-30T14:30:05Z",
+  "market": {
+    "action": "STRATEGIES_AVAILABLE",
+    "as_of": "2026-08-30T14:30:05Z",
+    "confidence": "HIGH",
+    "direction": "RANGE",
+    "expires_at": "2026-08-30T14:35:05Z",
+    "liquidity": "EXECUTABLE",
+    "summary_zh": "BTC: 震荡 | 隐含波动率偏贵 | 流动性可执行",
+    "underlying": "BTC",
+    "volatility": "RICH"
+  },
+  "no_trade": {
+    "active": false,
+    "headline_zh": null,
+    "next_update_at": "2026-08-30T14:35:05Z",
+    "primary_reason_codes": [],
+    "summary_zh": null
+  },
+  "research_only": true,
+  "schema_version": "strategy_brief.v1",
+  "strategies": [
+    {
+      "analysis_run_id": "analysis:brief-contract",
+      "as_of": "2026-08-30T14:30:02Z",
+      "candidate_id": "bear-call-1",
+      "copy_recipe": "STRATEGY: Bear Call Credit Spread\nSELL 1 BTC-25SEP26-128000-C\nBUY  1 BTC-25SEP26-132000-C\nMIN NET CREDIT: 400 USD\nMAX LOSS PER UNIT: 3600 USD\nVALID UNTIL: 2026-08-30T14:34:55Z\nCANCEL IF: 任一腿报价过期或不同步; 扣除成本后期望收益不再为正\nRESEARCH_ONLY / MANUAL REVIEW REQUIRED",
+      "dte_days": 26.0,
+      "economics": {
+        "absolute_ev_status": "VALIDATED",
+        "ev_after_cost": 210.0,
+        "net_r": 0.058333,
+        "relative_value_status": "AVAILABLE"
+      },
+      "entry": {
+        "currency": "USD",
+        "fees_included": true,
+        "minimum_net_credit": 400.0,
+        "price_basis": "SHORT_BID_LONG_ASK",
+        "slippage_included": true
+      },
+      "expiry_date": "2026-09-25",
+      "forecast": {
+        "artifact_id": "forecast:screening-only",
+        "confidence": null,
+        "scope": null,
+        "status": "SCREENING_ONLY",
+        "win_rate_high": null,
+        "win_rate_low": null
+      },
+      "history": {
+        "artifact_id": "history:bear-call-validated",
+        "exit_basis": "hold_to_expiry",
+        "independent_cohorts": 12,
+        "mean_net_r": 0.21,
+        "observation_count": 118,
+        "scope": {
+          "direction": "BEARISH",
+          "dte_band_days": [
+            7,
+            35
+          ],
+          "dte_days": 26.0,
+          "entry_cost_basis": "SHORT_BID_LONG_ASK",
+          "exit_basis": "hold_to_expiry",
+          "expiry_date": "2026-09-25",
+          "structure_type": "BEAR_CALL_CREDIT_SPREAD",
+          "underlying": "BTC"
+        },
+        "status": "VALIDATED",
+        "win_rate": 0.68
+      },
+      "kill_conditions": [
+        "任一腿报价过期或不同步",
+        "扣除成本后期望收益不再为正"
+      ],
+      "legs": [
+        {
+          "ask": 1250.0,
+          "bid": 1200.0,
+          "expiry_date": "2026-09-25",
+          "instrument_name": "BTC-25SEP26-128000-C",
+          "observed_at": "2026-08-30T14:30:01Z",
+          "option_type": "call",
+          "premium_currency": "USD",
+          "premium_unit": "quote_currency",
+          "quantity": 1.0,
+          "side": "SELL",
+          "strike": 128000.0
+        },
+        {
+          "ask": 800.0,
+          "bid": 700.0,
+          "expiry_date": "2026-09-25",
+          "instrument_name": "BTC-25SEP26-132000-C",
+          "observed_at": "2026-08-30T14:30:02Z",
+          "option_type": "call",
+          "premium_currency": "USD",
+          "premium_unit": "quote_currency",
+          "quantity": 1.0,
+          "side": "BUY",
+          "strike": 132000.0
+        }
+      ],
+      "primary_reason_codes": [
+        "FORECAST_NOT_CALIBRATED"
+      ],
+      "rank": 1,
+      "recommendation_id": "recommendation:8d5c6d303443f7b02b94ebd3b77aee0f6fdbefb008860362cf41aa46105b3ff4",
+      "recommendation_status": "RECOMMENDED",
+      "risk": {
+        "breakevens": [
+          128400.0
+        ],
+        "currency": "USD",
+        "cvar_95": 1900.0,
+        "max_loss_per_unit": 3600.0,
+        "path_risk_status": "VALIDATED"
+      },
+      "structure_type": "BEAR_CALL_CREDIT_SPREAD",
+      "thesis_zh": "偏空且隐含波动率偏贵，卖出看涨价差并用高执行价保护上行风险。",
+      "valid_until": "2026-08-30T14:34:55Z"
+    },
+    {
+      "analysis_run_id": "analysis:brief-contract",
+      "as_of": "2026-08-30T14:30:02Z",
+      "candidate_id": "condor-1",
+      "copy_recipe": "STRATEGY: Iron Condor\nSELL 1 BTC-25SEP26-130000-C\nSELL 1 BTC-25SEP26-110000-P\nBUY  1 BTC-25SEP26-135000-C\nBUY  1 BTC-25SEP26-105000-P\nMIN NET CREDIT: 550 USD\nMAX LOSS PER UNIT: 4450 USD\nVALID UNTIL: 2026-08-30T14:34:55Z\nCANCEL IF: 任一腿报价过期或不同步; 扣除成本后期望收益不再为正\nRESEARCH_ONLY / MANUAL REVIEW REQUIRED",
+      "dte_days": 26.0,
+      "economics": {
+        "absolute_ev_status": "VALIDATED",
+        "ev_after_cost": 180.0,
+        "net_r": 0.040449,
+        "relative_value_status": "AVAILABLE"
+      },
+      "entry": {
+        "currency": "USD",
+        "fees_included": true,
+        "minimum_net_credit": 550.0,
+        "price_basis": "SHORT_BID_LONG_ASK",
+        "slippage_included": true
+      },
+      "expiry_date": "2026-09-25",
+      "forecast": {
+        "artifact_id": "forecast:unavailable",
+        "confidence": null,
+        "scope": null,
+        "status": "UNAVAILABLE",
+        "win_rate_high": null,
+        "win_rate_low": null
+      },
+      "history": {
+        "artifact_id": "history:condor-exploratory",
+        "exit_basis": "hold_to_expiry",
+        "independent_cohorts": 5,
+        "mean_net_r": null,
+        "observation_count": 44,
+        "scope": null,
+        "status": "EXPLORATORY",
+        "win_rate": null
+      },
+      "kill_conditions": [
+        "任一腿报价过期或不同步",
+        "扣除成本后期望收益不再为正"
+      ],
+      "legs": [
+        {
+          "ask": 1100.0,
+          "bid": 1000.0,
+          "expiry_date": "2026-09-25",
+          "instrument_name": "BTC-25SEP26-130000-C",
+          "observed_at": "2026-08-30T14:30:01Z",
+          "option_type": "call",
+          "premium_currency": "USD",
+          "premium_unit": "quote_currency",
+          "quantity": 1.0,
+          "side": "SELL",
+          "strike": 130000.0
+        },
+        {
+          "ask": 900.0,
+          "bid": 800.0,
+          "expiry_date": "2026-09-25",
+          "instrument_name": "BTC-25SEP26-110000-P",
+          "observed_at": "2026-08-30T14:30:01Z",
+          "option_type": "put",
+          "premium_currency": "USD",
+          "premium_unit": "quote_currency",
+          "quantity": 1.0,
+          "side": "SELL",
+          "strike": 110000.0
+        },
+        {
+          "ask": 700.0,
+          "bid": 650.0,
+          "expiry_date": "2026-09-25",
+          "instrument_name": "BTC-25SEP26-135000-C",
+          "observed_at": "2026-08-30T14:30:02Z",
+          "option_type": "call",
+          "premium_currency": "USD",
+          "premium_unit": "quote_currency",
+          "quantity": 1.0,
+          "side": "BUY",
+          "strike": 135000.0
+        },
+        {
+          "ask": 550.0,
+          "bid": 500.0,
+          "expiry_date": "2026-09-25",
+          "instrument_name": "BTC-25SEP26-105000-P",
+          "observed_at": "2026-08-30T14:30:02Z",
+          "option_type": "put",
+          "premium_currency": "USD",
+          "premium_unit": "quote_currency",
+          "quantity": 1.0,
+          "side": "BUY",
+          "strike": 105000.0
+        }
+      ],
+      "primary_reason_codes": [
+        "HISTORICAL_EVIDENCE_INSUFFICIENT",
+        "FORECAST_NOT_CALIBRATED"
+      ],
+      "rank": 2,
+      "recommendation_id": "recommendation:17d572fd54fe4ea17eaf6b9faae881cce7a87916b5fd833f230611c671ef8f83",
+      "recommendation_status": "WATCH",
+      "risk": {
+        "breakevens": [
+          109450.0,
+          130550.0
+        ],
+        "currency": "USD",
+        "cvar_95": 2500.0,
+        "max_loss_per_unit": 4450.0,
+        "path_risk_status": "VALIDATED"
+      },
+      "structure_type": "IRON_CONDOR",
+      "thesis_zh": "预期区间震荡且隐含波动率偏贵，同时卖出两侧价差并用保护翼限定尾部风险。",
+      "valid_until": "2026-08-30T14:34:55Z"
+    }
+  ]
+}

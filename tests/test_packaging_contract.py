@@ -55,14 +55,14 @@ def test_shared_constraints_pin_the_toolchain_used_by_ci_and_the_wheel_builds() 
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
     for requirement in (
-        "pip==25.2",
-        "pytest==9.0.3",
+        "pip==26.2.1",
+        "pytest==9.1.1",
         'colorama==0.4.6 ; sys_platform == "win32"',
         "iniconfig==2.3.0",
-        "packaging==26.0",
+        "packaging==26.3",
         "pluggy==1.6.0",
-        "Pygments==2.20.0",
-        "ruff==0.16.0",
+        "Pygments==2.21.0",
+        "ruff==0.16.5",
         "setuptools==80.10.2",
     ):
         assert requirement in constraints

@@ -59,6 +59,11 @@ REJECT = "REJECT"
 
 NAKED = "naked_short_call"
 SPREAD = "call_credit_spread"
+CREDIT_STRUCTURES = {
+    SPREAD,
+    "put_credit_spread",
+    "iron_condor",
+}
 
 # A quoted credit this far from the model's own valuation is treated as a data
 # problem, not an opportunity. Selling far above fair value would be a large
@@ -66,8 +71,9 @@ SPREAD = "call_credit_spread"
 MAX_CREDIT_TO_FAIR_VALUE_RATIO = 3.0
 MIN_CREDIT_TO_FAIR_VALUE_RATIO = 0.2
 
-# Per-candidate expected value replays the full path set, so the number of
-# candidates it runs for is bounded rather than unlimited.
+# Each absolute-EV replay is expensive, so the scanner does an initial bounded
+# pass per structure family before continuing only when a later candidate is
+# still needed to surface the first validated positive opportunity.
 MAX_ABSOLUTE_EV_CANDIDATES = 8
 
 
@@ -112,22 +118,32 @@ def build_ev_candidate_scanner(
     )
 
     scored_by_id = {item.get("candidate_id"): item for item in scored}
-    ev_applied = _apply_absolute_ev(
+    absolute_ev = _apply_absolute_ev(
         ranked_candidates,
         scored_by_id=scored_by_id,
         underlying_history=underlying_history,
         permission_state=permission_state,
         generated_at=generated_at,
     )
+    ranked_candidates = _order_ranked_candidates(ranked_candidates)
 
     # Relative value alone never promotes the scanner past "blocked"; absolute
     # EV requires a validated realized-return distribution behind every reported
     # expected value.
-    status = "validated" if (path_evidence["validated"] or ev_applied) else "blocked"
+    validated_absolute_ev = absolute_ev["validated"]
+    status = (
+        "validated"
+        if (path_evidence["validated"] or validated_absolute_ev)
+        else "blocked"
+    )
 
     return {
         "status": status,
-        "reason_code": None if path_evidence["validated"] else NO_VALIDATED_PATH_RISK,
+        "reason_code": (
+            None
+            if (path_evidence["validated"] or validated_absolute_ev)
+            else NO_VALIDATED_PATH_RISK
+        ),
         "score_status": "UNCALIBRATED_RESEARCH_ONLY",
         "path_risk_evidence": path_evidence["payload"],
         "ranking_basis": {
@@ -140,8 +156,11 @@ def build_ev_candidate_scanner(
             "frontier_occupancy": ranking["frontier_occupancy"],
             "primary_axis": "smile_residual_richness",
             "primary_axis_unit": "residual_std_errors",
-            "absolute_ev_available": bool(ev_applied),
+            "absolute_ev_available": bool(validated_absolute_ev),
             "absolute_ev_candidate_limit": MAX_ABSOLUTE_EV_CANDIDATES,
+            "absolute_ev_scope": (
+                "defined_risk_per_structure_family_until_positive_or_exhausted"
+            ),
         },
         "dominated_explanations": ranking["dominated"],
         "recommended_size_allowed": False,
@@ -378,6 +397,7 @@ def _candidate_row(
         and score.get("status") == "scored"
         and not domination
         and not has_caution
+        and UNBOUNDED_LOSS_STRUCTURE not in kill_conditions
         and SUSPECT_PRICE_DIVERGENCE not in kill_conditions
         else REVIEW
     )
@@ -956,52 +976,155 @@ def _apply_absolute_ev(
     underlying_history: dict[str, Any] | None,
     permission_state: dict[str, Any] | None,
     generated_at: str | None,
-) -> int:
-    """Populate expected value for the leading candidates; return how many.
-
-    Bounded on purpose: each candidate replays the whole path set, and a chain
-    can carry far more candidates than are worth that cost.
-    """
+) -> dict[str, int]:
+    """Populate absolute EV for defined-risk families without top-slot starvation."""
     if not underlying_history:
-        return 0
+        return {"evaluated": 0, "validated": 0}
 
-    applied = 0
+    planned = _absolute_ev_plan(ranked_candidates, scored_by_id=scored_by_id)
+    evaluated = 0
+    validated = 0
+    for family_rows in planned.values():
+        initial_batch = family_rows[:MAX_ABSOLUTE_EV_CANDIDATES]
+        overflow = family_rows[MAX_ABSOLUTE_EV_CANDIDATES:]
+        family_positive = False
+        for row, score in initial_batch:
+            result = _evaluate_absolute_ev_row(
+                row,
+                score=score,
+                underlying_history=underlying_history,
+                permission_state=permission_state,
+                generated_at=generated_at,
+            )
+            evaluated += 1
+            if result.get("status") == "validated":
+                validated += 1
+                family_positive = family_positive or _row_has_positive_absolute_ev(row)
+        if family_positive:
+            continue
+        for row, score in overflow:
+            result = _evaluate_absolute_ev_row(
+                row,
+                score=score,
+                underlying_history=underlying_history,
+                permission_state=permission_state,
+                generated_at=generated_at,
+            )
+            evaluated += 1
+            if result.get("status") == "validated":
+                validated += 1
+                if _row_has_positive_absolute_ev(row):
+                    break
+    return {"evaluated": evaluated, "validated": validated}
+
+
+def _absolute_ev_plan(
+    ranked_candidates: list[dict[str, Any]],
+    *,
+    scored_by_id: dict[Any, dict[str, Any]],
+) -> dict[str, list[tuple[dict[str, Any], dict[str, Any]]]]:
+    plan: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
     for row in ranked_candidates:
-        if applied >= MAX_ABSOLUTE_EV_CANDIDATES:
-            break
-        if row.get("action") == REJECT:
+        if not _eligible_for_absolute_ev(row):
+            _demote_research_only_if_needed(row)
             continue
         score = scored_by_id.get(row.get("candidate_id"))
         if not score:
+            _demote_research_only_if_needed(row)
             continue
-        result = build_absolute_ev(
-            candidate=score.get("_candidate") or {},
-            structure_type=row.get("structure_type") or "",
-            underlying_history=underlying_history,
-            entry_credit_usdc=row.get("executable_credit_usdc"),
-            permission_state=permission_state,
-            generated_at=generated_at,
-        )
-        row["absolute_ev"] = result
-        if result.get("status") != "validated":
-            continue
-        row["ev_after_cost_usdc"] = result["ev_after_cost_usdc"]
-        row["path_risk"] = {
-            "status": "validated_historical",
-            "reason_code": None,
-            "evidence_class": result.get("evidence_class"),
-            "p_touch": result.get("p_touch"),
-            "p_itm": result.get("p_itm"),
-            "cvar_95_usdc": result.get("cvar_95_usdc"),
-            "cvar_99_usdc": result.get("cvar_99_usdc"),
-            "authoritative_sample_size": result.get("authoritative_sample_size"),
-            "sample_size_basis": result.get("sample_size_basis"),
-        }
-        if NO_VALIDATED_PATH_RISK in row["kill_conditions"]:
-            row["kill_conditions"] = [
-                code
-                for code in row["kill_conditions"]
-                if code != NO_VALIDATED_PATH_RISK
-            ]
-        applied += 1
-    return applied
+        family = str(row.get("structure_type") or "")
+        plan.setdefault(family, []).append((row, score))
+    return plan
+
+
+def _eligible_for_absolute_ev(row: dict[str, Any]) -> bool:
+    if row.get("action") == REJECT:
+        return False
+    if row.get("structure_type") not in CREDIT_STRUCTURES:
+        return False
+    if UNBOUNDED_LOSS_STRUCTURE in (row.get("kill_conditions") or []):
+        return False
+    if SUSPECT_PRICE_DIVERGENCE in (row.get("kill_conditions") or []):
+        return False
+    credit = row.get("executable_credit_usdc")
+    return isinstance(credit, (int, float)) and credit > 0.0
+
+
+def _evaluate_absolute_ev_row(
+    row: dict[str, Any],
+    *,
+    score: dict[str, Any],
+    underlying_history: dict[str, Any],
+    permission_state: dict[str, Any] | None,
+    generated_at: str | None,
+) -> dict[str, Any]:
+    result = build_absolute_ev(
+        candidate=score.get("_candidate") or {},
+        structure_type=row.get("structure_type") or "",
+        underlying_history=underlying_history,
+        entry_credit_usdc=row.get("executable_credit_usdc"),
+        permission_state=permission_state,
+        generated_at=generated_at,
+    )
+    row["absolute_ev"] = result
+    if result.get("status") != "validated":
+        _demote_research_only_if_needed(row)
+        return result
+
+    row["ev_after_cost_usdc"] = result["ev_after_cost_usdc"]
+    row["path_risk"] = {
+        "status": "validated_historical",
+        "reason_code": None,
+        "evidence_class": result.get("evidence_class"),
+        "p_touch": result.get("p_touch"),
+        "p_itm": result.get("p_itm"),
+        "cvar_95_usdc": result.get("cvar_95_usdc"),
+        "cvar_99_usdc": result.get("cvar_99_usdc"),
+        "authoritative_sample_size": result.get("authoritative_sample_size"),
+        "sample_size_basis": result.get("sample_size_basis"),
+    }
+    if NO_VALIDATED_PATH_RISK in row["kill_conditions"]:
+        row["kill_conditions"] = [
+            code for code in row["kill_conditions"] if code != NO_VALIDATED_PATH_RISK
+        ]
+    if not _row_has_positive_absolute_ev(row):
+        _append_unique(row["kill_conditions"], "NEGATIVE_EV_AFTER_COST")
+        _append_unique(row["reason_codes"], "absolute_ev:NEGATIVE_EV_AFTER_COST")
+        _demote_research_only_if_needed(row)
+    sensitivity = result.get("execution_sensitivity") or {}
+    if sensitivity.get("both_directions_negative_at_the_touch"):
+        _append_unique(row["kill_conditions"], "NO_CAPTURABLE_EDGE_AT_TOUCH")
+        _append_unique(row["reason_codes"], "absolute_ev:NO_CAPTURABLE_EDGE_AT_TOUCH")
+        _demote_research_only_if_needed(row)
+    return result
+
+
+def _row_has_positive_absolute_ev(row: dict[str, Any]) -> bool:
+    value = row.get("ev_after_cost_usdc")
+    return isinstance(value, (int, float)) and value > 0.0
+
+
+def _demote_research_only_if_needed(row: dict[str, Any]) -> None:
+    if row.get("action") == RESEARCH_ONLY:
+        row["action"] = REVIEW
+
+
+def _append_unique(items: list[Any], value: Any) -> None:
+    if value not in items:
+        items.append(value)
+
+
+def _order_ranked_candidates(
+    ranked_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    indexed = list(enumerate(ranked_candidates))
+    indexed.sort(key=lambda item: (_display_bucket(item[1]), item[0]))
+    return [row for _, row in indexed]
+
+
+def _display_bucket(row: dict[str, Any]) -> int:
+    if row.get("action") == REJECT:
+        return 2
+    if _row_has_positive_absolute_ev(row):
+        return 0
+    return 1

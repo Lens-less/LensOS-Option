@@ -195,6 +195,10 @@ class FullSystemSurfaceTests(unittest.TestCase):
         self.assertIn("final_action", _payload_for_path("/portfolio/risk", ""))
         self.assertIn("ranked_candidates", _payload_for_path("/candidates", ""))
         self.assertIn("action", _payload_for_path("/recommendation", ""))
+        self.assertEqual(
+            "strategy_brief.v1",
+            _payload_for_path("/strategy/brief", "").get("schema_version"),
+        )
         self.assertIn("views", _payload_for_path("/dashboard", ""))
         self.assertIn("backtest_comparison", _payload_for_path("/backtest/report/default", ""))
 

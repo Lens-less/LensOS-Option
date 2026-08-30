@@ -6,6 +6,44 @@
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-08-30
+
+> 从真实公开 `v0.1.0` 基线升级为 v0.2–v0.4 一体化“极简策略简报”。本版本实现证据
+> 契约与状态机，不把尚未成熟的 cohort、promotion 或 calibration 伪装成已验证结果。
+
+### 新增
+
+- 新增 canonical `strategy_brief.v1`、确定性 SHA-256 身份、Python/TypeScript 双端校验，
+  以及 internal、public、Chrome side panel 的统一一屏投影。
+- 新增 0–3 张精确的一单位 Bull Put Credit Spread、Bear Call Credit Spread、Iron
+  Condor 策略卡；展示买卖腿、到期日/DTE、short bid / long ask 最低净权利金、冻结成本、
+  最大亏损、取消条件与复制组合。
+- 新增 aligned historical replay、未来 holdout 协议和 canonical artifact；只有
+  `history.status=VALIDATED` 才能展示历史胜率。
+- 新增 exact-strategy probability calibration、promotion/demotion、有效期、输入漂移、
+  scope mismatch 与 OOS 恶化处理；只有 `forecast.status=CALIBRATED` 才能展示胜率区间。
+- 新增 `/strategy/brief` 报告投影与三种 Web 表面的 provenance/freshness fail-closed 保护。
+
+### 安全与边界
+
+- 负成本后 EV、反方向更优、touch 无 edge、无上限/未知亏损、缺失/过期/交叉/不同步报价
+  与单位不一致均为 hard rejection；relative value 与 absolute EV 始终分开。
+- 历史证据按稳定协议语义绑定，预测证据按到期日与精确选腿绑定；同结构换腿、协议漂移或
+  旧 artifact 缺少身份时一律退役并清空概率，不能借用旧胜率。
+- 兼容生产 `cvar_95_usdc` 风险字段；fallback 候选保留逐腿原始报价时间，缺失、过期或
+  不同步时间戳不会再被报告生成时间替代。
+- 无合格候选时稳定输出 `NO_TRADE` 与“今日暂无可靠策略”；`execution_allowed` 永远为
+  `false`，不提供手数、账户适配或任何自动/半自动交易路径。
+- Call Credit Spread 之外的历史族，以及尚无真实 cohort 的预测，保持
+  `INSUFFICIENT` / `EXPLORATORY` / `UNAVAILABLE` / `SCREENING`，不制造数据或提升。
+
+### 维护
+
+- 同步更新 Python 构建/测试工具链精确约束、Web 构建与类型工具补丁版本，以及已通过
+  完整 CI 容器探针的 Python 3.14 slim 基础镜像摘要。
+
+完整边界见 [v0.4.0 交付说明](docs/releases/v0.4.0.md)。
+
 ## [0.1.0] - 2026-08-29
 
 > 首个公开版本定位为“可审计的 research console 工具”，不是已验证的交易信号。
@@ -320,4 +358,5 @@
   追踪验证属实（常数时间 token 比较、拒绝重定向、防 DNS rebinding、作业 ID 正则
   校验后再拼路径、子进程非 shell 调用且剔除凭证环境变量等）。
 
+[0.4.0]: https://github.com/Lens-less/LensOS-Option/releases/tag/v0.4.0
 [0.1.0]: https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0

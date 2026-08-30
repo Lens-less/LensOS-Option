@@ -4,6 +4,7 @@ import type {
   SurfacePoint,
   VrpStatusPoint,
 } from "../contracts";
+import { StrategyBriefView } from "../components/strategyBrief/StrategyBriefView";
 import {
   finiteNumber,
   formatCutoffTime,
@@ -23,6 +24,10 @@ import {
   type CandidateRow,
   type PublicFreshness,
 } from "./publicModel";
+import {
+  type StrategyBriefSurfaceState,
+  validateStrategyBrief,
+} from "../report/strategyBrief";
 import type { PublicReleaseSummary } from "./loadPublicReport";
 import {
   readPublicReasonCode,
@@ -1163,15 +1168,49 @@ export function PublicEvidenceView({
   signalSection?: React.ReactNode;
   summary: PublicReleaseSummary | null;
 }): React.JSX.Element {
+  const strategyBrief = loadStrategyBrief(report);
+  const briefSurface = publicStrategyBriefSurface(report, freshness);
   return (
     <main className="console" id="surface-main">
-      <PublicVrpOverview freshness={freshness} report={report} summary={summary} />
-      <PublicMarketBrief freshness={freshness} report={report} />
-      <PublicStrategySection freshness={freshness} report={report} />
-      <PublicSurfaceResearch freshness={freshness} report={report} />
-      <PublicCandidateResearch freshness={freshness} report={report} />
-      {signalSection}
-      <PublicBoundarySection freshness={freshness} report={report} />
+      <StrategyBriefView brief={strategyBrief} surface={briefSurface} />
+      <details className="strategy-brief-details">
+        <summary>查看依据</summary>
+        <PublicVrpOverview freshness={freshness} report={report} summary={summary} />
+        <PublicMarketBrief freshness={freshness} report={report} />
+        <PublicStrategySection freshness={freshness} report={report} />
+        <PublicSurfaceResearch freshness={freshness} report={report} />
+        <PublicCandidateResearch freshness={freshness} report={report} />
+        {signalSection}
+        <PublicBoundarySection freshness={freshness} report={report} />
+      </details>
     </main>
   );
+}
+
+function loadStrategyBrief(report: ResearchReport) {
+  try {
+    return report.strategy_brief
+      ? validateStrategyBrief(report.strategy_brief)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function publicStrategyBriefSurface(
+  _report: ResearchReport,
+  freshness: PublicFreshness,
+): StrategyBriefSurfaceState {
+  return {
+    freshness_status:
+      freshness.phase === "current"
+        ? "CURRENT"
+        : freshness.phase === "unavailable"
+          ? "UNAVAILABLE"
+          : "STALE",
+    source_kind: "published",
+    presented_as: "published",
+    source_label: "Published edition",
+    now_ms: Date.now(),
+  };
 }

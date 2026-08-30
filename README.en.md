@@ -1,4 +1,4 @@
-# Crypto Options Research Console
+# LensOS Option · Actionable Strategy Brief
 
 English · [中文](README.md)
 
@@ -9,12 +9,13 @@ English · [中文](README.md)
 
 [Documentation](docs/README.md) · [Contributing](CONTRIBUTING.md) ·
 [Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
-[Changelog](CHANGELOG.en.md) · [v0.1.0 release notes](docs/releases/v0.1.0.md)
+[Changelog](CHANGELOG.en.md) · [v0.4.0 delivery notes](docs/releases/v0.4.0.md) ·
+[v0.1.0 public release notes](docs/releases/v0.1.0.md)
 
-A **pre-entry research tool for crypto options**. It reads public Deribit
-market data, decides whether there is currently an option-selling opportunity
-worth considering, and lays out every piece of evidence that conclusion rests
-on.
+A **one-screen, 30-second BTC option strategy brief**. It reads public Deribit
+market data, states the market regime and whether a reliable opportunity exists,
+then shows at most three auditable finite-risk cards. With no qualifying edge it
+explicitly says there is no reliable strategy today.
 
 It is built for **option sellers who make their own decisions** - people who
 want an auditable, replayable pre-entry analysis rather than a black box that
@@ -33,6 +34,24 @@ Two properties define it:
   missing.
 - **Fail-closed** - missing, expired, or unverifiable evidence always degrades
   to "blocked". **No signal is not the same as permission to proceed.**
+
+## One-screen strategy brief
+
+Canonical `strategy_brief.v1` allows only Bull Put Credit Spread, Bear Call
+Credit Spread, and Iron Condor. Each card is exactly one unit and states the
+legs, expiry/DTE, executable minimum credit at short bid / long ask, frozen
+costs, maximum loss, and cancellation conditions. It never sizes a position.
+
+Historical rates appear only after a replay aligned on structure, direction,
+DTE, leg selection, execution, costs, and exits reaches `VALIDATED`. Forecast
+intervals appear only when an exact-strategy artifact reaches `CALIBRATED`.
+Other states are explicitly unavailable, and `execution_allowed` is always
+`false`.
+
+Operators attach real evidence through repeatable `--strategy-history-artifact`
+and `--strategy-forecast-runtime-evidence` paths. Promotion state stays separate
+from refreshed input/lineage/OOS evidence; missing or drifted current evidence
+immediately removes the old interval. Browser queries cannot choose local paths.
 
 ![Read-only candidate workbench in the LensOS Option offline demo](docs/assets/lensos-option-demo.png)
 
@@ -53,10 +72,12 @@ The public static bundle contains only the evidence site and legal pages. The
 workbench and Chrome companion remain internal / local surfaces and are not
 part of the public bundle.
 
-## Public Release
+## Version and public release
 
-- The current stable release is [`v0.1.0`](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0),
-  with the wheel, Chrome extension ZIP, checksums, and full notes on GitHub.
+- The current stable release is
+  [`v0.4.0`](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.4.0),
+  with the wheel, Chrome extension ZIP, SHA-256 checksums, and full notes on
+  GitHub. See the [v0.4.0 release notes](docs/releases/v0.4.0.md).
 - Code is licensed under `Apache-2.0`; see [`LICENSE`](LICENSE).
 - Public data artifacts and generated public research content are licensed
   under `CC BY 4.0`; see [`LICENSE-DATA`](LICENSE-DATA).
@@ -72,11 +93,11 @@ part of the public bundle.
 
 ## Quickstart
 
-Requires Python 3.12 or newer. Install the release wheel and open the demo in
-two commands:
+Requires Python 3.12 or newer. Install the current stable wheel (v0.4.0) and
+open the demo in two commands:
 
 ```powershell
-python -m pip install https://github.com/Lens-less/LensOS-Option/releases/download/v0.1.0/crypto_options_research_console-0.1.0-py3-none-any.whl
+python -m pip install https://github.com/Lens-less/LensOS-Option/releases/download/v0.4.0/crypto_options_research_console-0.4.0-py3-none-any.whl
 crypto-options-report demo
 ```
 
@@ -183,10 +204,12 @@ which is written in Chinese):
 
 | Capability | Status |
 | --- | --- |
+| Canonical `strategy_brief.v1` and all three one-screen projections | **GO** |
 | Local deterministic / replay research toolchain | **GO** |
 | Publisher-verified static research artifacts | **GO** |
 | Paper / manual trading, order submission, real account execution | **NO-GO** |
-| Calibration and model promotion | Not implemented; the spec is final and the axis was pre-registered (see [model-promotion.md](docs/model-promotion.md)) |
+| Exact-strategy calibration and promotion/demotion machinery | **GO**; remains `UNAVAILABLE` / `SCREENING` without mature real cohorts |
+| Bull Put / Iron Condor historical rates | **Unavailable** pending their own frozen future holdouts |
 | Trading execution authorization | **NO-GO (permanent)** |
 
 WebSocket gap/resync, 24-hour soak, and seven consecutive days of evidence are
@@ -499,15 +522,15 @@ configuration or browser parameter can change production report semantics. The
 server builds one `AnalysisRecord` per input set; every GET projection reuses
 it rather than refetching data or recomputing conclusions.
 
-Main endpoints: `/evidence` (console) · `/research/report` · `/analysis/result`
+Main endpoints: `/evidence` (console) · `/strategy/brief` · `/research/report` · `/analysis/result`
 · `/health` · `/livez` · `/readyz`. Full list, auth requirements, and response
 contracts are in the [API reference](docs/api-reference.md).
 
 ### Chrome research companion (personal, local)
 
 A Manifest V3 side panel for Chrome 114+, intended for personal local use.
-Download and extract `lensos-option-chrome-extension-v0.1.0.zip` from the
-[`v0.1.0` Release](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0).
+Download and extract `lensos-option-chrome-extension-v0.4.0.zip` from the
+[`v0.4.0` Release](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.4.0).
 Start `crypto-options-report demo`, then enable Developer mode in
 `chrome://extensions`, choose "Load unpacked", and select the extracted folder.
 

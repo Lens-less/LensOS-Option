@@ -3,6 +3,36 @@
 The canonical detailed changelog is maintained in Chinese in
 [CHANGELOG.md](CHANGELOG.md). This file provides the public release summary.
 
+## [0.4.0] - 2026-08-30
+
+This release integrates the v0.2 one-screen market and strategy brief, v0.3
+structure-aligned historical replay, and v0.4 exact-strategy calibration
+lifecycle. It does not claim that immature cohorts are validated.
+
+- Added canonical `strategy_brief.v1` validation and deterministic identities
+  across Python and TypeScript, projected into internal, public, and Chrome side
+  panel surfaces.
+- Added zero-to-three exact one-unit finite-risk strategy cards for Bull Put
+  Credit Spread, Bear Call Credit Spread, and Iron Condor, including executable
+  touch entry, frozen costs, maximum loss, expiry, and cancellation rules.
+- Added aligned replay/holdout artifacts and exact-strategy forecast promotion,
+  expiry, drift, scope-mismatch, and out-of-sample demotion state machines.
+- Bound historical evidence to stable protocol semantics and forecast evidence
+  to the exact expiry and legs. Same-family card changes, protocol drift, and
+  legacy unbound artifacts now retire evidence and clear probability fields.
+- Accepted production `cvar_95_usdc` path-risk rows through the same finite,
+  positive-risk gate, and preserved per-leg source quote times on fallback
+  candidates instead of replacing missing or stale times with generation time.
+- Kept historical rates hidden before `VALIDATED`, forecast intervals hidden
+  before `CALIBRATED`, and `execution_allowed=false` under every state.
+- Rejects negative post-cost EV, a superior opposite direction, no touch edge,
+  unbounded/unknown loss, and incomplete, stale, crossed, asynchronous, or
+  unit-inconsistent multi-leg quotes.
+- Refreshed the exact Python build/test pins, Web build and type-tool patch
+  versions, and the CI-verified Python 3.14 slim container digest.
+
+See the [v0.4.0 delivery notes](docs/releases/v0.4.0.md).
+
 ## [0.1.0] - 2026-08-29
 
 The first public release is an auditable research-console tool, not a validated
@@ -63,4 +93,5 @@ presenting that progress as a validated trading signal.
   events are represented as `null` / `not_collected`, and selection fallback is
   visible as a non-blocking advisory reason code.
 
+[0.4.0]: https://github.com/Lens-less/LensOS-Option/releases/tag/v0.4.0
 [0.1.0]: https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0

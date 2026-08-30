@@ -49,6 +49,7 @@ from .position_management import (
     validate_position_management_report,
 )
 from .regime import build_regime_permission_state
+from .strategy_brief import validate_strategy_brief
 from .strategy_research import (
     build_strategy_research,
     validate_strategy_research,
@@ -591,6 +592,9 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
     errors.extend(_validate_vol_surface_status(report.get("vol_surface_status")))
     errors.extend(_validate_candidate_research(report.get("candidate_research")))
     errors.extend(validate_strategy_research(report.get("strategy_research")))
+    strategy_brief = report.get("strategy_brief")
+    if strategy_brief is not None:
+        errors.extend(validate_strategy_brief(strategy_brief))
     errors.extend(_validate_ev_candidate_scanner(report.get("ev_candidate_scanner")))
     errors.extend(validate_portfolio_risk_report(report.get("portfolio_risk")))
     errors.extend(validate_position_management_report(report.get("position_management")))
@@ -1133,7 +1137,17 @@ def _validate_candidate_research(candidate_research: Any) -> list[str]:
         errors.append("candidate_research.status must be blocked or validated")
     if not isinstance(candidate_research.get("filter_thresholds"), dict):
         errors.append("candidate_research.filter_thresholds must be a dict")
-    for table_name in ("naked_short_calls", "call_credit_spreads"):
+    expected_tables = (
+        "naked_short_calls",
+        "call_credit_spreads",
+        "put_credit_spreads",
+        "iron_condors",
+    )
+    if candidate_research.get("structure_types") != list(expected_tables):
+        errors.append(
+            "candidate_research.structure_types must enumerate the canonical tables"
+        )
+    for table_name in expected_tables:
         table = candidate_research.get(table_name)
         if not isinstance(table, dict):
             errors.append(f"{table_name} must be a dict")

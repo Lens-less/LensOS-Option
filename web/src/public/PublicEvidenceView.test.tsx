@@ -256,12 +256,13 @@ describe("PublicEvidenceView public truth labels", () => {
       />,
     );
 
+    const evidenceDrawer = container.querySelector(".strategy-brief-details");
+    expect(evidenceDrawer).not.toBeNull();
     const acts = Array.from(
-      container.querySelectorAll("#surface-main > [id]"),
+      evidenceDrawer!.querySelectorAll("[id]"),
       (element) => element.id,
     );
     expect(acts.indexOf("signal")).toBeGreaterThanOrEqual(0);
-    expect(acts.indexOf("signal")).toBeLessThan(acts.indexOf("limitations"));
   });
 });
 
