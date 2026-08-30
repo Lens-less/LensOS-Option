@@ -75,6 +75,55 @@ def spread(**overrides):
     return base
 
 
+def put_spread(**overrides):
+    base = spread(
+        candidate_id="put-spread-1",
+        structure_type="put_credit_spread",
+        sell_leg_strike_price=90_000.0,
+        buy_leg_strike_price=80_000.0,
+        sell_leg_market_mark_iv=58.0,
+        sell_leg_surface_fitted_iv=57.3,
+        buy_leg_market_mark_iv=56.0,
+        buy_leg_surface_fitted_iv=55.8,
+    )
+    base.update(overrides)
+    return base
+
+
+def condor(**overrides):
+    base = {
+        "candidate_id": "condor-1",
+        "structure_type": "iron_condor",
+        "underlying_price": 100_000.0,
+        "dte_days": 18.0,
+        "spread_width": 10_000.0,
+        "net_credit": 3_400.0,
+        "mid_credit": 3_800.0,
+        "sell_leg_market_mark_iv": 53.5,
+        "sell_leg_surface_fitted_iv": 53.0,
+        "buy_leg_market_mark_iv": 51.5,
+        "buy_leg_surface_fitted_iv": 51.4,
+        "fit_residual_scale": 1.0,
+        "underlying_price_source": "option_forward",
+        "risk_neutral_p_itm": 0.19,
+        "premium_unit": "quote_currency",
+        "surface_quality": dict(GOOD_SURFACE),
+        "structure_legs": [
+            {"option_type": "put", "strike": 85_000.0, "quantity": 1.0},
+            {"option_type": "put", "strike": 90_000.0, "quantity": -1.0},
+            {"option_type": "call", "strike": 110_000.0, "quantity": -1.0},
+            {"option_type": "call", "strike": 115_000.0, "quantity": 1.0},
+        ],
+        "position_greeks": {
+            "status": "aggregated",
+            "theta": 105.0,
+            "vega": -70.0,
+        },
+    }
+    base.update(overrides)
+    return base
+
+
 ATM = {"strike_price": 100_000.0, "surface_fitted_iv": 50.0}
 
 
@@ -342,21 +391,18 @@ class StructureDerivedRiskTests(unittest.TestCase):
     tell you.
     """
 
-    def _put_spread(self, **overrides):
-        base = naked(
-            candidate_id="put-spread-1",
-            structure_type="put_credit_spread",
-            market_bid=2_000.0,
-            structure_legs=[
-                {"option_type": "put", "strike": 90_000.0, "quantity": -1.0},
-                {"option_type": "put", "strike": 80_000.0, "quantity": 1.0},
-            ],
-        )
-        base.update(overrides)
-        return base
-
     def test_a_put_credit_spread_gets_a_defined_return_on_risk(self):
-        item = component(self._put_spread(), NAKED, "return_on_risk")
+        item = component(
+            put_spread(
+                structure_legs=[
+                    {"option_type": "put", "strike": 90_000.0, "quantity": -1.0},
+                    {"option_type": "put", "strike": 80_000.0, "quantity": 1.0},
+                ],
+                net_credit=2_000.0,
+            ),
+            "put_credit_spread",
+            "return_on_risk",
+        )
 
         self.assertEqual(OK, item["status"])
         # Width 10_000, credit 2_000, so max loss is 8_000.
@@ -381,7 +427,17 @@ class StructureDerivedRiskTests(unittest.TestCase):
         )
 
     def test_downside_cushion_is_measured_toward_the_downside_breakeven(self):
-        item = component(self._put_spread(), NAKED, "breakeven_cushion")
+        item = component(
+            put_spread(
+                structure_legs=[
+                    {"option_type": "put", "strike": 90_000.0, "quantity": -1.0},
+                    {"option_type": "put", "strike": 80_000.0, "quantity": 1.0},
+                ],
+                net_credit=2_000.0,
+            ),
+            "put_credit_spread",
+            "breakeven_cushion",
+        )
 
         self.assertEqual(OK, item["status"])
         # Breakeven is 90_000 - 2_000 = 88_000, which is 12_000 below spot. A
@@ -416,6 +472,26 @@ class StructureDerivedRiskTests(unittest.TestCase):
 
         self.assertEqual(CAUTION, item["status"])
         self.assertLess(item["value"], 0.0)
+
+    def test_put_credit_spread_is_fully_scored_with_credit_entry_axes(self):
+        scored = score(put_spread(), "put_credit_spread")
+
+        self.assertEqual("scored", scored["status"])
+        self.assertEqual(OK, scored["components"]["liquidity_cost_ratio"]["status"])
+        self.assertEqual(OK, scored["components"]["return_on_risk"]["status"])
+
+    def test_iron_condor_uses_total_mid_credit_in_liquidity_cost_ratio(self):
+        item = component(condor(), "iron_condor", "liquidity_cost_ratio")
+
+        self.assertEqual(OK, item["status"])
+        self.assertAlmostEqual(1.0 - (3_400.0 / 3_800.0), item["value"], places=6)
+
+    def test_iron_condor_is_ranked_as_a_scored_defined_risk_structure(self):
+        scored = score(condor(), "iron_condor")
+
+        self.assertEqual("scored", scored["status"])
+        self.assertEqual([], scored["blocked_components"])
+        self.assertEqual(OK, scored["components"]["return_on_risk"]["status"])
 
 
 class FrontierOccupancyTests(unittest.TestCase):

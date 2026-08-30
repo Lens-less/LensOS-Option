@@ -1,4 +1,4 @@
-# Crypto Options Research Console
+# LensOS Option · 极简策略简报
 
 [English](README.en.md) · 中文
 
@@ -9,10 +9,11 @@
 
 [文档](docs/README.md) · [参与贡献](CONTRIBUTING.md) · [安全政策](SECURITY.md) ·
 [社区行为准则](CODE_OF_CONDUCT.md) · [变更记录](CHANGELOG.md) ·
-[v0.1.0 发布说明](docs/releases/v0.1.0.md)
+[v0.4.0 交付说明](docs/releases/v0.4.0.md) · [v0.1.0 公开发布说明](docs/releases/v0.1.0.md)
 
-一个**期权入场前的研究工具**：它读取 Deribit 的公开行情，判断“现在有没有一个
-值得考虑的卖方机会”，并把结论所依赖的每一份证据都摊开给你看。
+一个**一屏、30 秒可读的 BTC 期权策略简报**：它读取 Deribit 的公开行情，先判断市场
+状态和今天是否有可靠机会，再给出至多三张可复核的有限风险策略卡；没有机会时明确显示
+“今日暂无可靠策略”。
 
 它面向的是**自己做决策的期权卖方**——你想要一份可复核、可回放的入场前分析，而
 不是一个替你下单的黑盒。
@@ -25,6 +26,21 @@
 - **evidence-first**：每个结论都能追溯到具体证据。没有证据支撑的数字不会被编造出来，
   而是显式标记为“缺失”。
 - **fail-closed**：证据缺失、过期或校验失败时，一律降级为“阻断”。**没有信号 ≠ 放行。**
+
+## 一屏策略简报
+
+canonical `strategy_brief.v1` 只允许三种初始结构：Bull Put Credit Spread、Bear Call
+Credit Spread 与 Iron Condor。每张卡固定为一单位，列明精确买卖合约、到期日/DTE、按
+short bid / long ask 计算的最低净权利金、冻结成本、最大亏损和取消条件；不提供个性化手数。
+
+历史胜率只有在同结构、同方向、同 DTE、同选腿、同成交、同费用和同退出规则的 replay
+达到 `VALIDATED` 后才显示。预测胜率区间只有 exact-strategy artifact 达到
+`CALIBRATED` 后才显示。其余状态统一展示“暂不可用”，不会补数字。任何表面上的
+`execution_allowed` 都永久为 `false`。
+
+真实证据由操作者通过可重复的 `--strategy-history-artifact` 与
+`--strategy-forecast-runtime-evidence` 路径接入；promotion artifact 与当前 input/lineage/OOS
+证据保持分离，任何缺失或漂移都会立即隐藏旧概率。路径只可由启动进程配置，浏览器不能传入。
 
 ![LensOS Option 离线演示中的只读候选工作台](docs/assets/lensos-option-demo.png)
 
@@ -43,10 +59,11 @@ CLI 与 HTTP API 是驱动这两个界面的**本地引擎接口**，供集成�
 公开静态 bundle 只包含证据站与法务页，不包含 workbench 或 Chrome companion；这两个
 界面属于内部 / 本地形态。
 
-## 公开发布
+## 版本与公开发布
 
-- 当前稳定版本是 [`v0.1.0`](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0)；
-  wheel、Chrome 扩展 ZIP、校验和与完整说明均从 GitHub Release 提供。
+- 当前稳定版本是 [`v0.4.0`](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.4.0)，
+  wheel、Chrome 扩展 ZIP、SHA-256 校验和与完整说明均从 GitHub Release 提供；详见
+  [v0.4.0 发布说明](docs/releases/v0.4.0.md)。
 - 代码以 `Apache-2.0` 许可发布，见 [`LICENSE`](LICENSE)。
 - 公开数据产物与生成的公开研究内容以 `CC BY 4.0` 许可发布，见
   [`LICENSE-DATA`](LICENSE-DATA)。
@@ -60,10 +77,10 @@ CLI 与 HTTP API 是驱动这两个界面的**本地引擎接口**，供集成�
 
 ## 快速开始
 
-只需 Python ≥ 3.12。以下两条命令直接安装正式 wheel 并打开演示：
+只需 Python ≥ 3.12。以下两条命令安装当前稳定 wheel（v0.4.0）并打开演示：
 
 ```powershell
-python -m pip install https://github.com/Lens-less/LensOS-Option/releases/download/v0.1.0/crypto_options_research_console-0.1.0-py3-none-any.whl
+python -m pip install https://github.com/Lens-less/LensOS-Option/releases/download/v0.4.0/crypto_options_research_console-0.4.0-py3-none-any.whl
 crypto-options-report demo
 ```
 
@@ -150,10 +167,12 @@ crypto-options-report publish `
 
 | 能力 | 状态 |
 | --- | --- |
+| canonical `strategy_brief.v1` 与三表面一屏投影 | **GO** |
 | 本地确定性 / 回放研究工具链 | **GO** |
 | 经过发布器校验的静态研究产物 | **GO** |
 | paper / manual 交易、自动下单、真实账户执行 | **NO-GO** |
-| 校准与模型提升（model promotion） | 未实现；规格已定稿、轴已事前登记（见 [model-promotion.md](docs/model-promotion.md)） |
+| exact-strategy 校准与 promotion/demotion 机制 | **GO**；无成熟真实 cohort 时保持 `UNAVAILABLE` / `SCREENING` |
+| Bull Put / Iron Condor 历史胜率 | **暂不可用**；等待各自冻结协议后的未来 holdout |
 | 交易执行授权 | **NO-GO（永久）** |
 
 WebSocket gap/resync、24 小时 soak 与连续 7 天证据仍属于内部运行/执行就绪度，
@@ -402,15 +421,15 @@ Evidence Console 与 API **固定同源**，避免跨源配置和浏览器参数
 服务端对同一组输入只生成一次 `AnalysisRecord`，各 GET 投影复用同一份记录，不会重新
 拉取数据或重算结论。
 
-主要端点：`/evidence`（控制台）· `/research/report` · `/analysis/result` ·
+主要端点：`/evidence`（控制台）· `/strategy/brief` · `/research/report` · `/analysis/result` ·
 `/health` · `/livez` · `/readyz`。完整列表、鉴权要求与响应契约见
 [API 参考](docs/api-reference.md)。
 
 ### Chrome 研究伴侣（个人本地）
 
 面向个人本地使用的 Manifest V3 侧边栏（Chrome 114+）。从
-[`v0.1.0` Release](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0)
-下载 `lensos-option-chrome-extension-v0.1.0.zip` 并解压；先运行
+[`v0.4.0` Release](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.4.0)
+下载 `lensos-option-chrome-extension-v0.4.0.zip` 并解压；先运行
 `crypto-options-report demo`，再在 `chrome://extensions` 打开“开发者模式”→
 “加载已解压的扩展程序”→选择解压后的目录。
 

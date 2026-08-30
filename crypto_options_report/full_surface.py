@@ -56,6 +56,7 @@ API_ROUTES = [
     "GET /portfolio/risk",
     "GET /candidates",
     "GET /recommendation",
+    "GET /strategy/brief",
     "GET /research/signal",
     "GET /research/series",
     "POST /backtest/run",
@@ -136,6 +137,10 @@ def build_full_system_surface_report(
         "shared_schema_projection": {
             "schema_version": report.get("schema_version"),
             "action": report.get("action"),
+            "strategy_brief_action": ((report.get("strategy_brief") or {}).get("action")),
+            "strategy_brief_execution_allowed": (
+                (report.get("strategy_brief") or {}).get("execution_allowed")
+            ),
             "risk_state": report.get("risk_state"),
             "reason_codes": report.get("reason_codes"),
             "calibration_status": report.get("calibration_status"),

@@ -84,6 +84,7 @@ Token 比较使用常数时间比较。鉴权在路由和 404 判定**之前**�
 | 方法 | 路径 | 返回 |
 | --- | --- | --- |
 | GET | `/analysis/result` | 不可变的 `AnalysisRecord`（**可信输出**） |
+| GET | `/strategy/brief` | canonical `strategy_brief.v1` 一屏策略简报；0–3 张卡或 `NO_TRADE` |
 | GET | `/research/report` · `/report` | `research_report.v1` 兼容投影 |
 | GET | `/market/chain` | 报告的 `data_status` |
 | GET | `/surface` | `vol_surface_status` |
@@ -97,6 +98,16 @@ Token 比较使用常数时间比较。鉴权在路由和 404 判定**之前**�
 > **重要：** `research_report.v1` 中残留的退出状态机、持仓与 sizing 叙述**不属于**
 > 可信 `AnalysisRecord`，也不能影响入场准入。可信链路严格止于
 > `EntryAdmissionDecision`。
+
+`/strategy/brief` 与 `AnalysisRecord.strategy_brief` 是同一份确定性投影。它只允许
+Bull Put Credit Spread、Bear Call Credit Spread 与 Iron Condor，且
+`execution_allowed=false`。历史胜率只在 `history.status=VALIDATED` 时出现，预测区间只在
+`forecast.status=CALIBRATED` 时出现；来源或新鲜度不可证明时返回 `NO_TRADE`，不会冒充 live。
+
+操作者可重复传入 `--strategy-history-artifact <json>`，以及
+`--strategy-forecast-runtime-evidence <json>`。后者不是 promotion artifact 的别名：它必须同时
+携带独立刷新的当前 input fingerprint、lineage 和 OOS monitor；缺失、漂移或失效会把预测
+机械降级为 `RETIRED` 并清空旧区间。浏览器 query 无权指定这些本地路径。
 
 ## 回测作业
 

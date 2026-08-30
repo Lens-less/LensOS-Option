@@ -26,6 +26,7 @@ from .public_origin import validate_public_site_origin
 from .public_status_page import render_public_status_html
 from .publication_history import build_publication_history
 from .storage import read_json_object_from_regular_file
+from .strategy_brief import validate_strategy_brief
 from .vrp import build_vrp_status, load_dvol_history_fixture
 
 PUBLICATION_MANIFEST_SCHEMA = "public_publication_manifest.v1"
@@ -335,6 +336,8 @@ def _build_publication_inputs(
     signal_payload: dict[str, Any],
     series_payload: dict[str, Any],
     publication_history_payload: dict[str, Any],
+    strategy_history_artifact_payloads: tuple[dict[str, Any], ...] = (),
+    strategy_forecast_runtime_evidence_payloads: tuple[dict[str, Any], ...] = (),
     published_dt: datetime,
     git_provenance: dict[str, Any],
     site_origin: str,
@@ -346,6 +349,14 @@ def _build_publication_inputs(
         "signal_artifact": canonical_sha256(signal_payload),
         "series_artifact": canonical_sha256(series_payload),
         "publication_history": canonical_sha256(publication_history_payload),
+        "strategy_history_artifacts": sorted(
+            canonical_sha256(payload)
+            for payload in strategy_history_artifact_payloads
+        ),
+        "strategy_forecast_runtime_evidence": sorted(
+            canonical_sha256(payload)
+            for payload in strategy_forecast_runtime_evidence_payloads
+        ),
         "site_origin": site_origin,
         "published_at": _timestamp(published_dt),
         "git_sha": git_provenance.get("git_sha"),
@@ -1320,6 +1331,8 @@ def publish_site(
     site_origin: str,
     git_sha: str | None = None,
     web_build: str | None = None,
+    strategy_history_artifacts: tuple[str, ...] = (),
+    strategy_forecast_runtime_evidence: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build one deterministic static publication tree."""
     site_origin_value = validate_public_site_origin(site_origin)
@@ -1352,6 +1365,22 @@ def publish_site(
         publication_history_path,
         max_bytes=4 * 1024 * 1024,
         description="publication history",
+    )
+    history_artifact_payloads = tuple(
+        read_json_object_from_regular_file(
+            _require_file(path, label="strategy history artifact input"),
+            max_bytes=64 * 1024 * 1024,
+            description="strategy history artifact",
+        )
+        for path in strategy_history_artifacts
+    )
+    forecast_runtime_evidence_payloads = tuple(
+        read_json_object_from_regular_file(
+            _require_file(path, label="strategy forecast runtime evidence input"),
+            max_bytes=64 * 1024 * 1024,
+            description="strategy forecast runtime evidence",
+        )
+        for path in strategy_forecast_runtime_evidence
     )
     _validate_publication_payload(signal_payload, description="signal artifact")
     _validate_publication_payload(series_payload, description="series artifact")
@@ -1399,6 +1428,8 @@ def publish_site(
         generated_at=_timestamp(captured_dt),
         market_snapshot=snapshot_payload,
         underlying_history=underlying_payload,
+        strategy_history_artifacts=history_artifact_payloads,
+        strategy_forecast_runtime_evidence=forecast_runtime_evidence_payloads,
     )
     report = record.project_research_report_v1()
     report_errors = validate_report_contract(report)
@@ -1477,6 +1508,10 @@ def publish_site(
         signal_payload=signal_payload,
         series_payload=series_payload,
         publication_history_payload=publication_history_payload,
+        strategy_history_artifact_payloads=history_artifact_payloads,
+        strategy_forecast_runtime_evidence_payloads=(
+            forecast_runtime_evidence_payloads
+        ),
         published_dt=published_dt,
         git_provenance=git_provenance,
         site_origin=site_origin_value,
@@ -1650,7 +1685,8 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
         evaluation_clock=evaluation_clock,
         publication_reason_codes=publication_reason_codes,
     )
-    return {
+    strategy_brief = _project_strategy_brief(report.get("strategy_brief"))
+    public_report = {
         "schema_version": report.get("schema_version"),
         "generated_at": report.get("generated_at"),
         "action": report.get("action"),
@@ -1679,6 +1715,9 @@ def _build_public_report(report: dict[str, Any]) -> dict[str, Any]:
             report.get("full_system_surface")
         ),
     }
+    if strategy_brief is not None:
+        public_report["strategy_brief"] = strategy_brief
+    return public_report
 
 
 def _project_exchange_event_status(report: dict[str, Any]) -> dict[str, Any]:
@@ -1991,7 +2030,7 @@ def _project_public_optional_dte_days(
     return dte_days
 
 
-def _project_call_credit_candidate(
+def _project_credit_spread_candidate(
     value: Any,
     *,
     evaluation_clock: str,
@@ -2016,6 +2055,40 @@ def _project_call_credit_candidate(
         "expiry_date": candidate.get("expiry_date"),
         "dte_days": dte_days,
         "model_delta": candidate.get("model_delta"),
+        "net_credit": candidate.get("net_credit"),
+        "spread_width": candidate.get("spread_width"),
+        "premium_currency": candidate.get("premium_currency"),
+        "underlying_price": candidate.get("underlying_price"),
+        "surface_quality": _project_surface_quality(candidate.get("surface_quality")),
+    }
+
+
+def _project_iron_condor_candidate(
+    value: Any,
+    *,
+    evaluation_clock: str,
+    publication_reason_codes: list[str] | None = None,
+) -> dict[str, Any] | None:
+    candidate = dict(value or {})
+    dte_days, reason_code = _resolve_public_candidate_dte_days(
+        candidate,
+        evaluation_clock=evaluation_clock,
+    )
+    if reason_code:
+        _append_public_reason_code(publication_reason_codes, reason_code)
+        return None
+    return {
+        "candidate_id": candidate.get("candidate_id"),
+        "decision": candidate.get("decision"),
+        "structure_type": candidate.get("structure_type"),
+        "put_spread_id": candidate.get("put_spread_id"),
+        "call_spread_id": candidate.get("call_spread_id"),
+        "put_short_strike_price": candidate.get("put_short_strike_price"),
+        "put_long_strike_price": candidate.get("put_long_strike_price"),
+        "call_short_strike_price": candidate.get("call_short_strike_price"),
+        "call_long_strike_price": candidate.get("call_long_strike_price"),
+        "expiry_date": candidate.get("expiry_date"),
+        "dte_days": dte_days,
         "net_credit": candidate.get("net_credit"),
         "spread_width": candidate.get("spread_width"),
         "premium_currency": candidate.get("premium_currency"),
@@ -2098,17 +2171,36 @@ def _project_candidate_research(
     )
     call_credit_spreads = _project_candidate_bucket(
         research.get("call_credit_spreads"),
-        row_projector=_project_call_credit_candidate,
+        row_projector=_project_credit_spread_candidate,
+        evaluation_clock=evaluation_clock,
+        publication_reason_codes=publication_reason_codes,
+    )
+    put_credit_spreads = _project_candidate_bucket(
+        research.get("put_credit_spreads"),
+        row_projector=_project_credit_spread_candidate,
+        evaluation_clock=evaluation_clock,
+        publication_reason_codes=publication_reason_codes,
+    )
+    iron_condors = _project_candidate_bucket(
+        research.get("iron_condors"),
+        row_projector=_project_iron_condor_candidate,
         evaluation_clock=evaluation_clock,
         publication_reason_codes=publication_reason_codes,
     )
     all_buckets = [
         bucket
-        for bucket in (naked_short_calls, call_credit_spreads)
+        for bucket in (
+            naked_short_calls,
+            call_credit_spreads,
+            put_credit_spreads,
+            iron_condors,
+        )
         if isinstance(bucket, dict)
     ]
     projected_summary = {
         "eligible_call_credit_spreads": len((call_credit_spreads or {}).get("eligible") or []),
+        "eligible_put_credit_spreads": len((put_credit_spreads or {}).get("eligible") or []),
+        "eligible_iron_condors": len((iron_condors or {}).get("eligible") or []),
         "eligible_expiries": len(
             {
                 str(row.get("expiry_date"))
@@ -2128,8 +2220,12 @@ def _project_candidate_research(
             }
         ),
         "rejected_call_credit_spreads": len((call_credit_spreads or {}).get("rejected") or []),
+        "rejected_put_credit_spreads": len((put_credit_spreads or {}).get("rejected") or []),
+        "rejected_iron_condors": len((iron_condors or {}).get("rejected") or []),
         "rejected_naked_short_calls": len((naked_short_calls or {}).get("rejected") or []),
         "review_call_credit_spreads": len((call_credit_spreads or {}).get("review") or []),
+        "review_put_credit_spreads": len((put_credit_spreads or {}).get("review") or []),
+        "review_iron_condors": len((iron_condors or {}).get("review") or []),
         "review_naked_short_calls": len((naked_short_calls or {}).get("review") or []),
     }
     if summary:
@@ -2141,16 +2237,24 @@ def _project_candidate_research(
         "reason_code": research.get("reason_code"),
         "summary": {
             "eligible_call_credit_spreads": summary.get("eligible_call_credit_spreads"),
+            "eligible_put_credit_spreads": summary.get("eligible_put_credit_spreads"),
+            "eligible_iron_condors": summary.get("eligible_iron_condors"),
             "eligible_expiries": summary.get("eligible_expiries"),
             "eligible_naked_short_calls": summary.get("eligible_naked_short_calls"),
             "expiries_considered": summary.get("expiries_considered"),
             "rejected_call_credit_spreads": summary.get("rejected_call_credit_spreads"),
+            "rejected_put_credit_spreads": summary.get("rejected_put_credit_spreads"),
+            "rejected_iron_condors": summary.get("rejected_iron_condors"),
             "rejected_naked_short_calls": summary.get("rejected_naked_short_calls"),
             "review_call_credit_spreads": summary.get("review_call_credit_spreads"),
+            "review_put_credit_spreads": summary.get("review_put_credit_spreads"),
+            "review_iron_condors": summary.get("review_iron_condors"),
             "review_naked_short_calls": summary.get("review_naked_short_calls"),
         },
         "naked_short_calls": naked_short_calls,
         "call_credit_spreads": call_credit_spreads,
+        "put_credit_spreads": put_credit_spreads,
+        "iron_condors": iron_condors,
     }
 
 
@@ -2961,17 +3065,86 @@ def _validate_publication_payload(value: Any, *, description: str) -> None:
         )
 
 
-def _contains_forbidden_publication_key(value: Any) -> bool:
+def _contains_forbidden_publication_key(
+    value: Any,
+    *,
+    path: tuple[Any, ...] = (),
+) -> bool:
     if isinstance(value, dict):
         for key, nested in value.items():
-            if key in _FORBIDDEN_PUBLICATION_KEYS:
+            nested_path = (*path, key)
+            if key in _FORBIDDEN_PUBLICATION_KEYS and not _allow_publication_key(
+                key,
+                nested,
+                path=nested_path,
+            ):
                 return True
-            if _contains_forbidden_publication_key(nested):
+            if _contains_forbidden_publication_key(nested, path=nested_path):
                 return True
         return False
     if isinstance(value, list):
-        return any(_contains_forbidden_publication_key(item) for item in value)
+        return any(
+            _contains_forbidden_publication_key(item, path=(*path, index))
+            for index, item in enumerate(value)
+        )
     return False
+
+
+def _allow_publication_key(key: str, value: Any, *, path: tuple[Any, ...]) -> bool:
+    if key != "quantity":
+        return False
+    if _is_public_strategy_brief_quantity_path(path):
+        return value == 1 or value == 1.0
+    return _is_public_openapi_strategy_brief_quantity_path(path)
+
+
+def _is_public_strategy_brief_quantity_path(path: tuple[Any, ...]) -> bool:
+    if len(path) < 6:
+        return False
+    return (
+        path[-1] == "quantity"
+        and isinstance(path[-2], int)
+        and path[-3] == "legs"
+        and isinstance(path[-4], int)
+        and path[-5] == "strategies"
+        and path[-6] == "strategy_brief"
+    )
+
+
+def _is_public_openapi_strategy_brief_quantity_path(path: tuple[Any, ...]) -> bool:
+    path_text = tuple(str(item) for item in path)
+    direct = (
+        "components",
+        "schemas",
+        "ResearchReport",
+        "properties",
+        "strategy_brief",
+    )
+    standalone = (
+        "components",
+        "schemas",
+        "StrategyBrief",
+    )
+    if not (path_text[: len(direct)] == direct or path_text[: len(standalone)] == standalone):
+        return False
+    return (
+        "strategies" in path_text
+        and "legs" in path_text
+        and path_text[-1] == "quantity"
+    )
+
+
+def _project_strategy_brief(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    brief = dict(value or {})
+    errors = validate_strategy_brief(brief)
+    if errors:
+        raise ValueError(
+            "publication blocked: invalid strategy_brief payload: "
+            + "; ".join(errors)
+        )
+    return brief
 
 
 def _contains_absolute_local_path(value: Any) -> bool:

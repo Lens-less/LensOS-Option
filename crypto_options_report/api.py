@@ -65,6 +65,7 @@ from .sidecar_auth import (
 from .storage import read_json_object_from_regular_file
 
 REPORT_PATH = "/research/report"
+STRATEGY_BRIEF_PATH = "/strategy/brief"
 SIGNAL_PATH = "/research/signal"
 SERIES_PATH = "/research/series"
 REPORT_ALIASES = {REPORT_PATH, "/report"}
@@ -130,6 +131,7 @@ GET_SURFACE_PATHS = {
     "/portfolio/risk",
     "/candidates",
     "/recommendation",
+    STRATEGY_BRIEF_PATH,
     "/backtest/report/default",
     "/dashboard",
 }
@@ -285,6 +287,11 @@ class RuntimeConfig:
     signal_artifact: str | None = None
     # A series-history artifact produced by the CLI, served the same way.
     series_artifact: str | None = None
+    # Repeatable operator-owned immutable strategy evidence. Forecast runtime
+    # envelopes keep current fingerprints/lineage/OOS monitoring separate from
+    # the promoted artifact so stale probabilities demote automatically.
+    strategy_history_artifacts: tuple[str, ...] = ()
+    strategy_forecast_runtime_evidence: tuple[str, ...] = ()
 
     @property
     def production(self) -> bool:
@@ -311,6 +318,12 @@ class RuntimeConfig:
             raise ValueError("signal_artifact not found")
         if self.series_artifact and not Path(self.series_artifact).expanduser().is_file():
             raise ValueError("series_artifact not found")
+        for path in self.strategy_history_artifacts:
+            if not Path(path).expanduser().is_file():
+                raise ValueError("strategy_history_artifact not found")
+        for path in self.strategy_forecast_runtime_evidence:
+            if not Path(path).expanduser().is_file():
+                raise ValueError("strategy_forecast_runtime_evidence not found")
         if self.published and self.replay:
             raise ValueError("published and replay are mutually exclusive")
         if self.published and not self.snapshot_fixture:
@@ -522,6 +535,8 @@ def build_api_analysis_record(
     paper_ledger_path: str | None = None,
     manual_approval_runbook_path: str | None = None,
     underlying_history_fixture: str | None = None,
+    strategy_history_artifacts: tuple[str, ...] = (),
+    strategy_forecast_runtime_evidence: tuple[str, ...] = (),
 ) -> AnalysisRecord:
     if snapshot_fixture and live_deribit:
         raise ValueError("choose snapshot_fixture or live_deribit, not both")
@@ -564,6 +579,14 @@ def build_api_analysis_record(
         if underlying_history_fixture
         else None
     )
+    history_artifacts = _load_strategy_evidence_files(
+        strategy_history_artifacts,
+        description="strategy history artifact",
+    )
+    forecast_runtime_evidence = _load_strategy_evidence_files(
+        strategy_forecast_runtime_evidence,
+        description="strategy forecast runtime evidence",
+    )
     return build_analysis_record(
         mode=mode,
         market_snapshot=market_snapshot,
@@ -575,6 +598,23 @@ def build_api_analysis_record(
         manual_approval_runbook_path=manual_approval_runbook_path,
         persist_paper_ledger=False,
         underlying_history=underlying_history,
+        strategy_history_artifacts=history_artifacts,
+        strategy_forecast_runtime_evidence=forecast_runtime_evidence,
+    )
+
+
+def _load_strategy_evidence_files(
+    paths: tuple[str, ...],
+    *,
+    description: str,
+) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        read_json_object_from_regular_file(
+            Path(path).expanduser(),
+            max_bytes=64 * 1024 * 1024,
+            description=description,
+        )
+        for path in paths
     )
 
 
@@ -593,6 +633,8 @@ def build_api_report(
     backtest_artifact_dir: str | None = None,
     paper_ledger_path: str | None = None,
     manual_approval_runbook_path: str | None = None,
+    strategy_history_artifacts: tuple[str, ...] = (),
+    strategy_forecast_runtime_evidence: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Return the legacy report projection of one immutable analysis record."""
     return build_api_analysis_record(
@@ -609,6 +651,8 @@ def build_api_report(
         backtest_artifact_dir=backtest_artifact_dir,
         paper_ledger_path=paper_ledger_path,
         manual_approval_runbook_path=manual_approval_runbook_path,
+        strategy_history_artifacts=strategy_history_artifacts,
+        strategy_forecast_runtime_evidence=strategy_forecast_runtime_evidence,
     ).project_research_report_v1()
 
 
@@ -1796,6 +1840,8 @@ def _payload_for_path(
             report,
             (runtime or RuntimeConfig()).validate(check_inputs=False),
         )
+    if path == STRATEGY_BRIEF_PATH:
+        return record.project_strategy_brief_v1()
     if path == "/market/chain":
         return report["data_status"]
     if path == "/surface":
@@ -1976,6 +2022,12 @@ def _analysis_cache_identity(options: dict[str, Any]) -> dict[str, Any]:
         value = options.get(key)
         if value:
             paths.append(Path(str(value)).expanduser().resolve())
+    for key in (
+        "strategy_history_artifacts",
+        "strategy_forecast_runtime_evidence",
+    ):
+        for value in options.get(key) or ():
+            paths.append(Path(str(value)).expanduser().resolve())
     return {
         "options": options,
         "local_artifacts": [_path_version(path) for path in paths],
@@ -2112,6 +2164,10 @@ def _report_options_from_query(
             "paper_ledger_path": runtime.paper_ledger_path,
             "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
             "underlying_history_fixture": runtime.underlying_history_fixture,
+            "strategy_history_artifacts": runtime.strategy_history_artifacts,
+            "strategy_forecast_runtime_evidence": (
+                runtime.strategy_forecast_runtime_evidence
+            ),
             "generated_at": _evaluation_clock(runtime),
             "generated_at_source": _evaluation_clock_source(runtime),
         }
@@ -2182,6 +2238,10 @@ def _report_options_from_query(
         "paper_ledger_path": runtime.paper_ledger_path,
         "manual_approval_runbook_path": runtime.manual_approval_runbook_path,
         "underlying_history_fixture": runtime.underlying_history_fixture,
+        "strategy_history_artifacts": runtime.strategy_history_artifacts,
+        "strategy_forecast_runtime_evidence": (
+            runtime.strategy_forecast_runtime_evidence
+        ),
     }
 
 
@@ -2320,6 +2380,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--strategy-history-artifact",
+        action="append",
+        default=[],
+        help=(
+            "repeatable immutable aligned-history artifact; at most one per "
+            "strategy family"
+        ),
+    )
+    parser.add_argument(
+        "--strategy-forecast-runtime-evidence",
+        action="append",
+        default=[],
+        help=(
+            "repeatable exact-strategy forecast envelope containing a promoted "
+            "artifact plus current fingerprint, lineage, and OOS state"
+        ),
+    )
+    parser.add_argument(
         "--replay",
         action="store_true",
         default=_environment_flag("CRYPTO_OPTIONS_API_REPLAY"),
@@ -2397,6 +2475,10 @@ def main(argv: list[str] | None = None) -> int:
         published=args.published,
         signal_artifact=args.signal_artifact,
         series_artifact=args.series_artifact,
+        strategy_history_artifacts=tuple(args.strategy_history_artifact),
+        strategy_forecast_runtime_evidence=tuple(
+            args.strategy_forecast_runtime_evidence
+        ),
         access_log=args.access_log,
         historical_fixture=args.historical_fixture,
         underlying_history_fixture=args.underlying_history_fixture,

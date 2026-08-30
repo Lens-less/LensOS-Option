@@ -1,4 +1,5 @@
 import type { ResearchReport } from "../contracts";
+import { strategyBriefFixture } from "./strategyBriefFixtures";
 import type { LoadedReport } from "../transport";
 
 export const strategyResearchFixture: NonNullable<
@@ -196,6 +197,7 @@ export const safeResearchReport: ResearchReport = {
     order_instructions_allowed: false,
     paper_manual_candidates_allowed: false,
   },
+  strategy_brief: strategyBriefFixture,
   strategy_research: strategyResearchFixture,
   full_system_surface: {
     release_readiness: {

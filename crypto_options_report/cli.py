@@ -52,6 +52,7 @@ from .signal_validation import (
     build_signal_preflight_report,
     build_signal_validation_report,
 )
+from .storage import read_json_object_from_regular_file
 from .surface import build_vol_surface_and_candidate_research
 
 # Process exit codes for scheduled analysis / alerts.
@@ -193,6 +194,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--web-build",
         required=True,
         help="prebuilt public-only bundle directory (for example web/dist-public)",
+    )
+    publish.add_argument(
+        "--strategy-history-artifact",
+        action="append",
+        default=[],
+        help="repeatable immutable aligned-history artifact JSON",
+    )
+    publish.add_argument(
+        "--strategy-forecast-runtime-evidence",
+        action="append",
+        default=[],
+        help="repeatable exact-strategy forecast runtime evidence JSON",
     )
     publish.add_argument("--compact", action="store_true", help="emit compact JSON")
 
@@ -488,6 +501,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 site_origin=args.site_origin,
                 git_sha=args.git_sha,
                 web_build=args.web_build,
+                strategy_history_artifacts=tuple(args.strategy_history_artifact),
+                strategy_forecast_runtime_evidence=tuple(
+                    args.strategy_forecast_runtime_evidence
+                ),
             )
             _emit_json(payload, compact=args.compact)
             return EXIT_OK
@@ -865,6 +882,18 @@ def _add_report_replay_args(parser: argparse.ArgumentParser) -> None:
             "expected value, which is otherwise reported as unavailable"
         ),
     )
+    parser.add_argument(
+        "--strategy-history-artifact",
+        action="append",
+        default=[],
+        help="repeatable immutable aligned-history artifact JSON",
+    )
+    parser.add_argument(
+        "--strategy-forecast-runtime-evidence",
+        action="append",
+        default=[],
+        help="repeatable exact-strategy forecast runtime evidence JSON",
+    )
     parser.add_argument("--generated-at")
 
 
@@ -902,12 +931,38 @@ def _build_analysis_record_from_args(args: argparse.Namespace) -> AnalysisRecord
             args.underlying_history_fixture
         )
 
+    history_artifacts = _load_strategy_evidence_args(
+        getattr(args, "strategy_history_artifact", ()),
+        description="strategy history artifact",
+    )
+    forecast_runtime_evidence = _load_strategy_evidence_args(
+        getattr(args, "strategy_forecast_runtime_evidence", ()),
+        description="strategy forecast runtime evidence",
+    )
+
     return build_analysis_record(
         mode=args.mode,
         market_snapshot=market_snapshot,
         account_scenario=args.account_scenario,
         generated_at=args.generated_at,
         underlying_history=underlying_history,
+        strategy_history_artifacts=history_artifacts,
+        strategy_forecast_runtime_evidence=forecast_runtime_evidence,
+    )
+
+
+def _load_strategy_evidence_args(
+    paths: Sequence[str],
+    *,
+    description: str,
+) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        read_json_object_from_regular_file(
+            Path(path).expanduser(),
+            max_bytes=64 * 1024 * 1024,
+            description=description,
+        )
+        for path in paths
     )
 
 

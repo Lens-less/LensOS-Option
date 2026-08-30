@@ -51,7 +51,12 @@ TIE_BREAK_ORDER = (
 )
 
 NAKED = "naked_short_call"
-SPREAD = "call_credit_spread"
+CALL_CREDIT_SPREAD = "call_credit_spread"
+CREDIT_STRUCTURES = {
+    CALL_CREDIT_SPREAD,
+    "put_credit_spread",
+    "iron_condor",
+}
 
 UNBOUNDED_MAX_LOSS = "UNBOUNDED_MAX_LOSS_NO_RETURN_ON_RISK_DEFINED"
 MISSING_ATM_REFERENCE = "MISSING_ATM_SURFACE_REFERENCE"
@@ -276,7 +281,7 @@ def _smile_residual_richness(
     raw points, because the chains that cannot support the scale are exactly the
     ones the fallback would flatter.
     """
-    if structure_type == SPREAD:
+    if _uses_credit_entry(structure_type):
         sell = _residual(candidate, "sell_leg_market_mark_iv", "sell_leg_surface_fitted_iv")
         buy = _residual(candidate, "buy_leg_market_mark_iv", "buy_leg_surface_fitted_iv")
         raw = None if sell is None or buy is None else sell - buy
@@ -321,16 +326,19 @@ def _liquidity_cost_ratio(
     Only meaningful for spreads. For a single leg it reduces to the existing
     `spread_ratio` field and would double-count it in dominance.
     """
-    if structure_type != SPREAD:
+    if not _uses_credit_entry(structure_type):
         return _component(None, "ratio", BLOCKED, "SINGLE_LEG_USES_SPREAD_RATIO", LOWER_BETTER)
 
-    sell_mid = _mid(candidate, "sell_leg_market_bid", "sell_leg_market_ask")
-    buy_mid = _mid(candidate, "buy_leg_market_bid", "buy_leg_market_ask")
     credit = _number(candidate.get("net_credit"))
-    if sell_mid is None or buy_mid is None or credit is None:
+    mid_credit = _number(candidate.get("mid_credit"))
+    if mid_credit is None:
+        sell_mid = _mid(candidate, "sell_leg_market_bid", "sell_leg_market_ask")
+        buy_mid = _mid(candidate, "buy_leg_market_bid", "buy_leg_market_ask")
+        if sell_mid is not None and buy_mid is not None:
+            mid_credit = sell_mid - buy_mid
+    if mid_credit is None or credit is None:
         return _component(None, "ratio", UNKNOWN, None, LOWER_BETTER)
 
-    mid_credit = sell_mid - buy_mid
     if mid_credit <= 0:
         return _component(None, "ratio", BLOCKED, NON_POSITIVE_MID_CREDIT, LOWER_BETTER)
     return _component(round(1.0 - (credit / mid_credit), 6), "ratio", OK, None, LOWER_BETTER)
@@ -361,9 +369,7 @@ def _breakeven_cushion(
 
     premium_unit = candidate.get("premium_unit")
     credit = normalize_premium_to_usd(
-        _number(candidate.get("net_credit"))
-        if structure_type == SPREAD
-        else _number(candidate.get("market_bid")),
+        _credit_value(candidate, structure_type),
         premium_unit=premium_unit,
         underlying_price=spot,
     )
@@ -483,9 +489,7 @@ def _return_on_risk(candidate: dict[str, Any], structure_type: str) -> dict[str,
     """
     spot = _number(candidate.get("underlying_price"))
     credit_usd = normalize_premium_to_usd(
-        _number(candidate.get("net_credit"))
-        if structure_type == SPREAD
-        else _number(candidate.get("market_bid")),
+        _credit_value(candidate, structure_type),
         premium_unit=candidate.get("premium_unit"),
         underlying_price=spot,
     )
@@ -619,10 +623,20 @@ def _component(
 
 def _structurally_absent(component_name: str, structure_type: str) -> bool:
     """True when a component is undefined by structure, not by missing data."""
-    return structure_type != SPREAD and component_name in {
+    return not _uses_credit_entry(structure_type) and component_name in {
         "liquidity_cost_ratio",
         "return_on_risk",
     }
+
+
+def _uses_credit_entry(structure_type: str) -> bool:
+    return structure_type in CREDIT_STRUCTURES
+
+
+def _credit_value(candidate: dict[str, Any], structure_type: str) -> float | None:
+    if _uses_credit_entry(structure_type):
+        return _number(candidate.get("net_credit"))
+    return _number(candidate.get("market_bid"))
 
 
 def _surface_trusted(candidate: dict[str, Any]) -> bool:

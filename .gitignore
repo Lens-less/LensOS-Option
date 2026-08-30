@@ -12,6 +12,8 @@ codex_review_output.txt
 .codex/
 .omx/
 .coordination-evidence/
+# Local verification scratch output.
+.tmp/
 
 # Internal agent-coordination scaffolding. Kept out of the product repo; the
 # history before the 2026-07-26 cleanup still contains it.
@@ -25,6 +27,7 @@ build/
 dist/
 *.egg-info/
 web/node_modules/
+/node_modules/
 web/.vite/
 web/coverage/
 web/dist-public/

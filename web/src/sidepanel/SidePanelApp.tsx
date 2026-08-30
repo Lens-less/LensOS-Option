@@ -1,8 +1,17 @@
 import React from "react";
-import { selectContractComparison, selectSidePanelViewModel } from "../report";
+import {
+  selectContractComparison,
+  selectReportFreshness,
+  selectSidePanelViewModel,
+} from "../report";
+import {
+  type StrategyBriefSurfaceState,
+  validateStrategyBrief,
+} from "../report/strategyBrief";
 import type { LoadedReport } from "../transport";
 import type { DeribitContext } from "../extension/messages";
 import { ResearchErrorBoundary } from "../components/shell/ResearchErrorBoundary";
+import { StrategyBriefView } from "../components/strategyBrief/StrategyBriefView";
 import {
   chromeSidePanelRuntime,
   type SidePanelRuntime,
@@ -180,6 +189,26 @@ export function SidePanelApp({
 
   const effectiveInstrument = effectiveInstrumentName ?? "";
   const evidenceUrl = runtime.getEvidenceUrl(panel.origin);
+  const strategyBrief = React.useMemo(() => {
+    try {
+      return displayLoaded?.report.strategy_brief
+        ? validateStrategyBrief(displayLoaded.report.strategy_brief)
+        : null;
+    } catch {
+      return null;
+    }
+  }, [displayLoaded]);
+  const strategyBriefSurface = React.useMemo(() => {
+    if (!displayLoaded || !strategyBrief) {
+      return undefined;
+    }
+    return sidePanelStrategyBriefSurface(
+      displayLoaded.report,
+      selectReportFreshness(displayLoaded.report, displayLoaded.receivedAtMs, nowMs),
+      isStaleOffline,
+      nowMs,
+    );
+  }, [displayLoaded, isStaleOffline, nowMs, strategyBrief]);
 
   return (
     <main className="sidepanel-shell">
@@ -207,24 +236,31 @@ export function SidePanelApp({
       </div>
 
       <ResearchErrorBoundary label="研究数据区">
-        <SidePanelStatusSections
-          context={panel.context}
-          effectiveInstrument={effectiveInstrument}
-          error={panel.error}
-          evidenceUrl={evidenceUrl}
-          isStaleOffline={isStaleOffline}
-          manualInstrument={manualInstrument}
-          model={model}
-          onManualInstrumentChange={setManualInstrument}
-          onRetry={() => void load(true)}
-          onSyncContext={() => void syncContext()}
-          status={panel.status}
+        <StrategyBriefView
+          brief={strategyBrief}
+          surface={strategyBriefSurface}
         />
-        <SidePanelComparisonSection
-          comparison={comparison}
-          onSelectInstrument={setManualInstrument}
-        />
-        <SidePanelResearchSections model={model} />
+        <details className="strategy-brief-details panel-details">
+          <summary>查看依据</summary>
+          <SidePanelStatusSections
+            context={panel.context}
+            effectiveInstrument={effectiveInstrument}
+            error={panel.error}
+            evidenceUrl={evidenceUrl}
+            isStaleOffline={isStaleOffline}
+            manualInstrument={manualInstrument}
+            model={model}
+            onManualInstrumentChange={setManualInstrument}
+            onRetry={() => void load(true)}
+            onSyncContext={() => void syncContext()}
+            status={panel.status}
+          />
+          <SidePanelComparisonSection
+            comparison={comparison}
+            onSelectInstrument={setManualInstrument}
+          />
+          <SidePanelResearchSections model={model} />
+        </details>
       </ResearchErrorBoundary>
 
       <section className="panel-settings-toggle" aria-label="本地设置">
@@ -263,4 +299,57 @@ export function SidePanelApp({
       </footer>
     </main>
   );
+}
+
+function sidePanelStrategyBriefSurface(
+  report: LoadedReport["report"],
+  freshness: ReturnType<typeof selectReportFreshness>,
+  isStaleOffline: boolean,
+  nowMs: number,
+): StrategyBriefSurfaceState {
+  const runtime = report.runtime_context;
+  if (!runtime) {
+    return {
+      freshness_status: "UNAVAILABLE",
+      source_kind: "fallback",
+      presented_as: "published",
+      source_label: "Runtime provenance unavailable",
+      now_ms: nowMs,
+    };
+  }
+  const mode = runtime.mode;
+  const currentFreshness =
+    isStaleOffline || freshness.phase === "expired" || freshness.phase === "warning"
+      ? "STALE"
+      : freshness.phase === "unavailable"
+        ? "UNAVAILABLE"
+        : "CURRENT";
+  return {
+    freshness_status: currentFreshness,
+    source_kind:
+      mode === "published"
+        ? "published"
+        : mode === "replay"
+          ? "replay"
+          : runtime.demo_mode
+            ? "demo"
+            : "live",
+    presented_as:
+      mode === "published"
+        ? "published"
+        : mode === "replay"
+          ? "replay"
+          : "live",
+    source_label:
+      mode === "published"
+        ? "Published edition"
+        : mode === "replay"
+          ? runtime.demo_mode
+            ? "Demo snapshot"
+            : "Replay snapshot"
+          : isStaleOffline
+            ? "Cached live report"
+            : "Live API snapshot",
+    now_ms: nowMs,
+  };
 }

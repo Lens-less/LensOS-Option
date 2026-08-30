@@ -165,6 +165,10 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "快照缺少采集时间",
     "detail": "没有可验证的采集时间就无法归属观察日或到期 cohort；该快照已从样本中排除。"
   },
+  MISSING_CANDIDATE_GREEKS: {
+    "title": "候选缺少风险敏感度",
+    "detail": "计算绝对 EV 所需的风险敏感度不完整，因此该候选不会进入策略简报。"
+  },
   MISSING_CANONICAL_METADATA: {
     "title": "缺少规范合约元数据",
     "detail": "合约名、行权价或结算字段无法规范解析，因此该报价被隔离。"
@@ -313,6 +317,10 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
     "title": "波动率曲面不具备测量资格",
     "detail": "该到期曲面没有通过拟合与质量条件，因此不进入公开信号样本。"
   },
+  SUSPECT_PRICE_DIVERGENCE: {
+    "title": "报价与估值异常背离",
+    "detail": "可成交价格与冻结估值显著不一致；系统按可疑数据处理，不把它解释为机会。"
+  },
   TRUST_EVIDENCE_NOT_OBSERVED: {
     "title": "数据可信度尚未形成观测证据",
     "detail": "还没有足够的连续采集证据证明数据链稳定，页面保持保守状态。"
@@ -320,6 +328,10 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
   TRUST_PROMOTION_MINIMUMS_MISSING: {
     "title": "可信提升最低门槛缺失",
     "detail": "可信证据不完整，不能验证是否达到 6 次连续通过与 60 秒观察要求。"
+  },
+  UNBOUNDED_LOSS_STRUCTURE: {
+    "title": "结构亏损没有上限",
+    "detail": "该组合无法证明最大亏损有界，因此不会出现在有限风险策略卡中。"
   },
   UNBOUNDED_TAIL_LOSS: {
     "title": "尾部亏损没有上界",
@@ -332,5 +344,273 @@ export const PUBLIC_REASON_CODE_READINGS: Record<string, PublicReasonCodeReading
   UNCALIBRATED_SCORE_MODEL: {
     "title": "打分模型未校准",
     "detail": "分数只衡量相对定价，不代表盈利概率。"
+  },
+  BOOTSTRAP_LOWER_BOUND_NOT_POSITIVE: {
+    "title": "收益下界未超过零",
+    "detail": "预登记 bootstrap 区间的保守下界不为正，历史证据不能通过验证门槛。"
+  },
+  COST_STRESS_NOT_POSITIVE: {
+    "title": "成本压力后没有正收益",
+    "detail": "提高冻结交易成本后结果不再为正，策略证据因此降级。"
+  },
+  CROSSED_MARKET_QUOTES: {
+    "title": "所选合约报价倒挂",
+    "detail": "至少一条腿的买价高于卖价，无法形成可靠的可成交组合。"
+  },
+  CVAR_LIMIT_BREACH: {
+    "title": "尾部风险超过上限",
+    "detail": "候选的 CVaR 超过冻结风险预算，因此不会进入策略卡。"
+  },
+  DTE_OUT_OF_RANGE: {
+    "title": "到期天数不在范围内",
+    "detail": "候选不在冻结的 7–35 DTE 范围内，不能与当前协议对齐。"
+  },
+  FORECAST_ARTIFACT_INVALID: {
+    "title": "预测产物无效",
+    "detail": "预测 artifact 未通过结构、哈希或生命周期校验，胜率区间暂不可用。"
+  },
+  FORECAST_CONFIG_DRIFT: {
+    "title": "预测配置已漂移",
+    "detail": "当前配置与获得提升资格时的冻结配置不同，预测已自动降级。"
+  },
+  FORECAST_CURRENT_EVIDENCE_UNAVAILABLE: {
+    "title": "当前预测证据不可用",
+    "detail": "无法取得与本次卡片同范围的当前预测证据，因此不显示胜率区间。"
+  },
+  FORECAST_CURRENT_SOURCE_NOT_LIVE: {
+    "title": "预测输入不是实时证据",
+    "detail": "当前输入来自 demo、fallback 或发布快照，不能冒充实时校准预测。"
+  },
+  FORECAST_DATA_CONTINUITY_BROKEN: {
+    "title": "预测数据连续性中断",
+    "detail": "提升后的监控数据出现断档，预测资格已自动撤销。"
+  },
+  FORECAST_INPUT_DRIFT: {
+    "title": "预测输入发生漂移",
+    "detail": "当前输入分布超过冻结漂移阈值，预测状态已从已校准降级。"
+  },
+  FORECAST_LINEAGE_DRIFT: {
+    "title": "预测数据血缘已变化",
+    "detail": "当前数据或模型血缘与提升时不一致，原校准结论不再适用。"
+  },
+  FORECAST_LINEAGE_UNVERIFIED: {
+    "title": "预测血缘无法验证",
+    "detail": "缺少可核验的数据和模型血缘，胜率区间保持不可用。"
+  },
+  FORECAST_NOT_CALIBRATED: {
+    "title": "预测尚未校准",
+    "detail": "该精确策略尚无通过未来样本验证的校准器，因此不显示预测胜率。"
+  },
+  FORECAST_SELECTION_MISMATCH: {
+    "title": "预测证据不属于当前策略卡",
+    "detail": "校准证据对应的是同类中的另一组精确选腿；当前卡片不会借用不属于自己的胜率区间。"
+  },
+  FORECAST_SELECTION_UNBOUND: {
+    "title": "预测证据未绑定到精确选腿",
+    "detail": "旧校准证据没有携带当前要求的精确选腿绑定键，因此只能退役，不能继续显示胜率区间。"
+  },
+  FORECAST_OOS_ADVERSE: {
+    "title": "样本外表现恶化",
+    "detail": "持续样本外监控出现不利结果，预测资格已自动降级或退役。"
+  },
+  FORECAST_OOS_BASE_RATE_FAIL: {
+    "title": "样本外基准率未通过",
+    "detail": "预测在样本外未能优于冻结基准率，不能继续标记为已校准。"
+  },
+  FORECAST_OOS_DIRECTIONAL_FAIL: {
+    "title": "样本外方向性失效",
+    "detail": "预测区间的方向性在样本外失效，校准资格已撤销。"
+  },
+  FORECAST_SCHEMA_DRIFT: {
+    "title": "预测 schema 已变化",
+    "detail": "当前输入或输出 schema 与冻结版本不同，预测暂不可用。"
+  },
+  FORECAST_SCOPE_MISMATCH: {
+    "title": "预测范围与策略不一致",
+    "detail": "预测的结构、方向、DTE、选腿、成交、费用或退出规则与卡片不完全一致。"
+  },
+  FORECAST_SCREENING_ONLY: {
+    "title": "预测仅用于筛选",
+    "detail": "模型仍处于 screening 阶段，输出不能解释为已校准胜率。"
+  },
+  FORECAST_UNIT_DRIFT: {
+    "title": "预测单位已变化",
+    "detail": "当前价格、权利金或损益单位与冻结校准范围不同，预测已降级。"
+  },
+  FUTURE_HOLDOUT_NOT_YET_AVAILABLE: {
+    "title": "未来留出样本尚未成熟",
+    "detail": "预登记之后的独立 cohort 还不足，历史胜率暂不可用。"
+  },
+  HISTORICAL_EVIDENCE_INSUFFICIENT: {
+    "title": "历史证据不足",
+    "detail": "与当前策略完全对齐的独立历史样本尚未达到验证门槛。"
+  },
+  HOLDOUT_SOURCE_NOT_FUTURE_ONLY: {
+    "title": "留出集不是纯未来样本",
+    "detail": "样本包含协议冻结前可见的数据，不能作为未来 holdout 验证。"
+  },
+  HORIZON_TOO_SHORT: {
+    "title": "观察期过短",
+    "detail": "历史观察跨度未达到冻结协议要求，结论保持证据不足。"
+  },
+  IMPLAUSIBLE_CANDIDATE_DELTA: {
+    "title": "候选 Delta 异常",
+    "detail": "选腿的风险敏感度不在策略协议允许范围内，候选被拒绝。"
+  },
+  INSUFFICIENT_INDEPENDENT_COHORTS: {
+    "title": "独立 cohort 不足",
+    "detail": "到期 cohort 数量不足，无法把重复观察当作独立历史证据。"
+  },
+  INSUFFICIENT_REGIME_COVERAGE: {
+    "title": "市场状态覆盖不足",
+    "detail": "历史样本没有覆盖协议要求的足够市场状态，验证尚未完成。"
+  },
+  INSUFFICIENT_STRATEGY_OBSERVATIONS: {
+    "title": "策略观察数不足",
+    "detail": "同结构、同方向和同执行规则的观察数未达到冻结门槛。"
+  },
+  INVALID_CANDIDATE_SPEC: {
+    "title": "候选定义无效",
+    "detail": "结构或合约定义不满足 canonical 策略语法，候选被拒绝。"
+  },
+  INVALID_HOLDOUT_ACCESS_RECEIPT: {
+    "title": "留出集访问凭据无效",
+    "detail": "无法证明 holdout 在协议冻结后才首次打开，因此不会提升历史状态。"
+  },
+  KILL_CONDITION_HIT: {
+    "title": "取消条件已触发",
+    "detail": "策略卡声明的取消条件已经发生，该候选立即失效。"
+  },
+  LEGS_NOT_SYNCHRONIZED: {
+    "title": "多腿报价不同步",
+    "detail": "组合各腿的观测时间超出冻结同步窗口，不能视为同一可成交快照。"
+  },
+  MARGIN_BUDGET_BREACH: {
+    "title": "保证金预算超限",
+    "detail": "一单位候选也超过冻结研究预算，因此不会进入策略卡。"
+  },
+  MAX_DRAWDOWN_LIMIT_BREACH: {
+    "title": "历史回撤超过上限",
+    "detail": "对齐 replay 的最大回撤超过预登记门槛，历史状态验证失败。"
+  },
+  MISSING_CANDIDATE_ECONOMICS: {
+    "title": "候选经济数据不完整",
+    "detail": "净权利金、最大损失或费用证据缺失，无法生成精确策略卡。"
+  },
+  MISSING_COST_COMPONENTS: {
+    "title": "成本项目不完整",
+    "detail": "冻结成本模型所需的费用或滑点缺失，成本后 EV 不可验证。"
+  },
+  MISSING_EXPECTED_PAYOFF: {
+    "title": "缺少期望损益",
+    "detail": "没有可复核的绝对期望损益，因此候选只保留为拒绝记录。"
+  },
+  MISSING_HOLDOUT_ACCESS_RECEIPT: {
+    "title": "缺少留出集访问凭据",
+    "detail": "没有首次打开未来 holdout 的审计凭据，历史状态不能提升。"
+  },
+  MISSING_POSITIVE_TWO_SIDED_QUOTES: {
+    "title": "缺少有效双边报价",
+    "detail": "至少一条腿缺少正的 bid/ask，无法按 short bid、long ask 计算入场。"
+  },
+  MISSING_PREREGISTERED_PROTOCOL: {
+    "title": "缺少预登记协议",
+    "detail": "没有在查看未来样本前冻结策略与验证规则，历史结果不可提升。"
+  },
+  MISSING_ROBUSTNESS_EVIDENCE: {
+    "title": "缺少稳健性证据",
+    "detail": "尚未完成 touch、反方向和成本压力检查，候选不会被推荐。"
+  },
+  MISSING_STRIKE: {
+    "title": "合约缺少行权价",
+    "detail": "无法确定精确选腿与风险边界，候选已被拒绝。"
+  },
+  MIXED_EXPIRY: {
+    "title": "组合到期日不一致",
+    "detail": "策略各腿不是同一到期日，不符合冻结结构定义。"
+  },
+  NEGATIVE_EV_AFTER_COST: {
+    "title": "成本后 EV 不为正",
+    "detail": "使用可成交报价和冻结成本后，绝对 EV 不为正，因此不推荐。"
+  },
+  NO_CAPTURABLE_EDGE_AT_TOUCH: {
+    "title": "触价没有可捕获优势",
+    "detail": "在可成交 bid/ask 上重新计算后没有正 edge，候选被拒绝。"
+  },
+  NO_ELIGIBLE_STRATEGY: {
+    "title": "没有合格策略",
+    "detail": "所有候选均被证据或风险门禁拦截，今日暂无可靠策略。"
+  },
+  NO_TRADE_BASELINE_NOT_BEATEN: {
+    "title": "未优于不交易基准",
+    "detail": "对齐历史结果没有可靠超过 NO_TRADE 基准，策略证据验证失败。"
+  },
+  ONE_UNIT_ONLY: {
+    "title": "仅允许一单位研究组合",
+    "detail": "策略简报固定展示每条腿一单位，不提供个性化手数或仓位建议。"
+  },
+  OTHER_DIRECTION_IS_POSITIVE: {
+    "title": "反方向结构更优",
+    "detail": "稳健性检查显示反方向才有正 EV，当前方向候选被拒绝。"
+  },
+  PER_TRADE_RISK_BUDGET_BREACH: {
+    "title": "单笔风险预算超限",
+    "detail": "候选最大损失超过冻结单笔风险上限，因此不会进入策略卡。"
+  },
+  PROMOTION_EXPIRED: {
+    "title": "预测提升资格已过期",
+    "detail": "校准资格超过 90 天有效期，重新验证前不显示胜率区间。"
+  },
+  PROTOCOL_FROZEN_AFTER_HOLDOUT_CAPTURE: {
+    "title": "协议冻结晚于样本采集",
+    "detail": "规则在查看未来样本后才冻结，存在前视风险，验证无效。"
+  },
+  SAME_EXPIRY_RISK_BUDGET_BREACH: {
+    "title": "同到期风险预算超限",
+    "detail": "同一到期日的风险集中度超过冻结上限，候选被拒绝。"
+  },
+  SAME_STRUCTURE_COMPARATOR_NOT_POSITIVE: {
+    "title": "未优于同结构对照",
+    "detail": "历史结果没有可靠优于同结构冻结对照，不能通过验证。"
+  },
+  SINGLE_COHORT_CONCENTRATION_BREACH: {
+    "title": "单一 cohort 过度集中",
+    "detail": "过多结果来自同一到期 cohort，独立性不足，历史状态降级。"
+  },
+  SINGLE_MONTH_CONCENTRATION_BREACH: {
+    "title": "单月样本过度集中",
+    "detail": "历史结果过度集中在单月，时间覆盖不足，验证不能通过。"
+  },
+  STALE_MARKET_DATA: {
+    "title": "市场数据已过期",
+    "detail": "快照或精确腿报价超过有效期，策略卡已失效。"
+  },
+  STRATEGY_EXPIRED: {
+    "title": "策略已过有效期",
+    "detail": "当前时间晚于卡片 valid_until；即使页面仍打开，也不得继续使用。"
+  },
+  STRIKE_EQUALS_SPOT: {
+    "title": "行权价与现价边界不明确",
+    "detail": "选腿恰好位于方向判断边界，无法满足冻结 OTM 结构规则。"
+  },
+  UNBOUNDED_OR_UNKNOWN_MAX_LOSS: {
+    "title": "最大亏损无界或未知",
+    "detail": "无法以一致单位证明最大亏损有限，候选被硬门禁拦截。"
+  },
+  UNCALIBRATED_RESEARCH_ONLY: {
+    "title": "仅限未校准研究",
+    "detail": "当前结果只支持结构筛选，不能作为预测胜率或交易建议。"
+  },
+  UNIT_MISMATCH: {
+    "title": "计价或损益单位不一致",
+    "detail": "权利金、费用与最大亏损不能安全换算到同一单位，候选被拒绝。"
+  },
+  UNKNOWN_PREMIUM_OR_PAYOFF_UNIT: {
+    "title": "权利金或损益单位未知",
+    "detail": "缺少经过验证的单位与换算证明，无法计算可执行入场和最大亏损。"
+  },
+  UNSUPPORTED_STRUCTURE: {
+    "title": "策略结构不受支持",
+    "detail": "简报仅支持 Bull Put、Bear Call 与 Iron Condor 三种有限风险结构。"
   },
 };

@@ -86,6 +86,22 @@ class AnalysisRunContractTests(unittest.TestCase):
             validate_report_contract(record.project_research_report_v1()),
         )
 
+    def test_untrusted_market_brief_stays_unknown_and_never_looks_like_live_edge(self):
+        record = build_analysis_record(
+            generated_at=FIXED_CLOCK,
+            market_snapshot=self._snapshot(),
+            configuration={"surface_adapter": "legacy-v1"},
+        )
+
+        brief = record.project_strategy_brief_v1()
+
+        self.assertEqual("NO_TRADE", brief["action"])
+        self.assertEqual("UNCLEAR", brief["market"]["direction"])
+        self.assertEqual("UNKNOWN", brief["market"]["volatility"])
+        self.assertEqual("UNAVAILABLE", brief["market"]["liquidity"])
+        self.assertEqual("UNAVAILABLE", brief["market"]["confidence"])
+        self.assertEqual("NO_TRADE", brief["market"]["action"])
+
     def test_policy_model_and_configuration_changes_change_output_identity(self):
         base = build_analysis_record(
             generated_at=FIXED_CLOCK,

@@ -20,6 +20,18 @@ from typing import Any
 
 from ._canonical import canonical_json_text
 from .market_data import snapshot_payload_sha256
+from .strategy_brief import build_strategy_brief
+from .strategy_forecast import (
+    project_strategy_forecast,
+    selection_binding_key_from_scope,
+    validate_strategy_forecast_runtime_evidence,
+)
+from .strategy_history import (
+    build_strategy_history_artifact,
+    project_strategy_history_summary,
+    validate_strategy_history_artifact,
+)
+from .structures import build_structure
 
 ANALYSIS_RECORD_SCHEMA = "analysis_record.v1"
 DECISION_MANIFEST_SCHEMA = "decision_manifest.v1"
@@ -1223,6 +1235,8 @@ class AnalysisRequest:
     configuration_hash: str
     report_projection_json: str
     market_snapshot_json: str | None
+    strategy_history_artifacts_json: str
+    strategy_forecast_runtime_evidence_json: str
     opportunity_detected_at: str
     detector_versions: tuple[str, ...]
 
@@ -1245,6 +1259,10 @@ class AnalysisRequest:
         projection = json.loads(self.report_projection_json)
         if projection.get("generated_at") != self.evaluation_clock:
             raise ValueError("report projection must use the fixed evaluation clock")
+        _strategy_history_artifacts_from_json(self.strategy_history_artifacts_json)
+        _strategy_forecast_runtime_evidence_from_json(
+            self.strategy_forecast_runtime_evidence_json
+        )
         if self.market_evidence.kind != "market_snapshot":
             raise ValueError("market evidence kind must be market_snapshot")
         if self.account_evidence is not None:
@@ -1338,6 +1356,8 @@ class AnalysisRequest:
         model_bundle: ModelBundleRef | None = None,
         configuration: Any | None = None,
         configuration_hash: str | None = None,
+        strategy_history_artifacts: Iterable[Mapping[str, Any]] = (),
+        strategy_forecast_runtime_evidence: Iterable[Mapping[str, Any]] = (),
         opportunity_detected_at: str | None = None,
         detector_versions: tuple[str, ...] = ("legacy-candidate-screen:v1",),
     ) -> AnalysisRequest:
@@ -1374,6 +1394,26 @@ class AnalysisRequest:
             config_hash = canonical_sha256(
                 {} if configuration is None else configuration
             )
+        history_artifacts_json = _normalize_strategy_history_artifacts(
+            strategy_history_artifacts
+        )
+        forecast_runtime_evidence_json = (
+            _normalize_strategy_forecast_runtime_evidence(
+                strategy_forecast_runtime_evidence
+            )
+        )
+        if history_artifacts_json != "[]" or forecast_runtime_evidence_json != "[]":
+            config_hash = canonical_sha256(
+                {
+                    "base_configuration_hash": config_hash,
+                    "strategy_history_artifacts_hash": canonical_sha256(
+                        json.loads(history_artifacts_json)
+                    ),
+                    "strategy_forecast_runtime_evidence_hash": canonical_sha256(
+                        json.loads(forecast_runtime_evidence_json)
+                    ),
+                }
+            )
 
         snapshot_json: str | None = None
         if market_snapshot is not None:
@@ -1407,6 +1447,8 @@ class AnalysisRequest:
             configuration_hash=config_hash,
             report_projection_json=projection_json,
             market_snapshot_json=snapshot_json,
+            strategy_history_artifacts_json=history_artifacts_json,
+            strategy_forecast_runtime_evidence_json=forecast_runtime_evidence_json,
             opportunity_detected_at=opportunity_detected_at or evaluation_clock,
             detector_versions=tuple(sorted(set(detector_versions))),
         )
@@ -1438,11 +1480,46 @@ class AnalysisRecord:
     domain_events: tuple[DomainEvent, ...]
     output_hash: str
     _research_report_projection_json: str
+    _strategy_history_artifacts_json: str
+    _strategy_forecast_runtime_evidence_json: str
     schema_version: str = ANALYSIS_RECORD_SCHEMA
+
+    def _base_research_report_projection(self) -> dict[str, Any]:
+        return json.loads(self._research_report_projection_json)
+
+    def project_strategy_brief_v1(self) -> dict[str, Any]:
+        report = self._base_research_report_projection()
+        candidates = _strategy_brief_candidates(self, report)
+        generated_at = str(report.get("generated_at") or self.manifest.evaluation_clock)
+        history_by_candidate = _strategy_brief_history_by_candidate(
+            generated_at=generated_at,
+            candidates=candidates,
+            artifacts=_strategy_history_artifacts_from_json(
+                self._strategy_history_artifacts_json
+            ),
+        )
+        forecast_by_candidate = _strategy_brief_forecast_by_candidate(
+            generated_at=generated_at,
+            candidates=candidates,
+            runtime_evidence=_strategy_forecast_runtime_evidence_from_json(
+                self._strategy_forecast_runtime_evidence_json
+            ),
+        )
+        return build_strategy_brief(
+            analysis_run_id=self.analysis_run_id,
+            generated_at=generated_at,
+            market=_strategy_brief_market(self, report, candidates=candidates),
+            candidates=candidates,
+            history_by_candidate=history_by_candidate,
+            forecast_by_candidate=forecast_by_candidate,
+            policy_ttl_seconds=self.policy_bundle.catalog.market_snapshot_max_age_seconds,
+        )
 
     def project_research_report_v1(self) -> dict[str, Any]:
         """Return a detached compatibility projection."""
-        return json.loads(self._research_report_projection_json)
+        projection = self._base_research_report_projection()
+        projection["strategy_brief"] = self.project_strategy_brief_v1()
+        return projection
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1616,6 +1693,10 @@ class AnalysisRun:
             domain_events=events,
             output_hash="",
             _research_report_projection_json=request.report_projection_json,
+            _strategy_history_artifacts_json=request.strategy_history_artifacts_json,
+            _strategy_forecast_runtime_evidence_json=(
+                request.strategy_forecast_runtime_evidence_json
+            ),
         )
         output_hash = canonical_sha256(preliminary.hash_payload())
         record = replace(
@@ -1650,6 +1731,8 @@ def build_analysis_record(
     pre_entry_risk_evidence: EvidenceRecord | None = None,
     configuration: Any | None = None,
     configuration_hash: str | None = None,
+    strategy_history_artifacts: Iterable[Mapping[str, Any]] = (),
+    strategy_forecast_runtime_evidence: Iterable[Mapping[str, Any]] = (),
     opportunity_detected_at: str | None = None,
     underlying_history: dict[str, Any] | None = None,
 ) -> AnalysisRecord:
@@ -1683,6 +1766,8 @@ def build_analysis_record(
         model_bundle=model_bundle,
         configuration=configuration,
         configuration_hash=configuration_hash,
+        strategy_history_artifacts=strategy_history_artifacts,
+        strategy_forecast_runtime_evidence=strategy_forecast_runtime_evidence,
         opportunity_detected_at=opportunity_detected_at,
     )
     return AnalysisRun().evaluate(request)
@@ -2090,10 +2175,20 @@ def _opportunities_from_projection(
 ) -> tuple[OpportunityRecord, ...]:
     candidates = projection.get("candidate_research") or {}
     rows: list[Mapping[str, Any]] = []
-    group = candidates.get("call_credit_spreads") or {}
-    eligible = group.get("eligible") or []
-    if isinstance(eligible, list):
-        rows.extend(item for item in eligible if isinstance(item, Mapping))
+    # Candidate discovery already publishes all three defined-risk families.
+    # The typed migration seam used to lift only call spreads, which silently
+    # discarded bull-put spreads and iron condors before any hard gate could
+    # evaluate them.  Naked rows intentionally remain outside this loop: they
+    # are comparison evidence, never a user-card family.
+    for section in (
+        "call_credit_spreads",
+        "put_credit_spreads",
+        "iron_condors",
+    ):
+        group = candidates.get(section) or {}
+        eligible = group.get("eligible") or []
+        if isinstance(eligible, list):
+            rows.extend(item for item in eligible if isinstance(item, Mapping))
     valid_until = _timestamp(
         _parse_timestamp(detected_at, field="opportunity_detected_at")
         + timedelta(seconds=policy.opportunity_ttl_seconds)
@@ -2286,48 +2381,36 @@ def _strategies_from_opportunities(
         if not candidate:
             continue
         structure_type = str(candidate.get("structure_type") or "")
-        if structure_type == "call_credit_spread":
-            leg_specs = (
-                (
-                    "SELL",
-                    str(candidate.get("sell_leg_instrument_name") or ""),
-                    candidate.get("sell_leg_strike_price"),
-                    "sell_bid",
-                ),
-                (
-                    "BUY",
-                    str(candidate.get("buy_leg_instrument_name") or ""),
-                    candidate.get("buy_leg_strike_price"),
-                    "buy_ask",
-                ),
-            )
-            structure = "CALL_CREDIT_SPREAD"
-            role = "primary_defined_risk_expression"
-            unbounded = False
-        else:
-            leg_specs = (
-                (
-                    "SELL",
-                    str(candidate.get("instrument_name") or ""),
-                    candidate.get("strike_price"),
-                    "sell_bid",
-                ),
-            )
-            structure = "NAKED_SHORT_CALL"
-            role = "restricted_comparison_only"
-            unbounded = True
+        structure = {
+            # Preserve the v0.1 typed-domain spelling for compatibility.  The
+            # strategy_brief projector maps it to the user contract's explicit
+            # bearish direction name.
+            "call_credit_spread": "CALL_CREDIT_SPREAD",
+            "put_credit_spread": "BULL_PUT_CREDIT_SPREAD",
+            "iron_condor": "IRON_CONDOR",
+        }.get(structure_type)
+        if structure is None:
+            # Unknown and uncapped shapes must never be reinterpreted as one of
+            # the three supported strategy families.
+            continue
+        leg_specs = _defined_risk_leg_specs(candidate)
+        if not leg_specs:
+            continue
+        role = "primary_defined_risk_expression"
+        unbounded = False
         legs = tuple(
             _strategy_leg(
                 side=side,
                 instrument_id=instrument,
                 strike_value=strike,
                 price_policy=price_policy,
+                option_type=option_type,
                 candidate=candidate,
                 row=row_lookup.get(instrument),
                 market_evidence=market_evidence,
                 evaluation_clock=evaluation_clock,
             )
-            for side, instrument, strike, price_policy in leg_specs
+            for side, instrument, strike, price_policy, option_type in leg_specs
             if instrument and _optional_finite(strike) is not None
         )
         if not legs:
@@ -2336,8 +2419,6 @@ def _strategies_from_opportunities(
             candidate,
             field=(
                 "net_credit"
-                if structure == "CALL_CREDIT_SPREAD"
-                else "market_bid"
             ),
             kind="net_credit",
             as_of=market_evidence.observed_at or evaluation_clock,
@@ -2351,7 +2432,11 @@ def _strategies_from_opportunities(
                 currency="USD",
                 contract_scale=1.0,
             )
-            if structure == "CALL_CREDIT_SPREAD"
+            if structure in {
+                "CALL_CREDIT_SPREAD",
+                "BULL_PUT_CREDIT_SPREAD",
+                "IRON_CONDOR",
+            }
             else None
         )
         bid_ask_cost = _bid_ask_cost(
@@ -2373,8 +2458,6 @@ def _strategies_from_opportunities(
             if any(not leg.product_economics.units_explicit for leg in legs)
             else "PRODUCT_ECONOMICS_EXPLICIT",
         ]
-        if role == "restricted_comparison_only":
-            reasons.extend(("UNBOUNDED_TAIL_LOSS", "DEFINED_RISK_STRUCTURE_PREFERRED"))
         greek_as_of = market_evidence.observed_at or evaluation_clock
         greek_units = {
             "delta": "model_coordinate_delta",
@@ -2397,30 +2480,23 @@ def _strategies_from_opportunities(
             if (value := _optional_finite(candidate.get(f"model_{name}")))
             is not None
         )
-        if role == "primary_defined_risk_expression":
-            rejected_alternatives = (
-                RejectedAlternative(
-                    structure="NAKED_SHORT_CALL",
-                    reason_codes=(
-                        "UNBOUNDED_TAIL_LOSS",
-                        "DEFINED_RISK_STRUCTURE_PREFERRED",
-                    ),
-                    why=(
-                        "The uncapped short call is retained only as a comparison; "
-                        "its tail loss is not bounded by a purchased leg."
-                    ),
+        rejected_alternatives = (
+            RejectedAlternative(
+                structure="NAKED_SHORT_CALL",
+                reason_codes=(
+                    "UNBOUNDED_TAIL_LOSS",
+                    "DEFINED_RISK_STRUCTURE_PREFERRED",
                 ),
-            )
-            why_this_structure = (
-                "The long call caps tail loss while preserving the same screened "
-                "short-volatility comparison."
-            )
-        else:
-            rejected_alternatives = ()
-            why_this_structure = (
-                "This uncapped structure is recorded only to explain why the "
-                "defined-risk spread is preferred; it is never admission-eligible."
-            )
+                why=(
+                    "Uncapped short options remain comparison evidence only; "
+                    "the purchased wings define the unit loss boundary."
+                ),
+            ),
+        )
+        why_this_structure = (
+            "Every sold option is paired with a same-expiry protective wing, "
+            "so terminal loss is bounded when product units are explicit."
+        )
         why_now = (
             "Authenticated market evidence produced an observable E3 screen "
             f"at {market_evidence.observed_at or evaluation_clock}.",
@@ -2482,9 +2558,8 @@ def _strategies_from_opportunities(
                 edge_to_capital_at_risk=edge_to_capital_at_risk,
                 greeks=greeks,
                 why=(
-                    "The observable screen produced a typed multi-leg candidate."
-                    if structure == "CALL_CREDIT_SPREAD"
-                    else "The observable screen produced an uncapped comparison.",
+                    "The observable screen produced a typed, defined-risk "
+                    "multi-leg candidate.",
                     (
                         "This remains research evidence, not a recommendation or "
                         "execution instruction."
@@ -2502,6 +2577,43 @@ def _strategies_from_opportunities(
             )
         )
     return tuple(plans)
+
+
+def _defined_risk_leg_specs(
+    candidate: Mapping[str, Any],
+) -> tuple[tuple[str, str, Any, str, str], ...]:
+    """Return exact executable leg grammar from the canonical signed legs."""
+
+    raw_legs = candidate.get("structure_legs")
+    if not isinstance(raw_legs, list):
+        return ()
+    specs: list[tuple[str, str, Any, str, str]] = []
+    for raw in raw_legs:
+        if not isinstance(raw, Mapping):
+            return ()
+        quantity = _optional_finite(raw.get("quantity"))
+        instrument = str(raw.get("instrument_name") or "")
+        option_type = str(raw.get("option_type") or "")
+        if (
+            quantity is None
+            or quantity == 0
+            or not instrument
+            or option_type not in {"call", "put"}
+        ):
+            return ()
+        side = "BUY" if quantity > 0 else "SELL"
+        specs.append(
+            (
+                side,
+                instrument,
+                raw.get("strike"),
+                "buy_ask" if side == "BUY" else "sell_bid",
+                option_type,
+            )
+        )
+    if len(specs) not in {2, 4}:
+        return ()
+    return tuple(specs)
 
 
 def _aggregate_linear_payoff(
@@ -2526,13 +2638,43 @@ def _aggregate_linear_payoff(
         )
     ):
         return "unresolved_product_economics", None, None, None
-    sell_leg = next((leg for leg in legs if leg.side == "SELL"), None)
-    if (
-        sell_leg is None
-        or sell_leg.strike.currency != net_premium.currency
-        or net_premium.contract_scale != 1.0
-    ):
+    if any(leg.strike.currency != net_premium.currency for leg in legs):
         return "unresolved_product_economics", None, None, None
+
+    scale = net_premium.contract_scale
+    if scale is None:
+        return "unresolved_product_economics", None, None, None
+    structure_type = {
+        "CALL_CREDIT_SPREAD": "call_credit_spread",
+        "BULL_PUT_CREDIT_SPREAD": "put_credit_spread",
+        "IRON_CONDOR": "iron_condor",
+    }.get(structure)
+    if structure_type is None:
+        return "unresolved_product_economics", None, None, None
+    try:
+        typed_structure = build_structure(
+            structure_type=structure_type,
+            contract_size=scale,
+            legs=[
+                {
+                    "option_type": leg.option_type,
+                    "strike": leg.strike.amount,
+                    "quantity": (
+                        leg.quantity_ratio if leg.side == "BUY" else -leg.quantity_ratio
+                    ),
+                    "expiry_date": leg.expiry,
+                    "instrument_name": leg.instrument_id,
+                }
+                for leg in legs
+            ],
+        )
+        profile = typed_structure.risk_profile(
+            entry_cash=net_premium.amount * scale
+        )
+    except ValueError:
+        return "unresolved_product_economics", None, None, None
+    if not profile.loss_is_bounded or profile.max_loss is None:
+        return "resolved_linear_unbounded", None, None, None
 
     def derived(amount: float, kind: str) -> EconomicValue:
         return EconomicValue(
@@ -2545,20 +2687,17 @@ def _aggregate_linear_payoff(
             provenance="typed_strategy_legs:linear_payoff_aggregation",
         )
 
-    breakeven = derived(
-        sell_leg.strike.amount + net_premium.amount,
-        "breakeven",
+    breakeven = (
+        derived(profile.breakevens[0], "breakeven")
+        if profile.breakevens
+        else None
     )
-    max_profit = derived(net_premium.amount, "max_profit")
-    if structure == "NAKED_SHORT_CALL":
-        return "resolved_linear_unbounded", breakeven, max_profit, None
-    if (
-        spread_width is None
-        or not _economic_dimensions_consistent((net_premium, spread_width))
-        or net_premium.amount > spread_width.amount
-    ):
-        return "unresolved_product_economics", None, None, None
-    max_loss = derived(spread_width.amount - net_premium.amount, "max_loss")
+    max_profit = (
+        derived(profile.max_profit, "max_profit")
+        if profile.max_profit is not None
+        else None
+    )
+    max_loss = derived(profile.max_loss, "max_loss")
     return "resolved_linear_defined_risk", breakeven, max_profit, max_loss
 
 
@@ -2698,7 +2837,12 @@ def _candidate_lookup(
 ) -> dict[str, Mapping[str, Any]]:
     result: dict[str, Mapping[str, Any]] = {}
     candidates = projection.get("candidate_research") or {}
-    for section in ("call_credit_spreads", "naked_short_calls"):
+    for section in (
+        "call_credit_spreads",
+        "put_credit_spreads",
+        "iron_condors",
+        "naked_short_calls",
+    ):
         group = candidates.get(section) or {}
         for bucket in ("eligible", "review", "rejected"):
             for candidate in group.get(bucket) or []:
@@ -2707,12 +2851,686 @@ def _candidate_lookup(
     return result
 
 
+def _strategy_brief_candidates(
+    record: AnalysisRecord,
+    projection: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    ranked = (projection.get("ev_candidate_scanner") or {}).get("ranked_candidates") or []
+    supported = {"call_credit_spread", "put_credit_spread", "iron_condor"}
+    candidate_lookup = _candidate_lookup(projection)
+    opportunities = {
+        item.source_candidate_id: item for item in record.opportunities
+    }
+    plan_by_opportunity = {item.opportunity_id: item for item in record.strategy_plans}
+    candidates: list[dict[str, Any]] = []
+    for raw in ranked:
+        if not isinstance(raw, Mapping):
+            continue
+        structure_type = str(raw.get("structure_type") or "")
+        if structure_type not in supported:
+            continue
+        candidate_id = str(raw.get("candidate_id") or "")
+        base_candidate = candidate_lookup.get(candidate_id) or {}
+        candidate = {**dict(base_candidate), **dict(raw)}
+        source_candidate = dict(candidate)
+        opportunity = opportunities.get(candidate_id)
+        plan = (
+            plan_by_opportunity.get(opportunity.opportunity_id)
+            if opportunity is not None
+            else None
+        )
+        exact_legs = _strategy_brief_exact_legs(plan)
+        if exact_legs and _strategy_brief_latest_observed_at(exact_legs) is None:
+            exact_legs = []
+        if not exact_legs:
+            exact_legs = _strategy_brief_candidate_legs(
+                candidate=source_candidate,
+                candidate_lookup=candidate_lookup,
+            )
+        observed_at = _strategy_brief_latest_observed_at(exact_legs)
+        if exact_legs and observed_at is not None:
+            candidate["structure_legs"] = exact_legs
+            candidate["observed_at"] = observed_at
+        elif _strategy_brief_existing_legs_missing_observed_at(candidate):
+            candidate.pop("structure_legs", None)
+            candidate.pop("observed_at", None)
+        if opportunity is not None:
+            candidate["valid_until"] = opportunity.valid_until
+            candidate["kill_conditions"] = list(opportunity.invalidation_conditions)
+            candidate["primary_reason_codes"] = list(opportunity.reason_codes)[:2]
+        candidate.setdefault(
+            "settlement_currency",
+            _strategy_brief_settlement_currency(candidate, plan),
+        )
+        candidate.setdefault("currency", candidate.get("settlement_currency"))
+        candidate.setdefault(
+            "premium_currency",
+            _strategy_brief_premium_currency(candidate, plan),
+        )
+        if candidate.get("ev_after_cost") is None and candidate.get("ev_after_cost_usdc") is not None:
+            candidate["ev_after_cost"] = candidate.get("ev_after_cost_usdc")
+        candidate.setdefault(
+            "cost_components_complete",
+            _strategy_brief_cost_components_complete(candidate, plan),
+        )
+        candidate.setdefault(
+            "relative_value_status",
+            "AVAILABLE" if candidate.get("ranking_score") is not None else "UNAVAILABLE",
+        )
+        candidates.append(candidate)
+    return candidates
+
+
+def _strategy_brief_candidate_legs(
+    *,
+    candidate: Mapping[str, Any],
+    candidate_lookup: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    structure_type = str(candidate.get("structure_type") or "")
+    if structure_type in {"call_credit_spread", "put_credit_spread"}:
+        return _strategy_brief_vertical_legs(candidate)
+    if structure_type != "iron_condor":
+        return []
+    put_spread = candidate_lookup.get(str(candidate.get("put_spread_id") or ""))
+    call_spread = candidate_lookup.get(str(candidate.get("call_spread_id") or ""))
+    if put_spread is None or call_spread is None:
+        return []
+    return [
+        *_strategy_brief_vertical_legs(put_spread),
+        *_strategy_brief_vertical_legs(call_spread),
+    ]
+
+
+def _strategy_brief_vertical_legs(
+    candidate: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    premium_unit = candidate.get("premium_unit")
+    premium_currency = candidate.get("premium_currency")
+    expiry_date = str(candidate.get("expiry_date") or "")
+    option_type = str(candidate.get("option_type") or "")
+    quoted_legs = []
+    for side_name, quantity in (("sell", -1.0), ("buy", 1.0)):
+        instrument_name = candidate.get(f"{side_name}_leg_instrument_name")
+        strike = candidate.get(f"{side_name}_leg_strike_price")
+        bid = candidate.get(f"{side_name}_leg_market_bid")
+        ask = candidate.get(f"{side_name}_leg_market_ask")
+        observed_at = _strategy_brief_leg_observed_at(
+            candidate,
+            side_name=side_name,
+            instrument_name=instrument_name,
+        )
+        if (
+            not instrument_name
+            or strike is None
+            or bid is None
+            or ask is None
+            or observed_at is None
+        ):
+            return []
+        quoted_legs.append(
+            {
+                "instrument_name": instrument_name,
+                "option_type": option_type,
+                "strike": strike,
+                "quantity": quantity,
+                "market_bid": bid,
+                "market_ask": ask,
+                "observed_at": observed_at,
+                "expiry_date": expiry_date,
+                "premium_unit": premium_unit,
+                "premium_currency": premium_currency,
+            }
+        )
+    return quoted_legs
+
+
+def _strategy_brief_leg_observed_at(
+    candidate: Mapping[str, Any],
+    *,
+    side_name: str,
+    instrument_name: Any,
+) -> str | None:
+    for leg in candidate.get("structure_legs") or ():
+        if not isinstance(leg, Mapping):
+            continue
+        if leg.get("instrument_name") != instrument_name:
+            continue
+        observed_at = leg.get("observed_at")
+        if isinstance(observed_at, str) and observed_at.strip():
+            return observed_at
+        return None
+    observed_at = candidate.get(f"{side_name}_leg_observed_at")
+    if isinstance(observed_at, str) and observed_at.strip():
+        return observed_at
+    return None
+
+
+def _strategy_brief_latest_observed_at(
+    legs: list[Mapping[str, Any]],
+) -> str | None:
+    if not legs:
+        return None
+    timestamps: list[datetime] = []
+    for leg in legs:
+        observed_at = leg.get("observed_at")
+        if not isinstance(observed_at, str) or not observed_at.strip():
+            return None
+        try:
+            timestamps.append(
+                _parse_timestamp(observed_at, field="strategy brief leg observed_at")
+            )
+        except ValueError:
+            return None
+    return _timestamp(max(timestamps))
+
+
+def _strategy_brief_existing_legs_missing_observed_at(
+    candidate: Mapping[str, Any],
+) -> bool:
+    raw_legs = candidate.get("structure_legs")
+    if not isinstance(raw_legs, list) or not raw_legs:
+        return False
+    return _strategy_brief_latest_observed_at(raw_legs) is None
+
+
+def _strategy_brief_exact_legs(
+    plan: StrategyPlan | None,
+) -> list[dict[str, Any]]:
+    if plan is None:
+        return []
+    legs: list[dict[str, Any]] = []
+    for leg in plan.legs:
+        bid = leg.source_quote.bid
+        ask = leg.source_quote.ask
+        if bid is None or ask is None:
+            return []
+        premium_unit = leg.product_economics.premium_unit
+        if not isinstance(premium_unit, str) or not premium_unit:
+            return []
+        legs.append(
+            {
+                "instrument_name": leg.instrument_id,
+                "option_type": leg.option_type,
+                "strike": leg.strike.amount,
+                "quantity": leg.quantity_ratio if leg.side == "BUY" else -leg.quantity_ratio,
+                "market_bid": bid.amount,
+                "market_ask": ask.amount,
+                "observed_at": leg.source_quote.observed_at,
+                "expiry_date": leg.expiry,
+                "premium_unit": premium_unit,
+                "premium_currency": bid.currency,
+            }
+        )
+    return legs
+
+
+def _strategy_brief_settlement_currency(
+    candidate: Mapping[str, Any],
+    plan: StrategyPlan | None,
+) -> str | None:
+    values = [
+        candidate.get("settlement_currency"),
+        candidate.get("risk_currency"),
+        candidate.get("currency"),
+        candidate.get("premium_currency"),
+        plan.net_premium.currency if plan and plan.net_premium is not None else None,
+        (
+            plan.legs[0].source_quote.bid.currency
+            if plan and plan.legs and plan.legs[0].source_quote.bid is not None
+            else None
+        ),
+    ]
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()
+    return None
+
+
+def _strategy_brief_premium_currency(
+    candidate: Mapping[str, Any],
+    plan: StrategyPlan | None,
+) -> str | None:
+    values = [
+        candidate.get("premium_currency"),
+        candidate.get("settlement_currency"),
+        plan.net_premium.currency if plan and plan.net_premium is not None else None,
+        (
+            plan.legs[0].source_quote.bid.currency
+            if plan and plan.legs and plan.legs[0].source_quote.bid is not None
+            else None
+        ),
+    ]
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()
+    return None
+
+
+def _strategy_brief_cost_components_complete(
+    candidate: Mapping[str, Any],
+    plan: StrategyPlan | None,
+) -> bool:
+    if candidate.get("cost_components_complete") is True:
+        return True
+    if candidate.get("fees_included") is True and candidate.get("slippage_included") is True:
+        return bool(
+            candidate.get("legging_included") is True
+            and candidate.get("settlement_included") is True
+        )
+    return bool(
+        plan is not None
+        and plan.bid_ask_cost is not None
+        and plan.fee is not None
+        and plan.slippage_reserve is not None
+        and plan.legging_reserve is not None
+    )
+
+
+def _strategy_brief_market(
+    record: AnalysisRecord,
+    projection: Mapping[str, Any],
+    *,
+    candidates: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    as_of = (
+        record.market_analysis.as_of
+        or str(projection.get("generated_at") or record.manifest.evaluation_clock)
+    )
+    as_of_dt = _parse_timestamp(as_of, field="strategy brief market as_of")
+    expires_at = _timestamp(
+        as_of_dt
+        + timedelta(seconds=record.policy_bundle.catalog.market_snapshot_max_age_seconds)
+    )
+    data_status = projection.get("data_status") or {}
+    permission_state = projection.get("permission_state") or {}
+    market_trusted = (
+        record.trust_verdict == EvidenceState.TRUSTED.value
+        and str(data_status.get("status") or "") == "validated"
+    )
+    return {
+        "as_of": as_of,
+        "expires_at": expires_at,
+        "direction": (
+            _strategy_brief_direction(permission_state) if market_trusted else "UNCLEAR"
+        ),
+        "volatility": (
+            _strategy_brief_volatility(permission_state) if market_trusted else "UNKNOWN"
+        ),
+        "liquidity": _strategy_brief_liquidity(
+            record,
+            data_status=data_status,
+            surface_status=projection.get("vol_surface_status") or {},
+        ),
+        "confidence": _strategy_brief_confidence(
+            record,
+            permission_state=permission_state,
+            market_trusted=market_trusted,
+        ),
+    }
+
+
+def _strategy_brief_direction(permission_state: Mapping[str, Any]) -> str:
+    regime = str(
+        permission_state.get("primary_regime_label") or ""
+    ).strip()
+    return {
+        "Bear Trend": "BEARISH",
+        "Range": "RANGE",
+        "Slow Bull": "BULLISH",
+        "Fast Bull Breakout": "BULLISH",
+    }.get(regime, "UNCLEAR")
+
+
+def _strategy_brief_volatility(permission_state: Mapping[str, Any]) -> str:
+    volatility_inputs = permission_state.get("volatility_inputs") or {}
+    dvol_percentile = _optional_finite(volatility_inputs.get("dvol_percentile"))
+    atm_percentile = _optional_finite(volatility_inputs.get("atm_iv_percentile"))
+    percentile = max(
+        value for value in (dvol_percentile, atm_percentile) if value is not None
+    ) if any(value is not None for value in (dvol_percentile, atm_percentile)) else None
+    if percentile is None:
+        return "UNKNOWN"
+    if percentile >= 0.70:
+        return "RICH"
+    if percentile <= 0.30:
+        return "CHEAP"
+    return "FAIR"
+
+
+def _strategy_brief_liquidity(
+    record: AnalysisRecord,
+    *,
+    data_status: Mapping[str, Any],
+    surface_status: Mapping[str, Any],
+) -> str:
+    if record.trust_verdict != EvidenceState.TRUSTED.value:
+        return "UNAVAILABLE"
+    if str(data_status.get("status") or "") != "validated":
+        return "UNAVAILABLE"
+    if str(surface_status.get("status") or "") == "validated":
+        return "EXECUTABLE"
+    return "LIMITED"
+
+
+def _strategy_brief_confidence(
+    record: AnalysisRecord,
+    *,
+    permission_state: Mapping[str, Any],
+    market_trusted: bool,
+) -> str:
+    if not market_trusted:
+        return "UNAVAILABLE"
+    return (
+        "HIGH"
+        if str(permission_state.get("status") or "") == "validated"
+        else "MEDIUM"
+    )
+
+
+def _normalize_strategy_history_artifacts(
+    artifacts: Iterable[Mapping[str, Any]],
+) -> str:
+    normalized: list[dict[str, Any]] = []
+    structures: set[str] = set()
+    for raw in artifacts:
+        if not isinstance(raw, Mapping):
+            raise ValueError("strategy history artifacts must be mappings")
+        artifact = json.loads(_canonical_json(dict(raw)))
+        errors = validate_strategy_history_artifact(artifact)
+        if errors:
+            raise ValueError("invalid strategy history artifact: " + "; ".join(errors))
+        structure_type = str(artifact.get("structure_type") or "")
+        if structure_type in structures:
+            raise ValueError(
+                "strategy history artifacts must contain at most one artifact per structure"
+            )
+        structures.add(structure_type)
+        normalized.append(artifact)
+    normalized.sort(key=lambda item: str(item.get("artifact_id") or ""))
+    return _canonical_json(normalized)
+
+
+def _strategy_history_artifacts_from_json(value: str) -> tuple[dict[str, Any], ...]:
+    try:
+        payload = json.loads(value)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("strategy history artifact payload must be canonical JSON") from exc
+    if not isinstance(payload, list):
+        raise ValueError("strategy history artifact payload must be a list")
+    normalized = _normalize_strategy_history_artifacts(payload)
+    if normalized != value:
+        raise ValueError("strategy history artifact payload must use canonical ordering")
+    return tuple(json.loads(normalized))
+
+
+def _normalize_strategy_forecast_runtime_evidence(
+    evidence_items: Iterable[Mapping[str, Any]],
+) -> str:
+    normalized: list[dict[str, Any]] = []
+    identities: set[str] = set()
+    for raw in evidence_items:
+        if not isinstance(raw, Mapping):
+            raise ValueError("strategy forecast runtime evidence must be mappings")
+        evidence = json.loads(_canonical_json(dict(raw)))
+        errors = validate_strategy_forecast_runtime_evidence(evidence)
+        if errors:
+            raise ValueError(
+                "invalid strategy forecast runtime evidence: " + "; ".join(errors)
+            )
+        artifact = evidence["artifact"]
+        selection_binding_key = artifact.get("selection_binding_key")
+        if isinstance(selection_binding_key, str) and selection_binding_key:
+            identity_key = f"selection:{selection_binding_key}"
+        else:
+            identity_key = (
+                "legacy:"
+                + _canonical_json(
+                    _strategy_brief_forecast_public_scope_from_scope(artifact.get("scope"))
+                )
+            )
+        if identity_key in identities:
+            raise ValueError(
+                "strategy forecast runtime evidence must contain at most one artifact per exact selection"
+            )
+        identities.add(identity_key)
+        normalized.append(evidence)
+    normalized.sort(
+        key=lambda item: str((item.get("artifact") or {}).get("artifact_id") or "")
+    )
+    return _canonical_json(normalized)
+
+
+def _strategy_forecast_runtime_evidence_from_json(
+    value: str,
+) -> tuple[dict[str, Any], ...]:
+    try:
+        payload = json.loads(value)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "strategy forecast runtime evidence payload must be canonical JSON"
+        ) from exc
+    if not isinstance(payload, list):
+        raise ValueError("strategy forecast runtime evidence payload must be a list")
+    normalized = _normalize_strategy_forecast_runtime_evidence(payload)
+    if normalized != value:
+        raise ValueError(
+            "strategy forecast runtime evidence payload must use canonical ordering"
+        )
+    return tuple(json.loads(normalized))
+
+
+def _strategy_brief_history_by_candidate(
+    *,
+    generated_at: str,
+    candidates: Iterable[Mapping[str, Any]],
+    artifacts: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, dict[str, Any]]:
+    artifacts_by_structure = {
+        str(artifact.get("structure_type") or ""): dict(artifact)
+        for artifact in artifacts
+    }
+    summaries_by_structure: dict[str, dict[str, Any]] = {}
+    by_candidate: dict[str, dict[str, Any]] = {}
+    for candidate in candidates:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        structure_type = {
+            "call_credit_spread": "BEAR_CALL_CREDIT_SPREAD",
+            "put_credit_spread": "BULL_PUT_CREDIT_SPREAD",
+            "iron_condor": "IRON_CONDOR",
+        }.get(str(candidate.get("structure_type") or ""))
+        if not candidate_id or structure_type is None:
+            continue
+        summary = summaries_by_structure.get(structure_type)
+        if summary is None:
+            artifact = artifacts_by_structure.get(structure_type)
+            if artifact is None:
+                artifact = build_strategy_history_artifact(
+                    structure_type=structure_type,
+                    generated_at=generated_at,
+                    cohort_ledger=[],
+                    holdout_status="pending",
+                )
+            summary = project_strategy_history_summary(artifact)
+            summary = {
+                **summary,
+                "underlying": "BTC",
+                "structure_type": structure_type,
+                "direction": {
+                    "BEAR_CALL_CREDIT_SPREAD": "BEARISH",
+                    "BULL_PUT_CREDIT_SPREAD": "BULLISH",
+                    "IRON_CONDOR": "RANGE",
+                }[structure_type],
+            }
+            summaries_by_structure[structure_type] = summary
+        by_candidate[candidate_id] = dict(summary)
+    return by_candidate
+
+
+def _strategy_brief_forecast_by_candidate(
+    *,
+    generated_at: str,
+    candidates: Iterable[Mapping[str, Any]],
+    runtime_evidence: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, dict[str, Any]]:
+    evidence_by_selection: dict[str, dict[str, Any]] = {}
+    evidence_by_public_scope: dict[str, list[dict[str, Any]]] = {}
+    for item in runtime_evidence:
+        artifact = item.get("artifact") or {}
+        public_scope_key = _canonical_json(
+            _strategy_brief_forecast_public_scope_from_scope(artifact.get("scope"))
+        )
+        evidence_by_public_scope.setdefault(public_scope_key, []).append(dict(item))
+        selection_binding_key = artifact.get("selection_binding_key")
+        if isinstance(selection_binding_key, str) and selection_binding_key:
+            evidence_by_selection[selection_binding_key] = dict(item)
+            continue
+    by_candidate: dict[str, dict[str, Any]] = {}
+    for candidate in candidates:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        if not candidate_id:
+            continue
+        scope = _strategy_brief_forecast_scope(candidate)
+        public_scope_key = _canonical_json(
+            _strategy_brief_forecast_public_scope(candidate)
+        )
+        selection_binding_key = selection_binding_key_from_scope(scope)
+        evidence = (
+            evidence_by_selection.get(selection_binding_key)
+            if selection_binding_key is not None
+            else None
+        )
+        if evidence is None:
+            scoped_matches = evidence_by_public_scope.get(public_scope_key, [])
+            if len(scoped_matches) == 1:
+                evidence = scoped_matches[0]
+        artifact = evidence.get("artifact") if evidence is not None else None
+        projection = project_strategy_forecast(
+            as_of=generated_at,
+            scope=scope,
+            artifact=artifact,
+            current_input_fingerprint=(
+                evidence.get("current_input_fingerprint")
+                if evidence is not None
+                else None
+            ),
+            current_lineage=(
+                evidence.get("current_lineage") if evidence is not None else None
+            ),
+            current_oos_monitor=(
+                evidence.get("current_oos_monitor") if evidence is not None else None
+            ),
+        )
+        by_candidate[candidate_id] = {
+            "status": projection["status"],
+            "win_rate_low": projection["win_rate_low"],
+            "win_rate_high": projection["win_rate_high"],
+            "confidence": projection["confidence"],
+            "scope": projection["scope"] if projection["status"] == "CALIBRATED" else None,
+            "artifact_id": projection["artifact_id"],
+            "reason_codes": list(projection["reason_codes"]),
+            "selection_binding_key": (
+                selection_binding_key if projection["status"] == "CALIBRATED" else None
+            ),
+        }
+    return by_candidate
+
+
+def _strategy_brief_forecast_scope(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    structure_type = {
+        "call_credit_spread": "BEAR_CALL_CREDIT_SPREAD",
+        "put_credit_spread": "BULL_PUT_CREDIT_SPREAD",
+        "iron_condor": "IRON_CONDOR",
+    }.get(str(candidate.get("structure_type") or ""), "UNKNOWN")
+    direction = {
+        "BEAR_CALL_CREDIT_SPREAD": "BEARISH",
+        "BULL_PUT_CREDIT_SPREAD": "BULLISH",
+        "IRON_CONDOR": "RANGE",
+    }.get(structure_type, "UNCLEAR")
+    scope = {
+        "underlying": "BTC",
+        "structure": structure_type,
+        "direction": direction,
+        "dte": {"min": 7, "max": 35},
+        "entry_cost_basis": "quoted_bid_ask_plus_adverse_tick_and_fees",
+        "exit_basis": "hold_to_expiry_cash_settlement",
+    }
+    selection = _strategy_brief_forecast_selection(candidate)
+    if selection is not None:
+        scope["selection"] = selection
+    return scope
+
+
+def _strategy_brief_forecast_public_scope(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    scope = _strategy_brief_forecast_scope(candidate)
+    scope.pop("selection", None)
+    return scope
+
+
+def _strategy_brief_forecast_public_scope_from_scope(scope: Any) -> dict[str, Any]:
+    if not isinstance(scope, Mapping):
+        return {}
+    return {
+        key: value
+        for key, value in dict(scope).items()
+        if key != "selection"
+    }
+
+
+def _strategy_brief_forecast_selection(
+    candidate: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    legs = candidate.get("structure_legs")
+    if not isinstance(legs, list) or not legs:
+        return None
+    expiry_date = candidate.get("expiry_date")
+    if not isinstance(expiry_date, str) or not expiry_date:
+        expiry_values = {
+            str(leg.get("expiry_date"))
+            for leg in legs
+            if isinstance(leg, Mapping) and isinstance(leg.get("expiry_date"), str)
+        }
+        if len(expiry_values) != 1:
+            return None
+        expiry_date = next(iter(expiry_values))
+    normalized_legs: list[dict[str, Any]] = []
+    for leg in legs:
+        if not isinstance(leg, Mapping):
+            return None
+        instrument_name = leg.get("instrument_name")
+        option_type = leg.get("option_type")
+        strike = leg.get("strike")
+        quantity = leg.get("quantity")
+        if (
+            not isinstance(instrument_name, str)
+            or not instrument_name
+            or not isinstance(option_type, str)
+            or not option_type
+        ):
+            return None
+        try:
+            normalized_legs.append(
+                {
+                    "instrument_name": instrument_name,
+                    "option_type": option_type.upper(),
+                    "strike": float(strike),
+                    "quantity": float(quantity),
+                }
+            )
+        except (TypeError, ValueError):
+            return None
+    return {
+        "expiry_date": expiry_date,
+        "legs": normalized_legs,
+    }
+
+
 def _strategy_leg(
     *,
     side: str,
     instrument_id: str,
     strike_value: Any,
     price_policy: str,
+    option_type: str,
     candidate: Mapping[str, Any],
     row: Mapping[str, Any] | None,
     market_evidence: EvidenceRecord,
@@ -2798,7 +3616,7 @@ def _strategy_leg(
         side=side,
         quantity_ratio=1.0,
         instrument_id=instrument_id,
-        option_type="call" if instrument_id.endswith("-C") else "put",
+        option_type=option_type,
         strike=EconomicValue(
             amount=float(strike_value),
             currency=str(quote or "USD"),

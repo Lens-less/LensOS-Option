@@ -13,6 +13,7 @@ import unittest
 from crypto_options_report.ev_scanner import (
     MAX_ABSOLUTE_EV_CANDIDATES,
     build_absolute_ev,
+    build_ev_candidate_scanner,
 )
 
 NAKED = "naked_short_call"
@@ -223,6 +224,288 @@ class SpreadTests(unittest.TestCase):
             spread["expected_payout_usdc"], naked["expected_payout_usdc"]
         )
         self.assertLessEqual(spread["expected_payout_usdc"], 10_000.0)
+
+
+def _surface_point(strike: float, iv_percent: float = 55.0) -> dict:
+    return {
+        "strike_price": strike,
+        "surface_fitted_iv": iv_percent,
+        "model_delta": 0.1,
+    }
+
+
+def _vol_surface_status() -> dict:
+    return {
+        "expiries": [
+            {
+                "expiry_date": "2026-08-18",
+                "surface_points": [
+                    _surface_point(80_000.0),
+                    _surface_point(100_000.0, iv_percent=50.0),
+                    _surface_point(120_000.0),
+                ]
+            }
+        ]
+    }
+
+
+def _call_spread_candidate(
+    candidate_id: str,
+    *,
+    net_credit: float,
+    richness: float,
+    mid_credit: float | None = None,
+    sell_strike: float = 105_000.0,
+    buy_strike: float = 115_000.0,
+) -> dict:
+    sell_iv = 53.0 + richness
+    buy_iv = 51.4
+    return {
+        "candidate_id": candidate_id,
+        "structure_type": "call_credit_spread",
+        "expiry_date": "2026-08-18",
+        "underlying_price": 100_000.0,
+        "sell_leg_strike_price": sell_strike,
+        "buy_leg_strike_price": buy_strike,
+        "spread_width": buy_strike - sell_strike,
+        "net_credit": net_credit,
+        "mid_credit": mid_credit if mid_credit is not None else net_credit + 200.0,
+        "dte_days": 18.0,
+        "sell_leg_market_bid": net_credit + 350.0,
+        "sell_leg_market_ask": net_credit + 450.0,
+        "buy_leg_market_bid": 250.0,
+        "buy_leg_market_ask": 450.0,
+        "sell_leg_market_mark_iv": sell_iv,
+        "sell_leg_surface_fitted_iv": 53.0,
+        "buy_leg_market_mark_iv": buy_iv + 0.1,
+        "buy_leg_surface_fitted_iv": buy_iv,
+        "fit_residual_scale": 1.0,
+        "underlying_price_source": "option_forward",
+        "model_theta": -50.0,
+        "model_vega": 33.0,
+        "model_delta": 0.11,
+        "risk_neutral_p_itm": 0.11,
+        "premium_unit": "quote_currency",
+        "surface_quality": {
+            "fit_quality_score": 0.999,
+            "no_arb_pass": True,
+            "no_arb_error": 0.0,
+        },
+        "structure_legs": [
+            {
+                "option_type": "call",
+                "strike": sell_strike,
+                "quantity": -1.0,
+                "surface_fitted_iv": 53.0,
+            },
+            {
+                "option_type": "call",
+                "strike": buy_strike,
+                "quantity": 1.0,
+                "surface_fitted_iv": 51.4,
+            },
+        ],
+        "position_greeks": {"status": "aggregated", "theta": 50.0, "vega": -33.0},
+        "decision_reason_codes": [],
+        "filter_reason_codes": [],
+    }
+
+
+def _put_spread_candidate(candidate_id: str, *, net_credit: float) -> dict:
+    return {
+        "candidate_id": candidate_id,
+        "structure_type": "put_credit_spread",
+        "expiry_date": "2026-08-18",
+        "underlying_price": 100_000.0,
+        "sell_leg_strike_price": 95_000.0,
+        "buy_leg_strike_price": 85_000.0,
+        "spread_width": 10_000.0,
+        "net_credit": net_credit,
+        "mid_credit": net_credit + 150.0,
+        "dte_days": 18.0,
+        "sell_leg_market_bid": net_credit + 350.0,
+        "sell_leg_market_ask": net_credit + 430.0,
+        "buy_leg_market_bid": 260.0,
+        "buy_leg_market_ask": 410.0,
+        "sell_leg_market_mark_iv": 58.2,
+        "sell_leg_surface_fitted_iv": 57.3,
+        "buy_leg_market_mark_iv": 55.9,
+        "buy_leg_surface_fitted_iv": 55.8,
+        "fit_residual_scale": 1.0,
+        "underlying_price_source": "option_forward",
+        "model_theta": -47.0,
+        "model_vega": 31.0,
+        "model_delta": -0.12,
+        "risk_neutral_p_itm": 0.12,
+        "premium_unit": "quote_currency",
+        "surface_quality": {
+            "fit_quality_score": 0.999,
+            "no_arb_pass": True,
+            "no_arb_error": 0.0,
+        },
+        "structure_legs": [
+            {
+                "option_type": "put",
+                "strike": 95_000.0,
+                "quantity": -1.0,
+                "surface_fitted_iv": 57.3,
+            },
+            {
+                "option_type": "put",
+                "strike": 85_000.0,
+                "quantity": 1.0,
+                "surface_fitted_iv": 55.8,
+            },
+        ],
+        "position_greeks": {"status": "aggregated", "theta": 47.0, "vega": -31.0},
+        "decision_reason_codes": [],
+        "filter_reason_codes": [],
+    }
+
+
+def _condor_candidate(candidate_id: str, *, net_credit: float) -> dict:
+    return {
+        "candidate_id": candidate_id,
+        "structure_type": "iron_condor",
+        "expiry_date": "2026-08-18",
+        "underlying_price": 100_000.0,
+        "spread_width": 10_000.0,
+        "net_credit": net_credit,
+        "mid_credit": net_credit + 150.0,
+        "dte_days": 18.0,
+        "sell_leg_market_bid": net_credit + 300.0,
+        "sell_leg_market_ask": net_credit + 420.0,
+        "buy_leg_market_bid": 270.0,
+        "buy_leg_market_ask": 420.0,
+        "sell_leg_market_mark_iv": 53.8,
+        "sell_leg_surface_fitted_iv": 53.0,
+        "buy_leg_market_mark_iv": 51.6,
+        "buy_leg_surface_fitted_iv": 51.4,
+        "fit_residual_scale": 1.0,
+        "underlying_price_source": "option_forward",
+        "model_theta": -60.0,
+        "model_vega": 42.0,
+        "model_delta": 0.08,
+        "risk_neutral_p_itm": 0.18,
+        "premium_unit": "quote_currency",
+        "surface_quality": {
+            "fit_quality_score": 0.999,
+            "no_arb_pass": True,
+            "no_arb_error": 0.0,
+        },
+        "structure_legs": [
+            {
+                "option_type": "put",
+                "strike": 90_000.0,
+                "quantity": -1.0,
+                "surface_fitted_iv": 56.0,
+            },
+            {
+                "option_type": "put",
+                "strike": 80_000.0,
+                "quantity": 1.0,
+                "surface_fitted_iv": 54.0,
+            },
+            {
+                "option_type": "call",
+                "strike": 110_000.0,
+                "quantity": -1.0,
+                "surface_fitted_iv": 53.0,
+            },
+            {
+                "option_type": "call",
+                "strike": 120_000.0,
+                "quantity": 1.0,
+                "surface_fitted_iv": 51.4,
+            },
+        ],
+        "position_greeks": {"status": "aggregated", "theta": 60.0, "vega": -42.0},
+        "decision_reason_codes": [],
+        "filter_reason_codes": [],
+    }
+
+
+def _scanner(candidate_research: dict) -> dict:
+    return build_ev_candidate_scanner(
+        generated_at="2026-07-26T00:00:00Z",
+        data_status={"status": "validated"},
+        account_status={},
+        calibration_status={},
+        permission_state={},
+        candidate_research=candidate_research,
+        vol_surface_status=_vol_surface_status(),
+        underlying_history=history(),
+    )
+
+
+class ScannerAbsoluteEvOrderingTests(unittest.TestCase):
+    def test_ninth_positive_call_spread_is_promoted_ahead_of_first_eight_negative_ones(self):
+        negatives = [
+            _call_spread_candidate(
+                f"neg-{index}",
+                net_credit=500.0,
+                richness=12.0 - index,
+                mid_credit=1_800.0 - index * 100.0,
+            )
+            for index in range(MAX_ABSOLUTE_EV_CANDIDATES)
+        ]
+        positive = _call_spread_candidate(
+            "positive-late",
+            net_credit=5_000.0,
+            richness=1.0,
+        )
+        scanner = _scanner(
+            {
+                "status": "validated",
+                "structure_types": ["call_credit_spreads"],
+                "call_credit_spreads": {
+                    "eligible": negatives + [positive],
+                    "review": [],
+                    "rejected": [],
+                },
+            }
+        )
+
+        rows = scanner["ranked_candidates"]
+        self.assertEqual("validated", scanner["status"])
+        self.assertIsNone(scanner["reason_code"])
+        self.assertEqual("positive-late", rows[0]["candidate_id"])
+        self.assertGreater(rows[0]["ev_after_cost_usdc"], 0.0)
+        self.assertEqual("validated_historical", rows[0]["path_risk"]["status"])
+        for row in rows[1: 1 + MAX_ABSOLUTE_EV_CANDIDATES]:
+            with self.subTest(candidate=row["candidate_id"]):
+                self.assertEqual("REVIEW", row["action"])
+                self.assertIn("NEGATIVE_EV_AFTER_COST", row["kill_conditions"])
+                self.assertLess(row["ev_after_cost_usdc"], 0.0)
+
+    def test_put_spreads_and_condors_receive_validated_absolute_ev_without_fake_path_missing_reason(self):
+        scanner = _scanner(
+            {
+                "status": "validated",
+                "structure_types": ["put_credit_spreads", "iron_condors"],
+                "put_credit_spreads": {
+                    "eligible": [_put_spread_candidate("put-positive", net_credit=4_000.0)],
+                    "review": [],
+                    "rejected": [],
+                },
+                "iron_condors": {
+                    "eligible": [_condor_candidate("condor-positive", net_credit=4_600.0)],
+                    "review": [],
+                    "rejected": [],
+                },
+            }
+        )
+
+        self.assertEqual("validated", scanner["status"])
+        self.assertIsNone(scanner["reason_code"])
+        rows = {row["candidate_id"]: row for row in scanner["ranked_candidates"]}
+        for candidate_id in ("put-positive", "condor-positive"):
+            with self.subTest(candidate=candidate_id):
+                row = rows[candidate_id]
+                self.assertGreater(row["ev_after_cost_usdc"], 0.0)
+                self.assertEqual("validated_historical", row["path_risk"]["status"])
+                self.assertIsNone(row["path_risk"]["reason_code"])
+                self.assertNotIn("NO_VALIDATED_PATH_RISK", row["kill_conditions"])
 
 
 if __name__ == "__main__":

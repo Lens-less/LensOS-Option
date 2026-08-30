@@ -11,6 +11,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from crypto_options_report._canonical import canonical_json_text
+from crypto_options_report.analysis_run import build_analysis_record
 from crypto_options_report.market_data import (
     load_public_replay_fixture,
     load_snapshot_fixture,
@@ -19,6 +20,7 @@ from crypto_options_report.publication import (
     _build_public_report,
     _build_release_gates_from_disk,
     _collect_public_reason_codes,
+    _contains_forbidden_publication_key,
     _load_manifest_verification,
     _resolve_public_candidate_dte_days,
     _trim_history_to_capture_clock,
@@ -61,14 +63,62 @@ def _tree_hashes(root: Path) -> dict[str, str]:
 
 
 def _contains_forbidden_key(value: object, forbidden: set[str]) -> bool:
+    return _contains_forbidden_key_at_path(value, forbidden, path=())
+
+
+def _contains_forbidden_key_at_path(
+    value: object,
+    forbidden: set[str],
+    *,
+    path: tuple[object, ...],
+) -> bool:
     if isinstance(value, dict):
         for key, nested in value.items():
-            if key in forbidden or _contains_forbidden_key(nested, forbidden):
+            nested_path = (*path, key)
+            if key in forbidden and not _allow_public_quantity(key, nested, nested_path):
+                return True
+            if _contains_forbidden_key_at_path(nested, forbidden, path=nested_path):
                 return True
         return False
     if isinstance(value, list):
-        return any(_contains_forbidden_key(item, forbidden) for item in value)
+        return any(
+            _contains_forbidden_key_at_path(item, forbidden, path=(*path, index))
+            for index, item in enumerate(value)
+        )
     return False
+
+
+def _allow_public_quantity(
+    key: object,
+    value: object,
+    path: tuple[object, ...],
+) -> bool:
+    if key != "quantity":
+        return False
+    if (
+        len(path) >= 6
+        and path[-1] == "quantity"
+        and isinstance(path[-2], int)
+        and path[-3] == "legs"
+        and isinstance(path[-4], int)
+        and path[-5] == "strategies"
+        and path[-6] == "strategy_brief"
+    ):
+        return value == 1
+    path_text = tuple(str(item) for item in path)
+    return (
+        path_text[:5]
+        == (
+            "components",
+            "schemas",
+            "ResearchReport",
+            "properties",
+            "strategy_brief",
+        )
+        and "strategies" in path_text
+        and "legs" in path_text
+        and path_text[-1] == "quantity"
+    )
 
 
 def _assert_schema_accepts(value: object, schema: dict, *, path: str = "$") -> None:
@@ -456,6 +506,36 @@ class PublicationTests(unittest.TestCase):
             quality_gate["advisory_reason_codes"],
         )
 
+    def test_publication_privacy_allows_strategy_brief_leg_quantity_one_only(self) -> None:
+        allowed_report = {
+            "strategy_brief": {
+                "strategies": [
+                    {
+                        "legs": [
+                            {"quantity": 1},
+                            {"quantity": 1},
+                        ]
+                    }
+                ]
+            }
+        }
+        blocked_report = {
+            "strategy_brief": {
+                "strategies": [
+                    {
+                        "legs": [
+                            {"quantity": 2},
+                        ]
+                    }
+                ]
+            }
+        }
+        blocked_outside_brief = {"quantity": 1}
+
+        self.assertFalse(_contains_forbidden_publication_key(allowed_report))
+        self.assertTrue(_contains_forbidden_publication_key(blocked_report))
+        self.assertTrue(_contains_forbidden_publication_key(blocked_outside_brief))
+
     def test_public_report_blocks_candidate_rows_with_conflicting_or_malformed_dte_evidence(
         self,
     ) -> None:
@@ -620,13 +700,19 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(
             {
                 "eligible_call_credit_spreads": 1,
+                "eligible_iron_condors": 0,
                 "eligible_expiries": 1,
                 "eligible_naked_short_calls": 0,
+                "eligible_put_credit_spreads": 0,
                 "expiries_considered": 2,
                 "rejected_call_credit_spreads": 0,
+                "rejected_iron_condors": 0,
                 "rejected_naked_short_calls": 1,
+                "rejected_put_credit_spreads": 0,
                 "review_call_credit_spreads": 0,
+                "review_iron_condors": 0,
                 "review_naked_short_calls": 0,
+                "review_put_credit_spreads": 0,
             },
             public_report["candidate_research"]["summary"],
         )
@@ -646,6 +732,79 @@ class PublicationTests(unittest.TestCase):
             public_report["ev_candidate_scanner"]["summary"],
         )
         self.assertEqual(0, public_report["ev_candidate_scanner"]["rejected_count"])
+
+    def test_public_report_keeps_put_spreads_and_iron_condors(self) -> None:
+        report = {
+            "schema_version": "research_report.v1",
+            "runtime_context": {"evaluation_clock": "2026-08-03T00:00:00Z"},
+            "candidate_research": {
+                "status": "validated",
+                "reason_code": None,
+                "put_credit_spreads": {
+                    "eligible": [
+                        {
+                            "candidate_id": "put-spread",
+                            "decision": "RESEARCH_ONLY",
+                            "structure_type": "put_credit_spread",
+                            "sell_leg_instrument_name": "BTC-29AUG26-95000-P",
+                            "buy_leg_instrument_name": "BTC-29AUG26-90000-P",
+                            "sell_leg_strike_price": 95_000.0,
+                            "buy_leg_strike_price": 90_000.0,
+                            "expiry_date": "2026-08-29",
+                            "dte_days": 26.0,
+                            "model_delta": 0.18,
+                            "net_credit": 0.011,
+                            "spread_width": 5_000.0,
+                            "premium_currency": "BTC",
+                            "underlying_price": 115_000.0,
+                        }
+                    ],
+                    "review": [],
+                    "rejected": [],
+                },
+                "iron_condors": {
+                    "eligible": [
+                        {
+                            "candidate_id": "condor",
+                            "decision": "RESEARCH_ONLY",
+                            "structure_type": "iron_condor",
+                            "put_spread_id": "put-spread",
+                            "call_spread_id": "call-spread",
+                            "put_short_strike_price": 95_000.0,
+                            "put_long_strike_price": 90_000.0,
+                            "call_short_strike_price": 125_000.0,
+                            "call_long_strike_price": 130_000.0,
+                            "expiry_date": "2026-08-29",
+                            "dte_days": 26.0,
+                            "net_credit": 0.021,
+                            "spread_width": 5_000.0,
+                            "premium_currency": "BTC",
+                            "underlying_price": 115_000.0,
+                        }
+                    ],
+                    "review": [],
+                    "rejected": [],
+                },
+            },
+        }
+
+        public_report = _build_public_report(report)
+
+        summary = public_report["candidate_research"]["summary"]
+        self.assertEqual(1, summary["eligible_put_credit_spreads"])
+        self.assertEqual(1, summary["eligible_iron_condors"])
+        self.assertEqual(
+            "put_credit_spread",
+            public_report["candidate_research"]["put_credit_spreads"]["eligible"][0][
+                "structure_type"
+            ],
+        )
+        self.assertEqual(
+            "iron_condor",
+            public_report["candidate_research"]["iron_condors"]["eligible"][0][
+                "structure_type"
+            ],
+        )
 
     def test_public_report_blocks_playbook_candidate_when_dte_evidence_conflicts(
         self,
@@ -1295,6 +1454,37 @@ class PublicationTests(unittest.TestCase):
             self.assertIn("alert", summary)
             self.assertIn("publication_history", summary)
 
+    def test_publish_preserves_strategy_brief_hash_and_public_allows_leg_quantity_one(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = load_snapshot_fixture(str(SNAPSHOT_FIXTURE))
+            underlying = _build_underlying_history_fixture(snapshot["captured_at"])
+            record = build_analysis_record(
+                mode="research_only",
+                generated_at=snapshot["captured_at"],
+                market_snapshot=snapshot,
+                underlying_history=underlying,
+            )
+            expected_brief = record.project_strategy_brief_v1()
+
+            output_dir, _ = self._publish(
+                Path(tmp),
+                snapshot_payload=snapshot,
+                underlying_payload=underlying,
+            )
+            report = json.loads(
+                (output_dir / "research" / "report").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual("published", report["runtime_context"]["mode"])
+            self.assertEqual("published_snapshot", report["data_trust"]["source_class"])
+            self.assertEqual(expected_brief, report["strategy_brief"])
+            self.assertEqual(expected_brief["brief_id"], report["strategy_brief"]["brief_id"])
+            for strategy in report["strategy_brief"]["strategies"]:
+                for leg in strategy["legs"]:
+                    self.assertEqual(1, leg["quantity"])
+
     def test_publish_marks_a_50_hour_old_edition_as_stale_at_publish(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             snapshot = load_snapshot_fixture(str(SNAPSHOT_FIXTURE))
@@ -1474,6 +1664,7 @@ class PublicationTests(unittest.TestCase):
                     "risk_state",
                     "runtime_context",
                     "schema_version",
+                    "strategy_brief",
                     "strategy_research",
                     "vol_surface_status",
                     "vrp_status",
@@ -1936,6 +2127,10 @@ class PublicationTests(unittest.TestCase):
                     response = operation["get"]["responses"]["200"]
                     schema = response["content"]["application/json"]["schema"]
                     self.assertRegex(schema["$ref"], r"^#/components/schemas/")
+            self.assertIn(
+                "strategy_brief",
+                openapi["components"]["schemas"]["ResearchReport"]["properties"],
+            )
             summary_schema = openapi["components"]["schemas"]["Summary"]
             self.assertFalse(summary_schema["additionalProperties"])
             public_summary = json.loads(

@@ -26,7 +26,11 @@
 | [`operations/public-deployment-suspension.md`](operations/public-deployment-suspension.md) | 公开部署的显式挂起决议与解除前置条件。 |
 | [`operations/public-history-rewrite.md`](operations/public-history-rewrite.md) | 历史净化的隔离演练、固定工具版本、PR refs 阻塞与验收契约。 |
 | [`operations/public-release-cutover.md`](operations/public-release-cutover.md) | 切 public 前的一次性冻结、历史、Actions、GitHub 设置与 v0.1.0 清单。 |
+| [`product/2026-08-30-actionable-strategy-brief-v0.2-v0.4-spec.md`](product/2026-08-30-actionable-strategy-brief-v0.2-v0.4-spec.md) | v0.2–v0.4 极简策略简报、同构历史和精确策略校准的 canonical 规格。 |
+| [`product/strategy-brief-historical-protocols-v1.md`](product/strategy-brief-historical-protocols-v1.md) | 三个初始策略族的历史回放、冻结协议与 holdout 边界。 |
+| [`product/exact-strategy-forecast-protocol-v1.md`](product/exact-strategy-forecast-protocol-v1.md) | 精确策略预测校准、提升、过期与自动降级协议。 |
 | [`releases/v0.1.0.md`](releases/v0.1.0.md) | 首个公开版本的安装、产物、完整性校验与研究边界说明。 |
+| [`releases/v0.4.0.md`](releases/v0.4.0.md) | v0.2–v0.4 一体化交付能力、证据纪律和未成熟 cohort 边界。 |
 
 ## 一级目录归属
 

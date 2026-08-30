@@ -599,3 +599,63 @@ a {
     transition-duration: 0.01ms !important;
   }
 }
+
+.strategy-brief-view,
+.strategy-brief-details {
+  display: grid;
+  gap: 12px;
+}
+
+.strategy-brief-view {
+  padding: 16px;
+  border: 1px solid var(--ink);
+  background: linear-gradient(180deg, #fffdf7 0%, #ffffff 100%);
+}
+
+.strategy-brief-header,
+.strategy-brief-card,
+.strategy-brief-view details,
+.strategy-brief-view section[aria-label="NO_TRADE"] {
+  display: grid;
+  gap: 10px;
+}
+
+.strategy-brief-header h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.strategy-brief-header dl,
+.strategy-brief-card dl {
+  display: grid;
+  gap: 8px;
+}
+
+.strategy-brief-view section[aria-label="策略卡"] {
+  display: grid;
+  gap: 12px;
+}
+
+.strategy-brief-card {
+  padding: 12px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.strategy-brief-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 8px;
+}
+
+.strategy-brief-card ul,
+.strategy-brief-view ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.strategy-brief-card button {
+  width: fit-content;
+}
