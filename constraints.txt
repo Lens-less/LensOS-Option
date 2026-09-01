@@ -8,4 +8,4 @@ packaging==26.3
 pluggy==1.6.0
 Pygments==2.21.0
 ruff==0.16.5
-setuptools==80.10.2
+setuptools==84.0.0
