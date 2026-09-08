@@ -9,6 +9,7 @@ sample size stand in for it.
 from __future__ import annotations
 
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from crypto_options_report.path_risk import (
     MIN_INDEPENDENT_UNDERLYING_WINDOWS,
@@ -50,12 +51,14 @@ def history(days: int, *, resolution_seconds: int = 86400) -> dict:
     """Deterministic synthetic price series with a mild oscillation."""
     observations = []
     price = 100_000.0
+    start = datetime(2022, 1, 1, tzinfo=UTC)
     for index in range(days):
         price *= 1.0 + (0.004 if index % 3 else -0.005)
+        observed_at = start + timedelta(days=index)
         observations.append(
             {
-                "timestamp_ms": 1_700_000_000_000 + index * 86_400_000,
-                "observed_at": f"2024-01-01T00:00:{index % 60:02d}Z",
+                "timestamp_ms": int(observed_at.timestamp() * 1000),
+                "observed_at": observed_at.isoformat().replace("+00:00", "Z"),
                 "close": round(price, 2),
             }
         )

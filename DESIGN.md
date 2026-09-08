@@ -1,59 +1,98 @@
 # LensOS Option · Research Brief Design System
 
-## 1. Selected Direction And Product Character
+## 1. Current Product Contract
 
-The production surface at `/evidence` follows the user-confirmed direction
-**A · 研究晨报**.
+The primary research experience is a one-screen, 30-second strategy brief.
+Canonical `strategy_brief.v1` supplies its market state, zero to three finite-risk
+cards, and evidence status across the internal console, public edition, and
+Chrome side panel. The data contract is defined in the
+[v0.2–v0.4 specification](docs/product/2026-08-30-actionable-strategy-brief-v0.2-v0.4-spec.md).
+The [first-use iteration](docs/product/2026-09-05-first-use-iteration.md) introduced
+offline teaching, consistent visible states, recovery, and browser verification.
+The subsequent [completion plan](docs/product/2026-09-05-completion-plan.md)
+separates typed analysis inputs, grouped admission conditions, and compatibility
+projection. The implemented boundaries are documented in
+[architecture.md](docs/architecture.md); neither iteration promotes a model.
+The [v0.5.0 delivery record](docs/product/2026-09-08-open-source-decision-platform.md)
+tracks this iteration's scope and actual verification; the
+[decision workflow](docs/guides/decision-workflow.en.md) connects the product's
+learning, analysis, evidence, recovery, and reproducibility steps.
 
-- Selection evidence: `design-previews/2026-07-24-lensos-research-desk/selection.json`.
-- Design dials: visual variance 3/10, motion 2/10, information density 9/10.
-- Product character: a bright institutional options-strategy research desk, not a release checklist and not a trading terminal.
-- Primary reading model: conclusion first, supporting evidence second, capability gaps last.
-- Product boundary: research-only, read-only, and fail-closed. No live-order, broker, sizing, or manual execution controls.
+The reading sequence is market context and evidence age, eligible strategy cards
+or an explicit “今日暂无可靠策略”, then supporting calculations and limitations.
+Cards identify exact one-unit legs, expiry, net credit, itemized costs, modeled
+loss budget, and cancellation conditions. Historical and forecast rates remain absent
+until their own `VALIDATED` and `CALIBRATED` evidence gates pass.
 
-The remembered visual action is the asymmetric market brief: a large live BTC
-price and DVOL pulse on the left, a ranked research-candidate sheet on the
-right, joined by one continuous editorial plane.
+Version 0.5.0 strengthens `strategy_brief.v1`: entry requires numeric
+`cost_breakdown`, `cost_model_id`, and `cost_config_hash`; risk identifies
+`PAYOFF_BOUND_PLUS_FROZEN_COST_BUDGET` and
+`delivery_fee_upper_bound_verified=false`. Every displayed card remains `WATCH`.
+Do not label this budget an absolute fee-inclusive maximum loss. Old boolean-only
+cost claims no longer validate; regenerate reports and upgrade every consumer
+together. Forecast selection identity also binds costs and net credit.
 
-## 2. Functional Contract
+The visual character remains a calm research brief: conclusion first, supporting
+evidence second. `RESEARCH_ONLY`, `NO_TRADE`, and `execution_allowed=false` remain
+product boundaries. No order submission or personalized sizing is introduced.
 
-Within three seconds the researcher must be able to answer:
+Sections 1–2 govern current interaction behavior. Sections 3–12 retain visual and
+component guidance subject to this contract; sections 13–15 explain migration and
+compatibility surfaces. The older eight-stage narrative is recorded in section
+16. Those implementations may still exist, but their older page layouts and
+contracts do not replace `strategy_brief.v1` as the primary brief.
 
-1. What is the current BTC underlying price?
-2. What is BTC DVOL?
-3. How fresh and trustworthy is the Deribit snapshot?
-4. What structure is the primary research setup, and why?
-5. Is entry currently permitted or only monitored?
-6. Which legs define the setup, and what are credit, reference maximum loss,
-   breakeven, strike distance, and expected-move multiple?
-7. Which entry conditions pass, fail, or remain unknown?
-8. What risk budget, profit-taking, state-transition, monitoring, and review
-   rules govern the setup?
+## 2. First Use, State, And Recovery
 
-The primary reading sequence is:
+### Offline learning tour
 
-1. compact masthead, source state, read-only boundary, and refresh action;
-2. market pulse with BTC price, DVOL, effective quote age, and data trust;
-3. eight-stage strategy workflow: collect, analyze, select, enter, risk, exit,
-   monitor, review;
-4. a defined-risk primary playbook with real eligible contracts and
-   observable screening rank;
-5. market, term-structure, call-wing, and expected-move analysis;
-6. explicit entry conditions with observed values, thresholds, and status;
-7. NAV-relative risk budget, reference one-contract economics, profit-taking,
-   position-state ladder, monitoring, and promotion evidence;
-8. volatility-surface evidence and the broader candidate table;
-9. release and capability limitations in a collapsed secondary disclosure;
-10. complete evidence chain for audit.
+`crypto-options-report demo` opens
+`/index.html?view=demo`. The “离线学习导览” has three steps: choose an example,
+understand the risk, and inspect the evidence. It uses fictional normalized
+prices and linear expiry payoffs to explain finite-risk structures. Every step
+identifies the teaching context; the values are not Deribit quotes, historical
+results, or probability estimates.
 
-`strategy_research.v1` is the UI's strategy source of truth. It may synthesize
-research playbooks, but it must remain `advisory_only`, keep execution disabled,
-leave contract count null, and identify screening-only or missing evidence. A
-missing account snapshot blocks sizing, not the rest of the research narrative.
+The learning route renders independently of the research API: unavailable
+research data does not prevent completing the teaching steps. Teaching
+examples remain outside research JSON and evidence promotion. The
+“查看真实快照” action opens the evidence view of the bundled redacted snapshot,
+where normal research validation and freshness gates continue to apply. A
+teaching result cannot supply missing research data or acquire `VALIDATED` or
+`CALIBRATED` status.
 
-When current market evidence is absent, the page must not invent prices,
-surface metrics, candidates, or reassuring prose. It shows a clear unavailable
-state and keeps the fail-closed boundary visible.
+### One visible state across each report
+
+Source mode, evaluation time, and current freshness are distinct facts. All
+report consumers use the shared display state. A stale demo, replay, live report,
+or public edition must not show current candidate eligibility or an unqualified
+current pass elsewhere on the page. Historical calculations, when retained,
+identify the snapshot evaluation time and do not restore present eligibility.
+Missing or invalid evidence never becomes zero, a placeholder rate, or a pass.
+
+### Recovery at the point of failure
+
+Loading has a bounded wait. Network failure, timeout, malformed data, and a
+rendering exception show an actionable explanation and a retry control. A failed
+load withdraws the previous current result; a valid retry can recover without
+reloading the entire application. The Chrome side panel exposes connection
+setup and errors in its first view, outside collapsed supporting evidence.
+
+### Verification
+
+Use `python tools/verify.py` for full local verification, including a browser
+journey served by the newly built and installed wheel. Cover the teaching steps,
+transition to the real blocked snapshot, desktop and narrow layouts, and browser
+errors. Component and loader regressions cover stale-state consistency and retry
+recovery. [CONTRIBUTING.md](CONTRIBUTING.md) describes browser discovery, focused
+reruns, and the checks deliberately skipped by `--quick`.
+
+On narrow screens, keep the current conclusion and next action ahead of auxiliary
+navigation and diagnostics. Keyboard users can open navigation, select a research
+view, and return focus when it closes. Signal and series progress must distinguish
+unavailable artifacts from insufficient samples; unknown counts remain unknown.
+The offline research case (`python tools/reproduce_research.py --check`) verifies
+actual blocked research output independently from the teaching payoff examples.
 
 ## 3. Reference DNA
 
@@ -290,10 +329,14 @@ secondary link to the local Evidence Console.
 - No order, trade, broker, contract-count, sizing, or execution control may be
   introduced. Risk templates remain explicitly uncalibrated research guidance.
 
-## 13. P0 Pre-entry Decision Migration
+## 13. Historical P0 Pre-entry Decision Migration
 
-This section is the canonical cleanup and migration plan for the evidence-first
-pre-entry engine. It narrows the trusted domain to:
+This section records the earlier migration direction and its compatibility
+boundaries. The current public builder evaluates typed calculation inputs;
+legacy report construction occurs only when its compatibility projection is
+requested. See [architecture.md](docs/architecture.md) for the implemented seam.
+
+The earlier cleanup and migration plan narrowed the trusted domain to:
 
 `Mandate → Market Evidence → Analysis → Opportunity → Strategy → Entry Admission`
 
@@ -371,7 +414,7 @@ place and are not extended.
   account evidence, venue margin simulation, and incremental portfolio veto.
 - P3 execution remains expressly unauthorized.
 
-## 14. Research Workbench Surface
+## 14. Research Workbench Compatibility Surface
 
 The workbench is the mining-and-understanding surface. The Evidence Console
 answers "is today's evidence trustworthy"; the workbench answers "which strike
@@ -438,7 +481,7 @@ maximum loss that does not exist. A credit spread caps at width minus credit.
 Mark spot and breakeven; label the vertical axis as per-contract P&L so it can
 never be read as a position result.
 
-## 15. Public Research Observatory
+## 15. Public Research Observatory Supporting Surface
 
 The public product is a daily, precomputed research edition. It is not a
 public deployment of the local API. A controlled publisher evaluates one
@@ -449,7 +492,8 @@ process, order path, or sizing controls.
 
 ### 15.1 Narrative before tooling
 
-The public navigation follows one fixed five-act question sequence:
+These supporting questions explain the original observatory narrative. The
+current public entry leads with the canonical strategy brief in section 1:
 
 1. Is volatility expensive now? — the VRP thermometer and its history.
 2. Where is it expensive? — term structure and smile evidence.
@@ -525,5 +569,22 @@ Publication starts from public market inputs only. Private account snapshots,
 positions, margin, sidecar authentication material, credentials, orders, and
 sizing data are excluded recursively from the emitted tree. The public site
 sets no cookies and loads no analytics, ad, tracker, font, or image request
-from a third party. Until a repository and data license are explicitly chosen,
-the generated legal pages must not imply a redistribution grant.
+from a third party. Code uses Apache-2.0 and public data artifacts use CC BY 4.0;
+generated legal pages must agree with `LICENSE` and `LICENSE-DATA`.
+
+## 16. Historical Narrative And Contract
+
+The July research-desk design emphasized BTC price and DVOL beside a ranked
+candidate sheet. Its eight-stage sequence was collect, analyze, select, enter,
+risk, exit, monitor, and review. It also placed strategy playbooks, NAV-relative
+risk budgets, exit-state ladders, and monitoring ahead of supporting evidence.
+That sequence is historical context and secondary methodology, not the current
+homepage specification or permission to add execution controls.
+
+The older interface used `strategy_research.v1` for advisory playbooks. Legacy
+report fields and diagnostic components remain for compatibility where the
+implementation still provides them. The primary brief now reads
+`strategy_brief.v1`. The subsequent core migration separates typed computation
+from lazy compatibility projection while preserving public entry points; it does
+not delete all legacy producers. Research evidence and execution boundaries remain
+unchanged.

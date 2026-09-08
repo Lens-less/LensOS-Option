@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -7,6 +8,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = ROOT / "Dockerfile"
@@ -54,18 +58,31 @@ def test_shared_constraints_pin_the_toolchain_used_by_ci_and_the_wheel_builds() 
     ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
-    for requirement in (
-        "pip==26.2.1",
-        "pytest==9.1.1",
-        'colorama==0.4.6 ; sys_platform == "win32"',
-        "iniconfig==2.3.0",
-        "packaging==26.3",
-        "pluggy==1.6.0",
-        "Pygments==2.21.0",
-        "ruff==0.16.5",
-        "setuptools==80.10.2",
-    ):
-        assert requirement in constraints
+    pins = {}
+    for line in constraints.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        requirement = Requirement(line)
+        specifiers = list(requirement.specifier)
+        assert len(specifiers) == 1 and specifiers[0].operator == "==", f"Not an exact pin: {line}"
+        version = Version(specifiers[0].version)  # Reject wildcard and invalid versions.
+        name = canonicalize_name(requirement.name)
+        assert name not in pins, f"Ambiguous duplicate pin: {name}"
+        pins[name] = version
+
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = ["pip", *config["build-system"]["requires"]]
+    for requirements in config["project"]["optional-dependencies"].values():
+        declared.extend(requirements)
+    for text in declared:
+        requirement = Requirement(text)
+        name = canonicalize_name(requirement.name)
+        assert name in pins, f"Development/build dependency has no exact constraint: {name}"
+        assert pins[name] in requirement.specifier, f"Constraint violates project requirement: {text}"
+
+    pre_commit = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    ruff_hook = pre_commit.split("repo: https://github.com/astral-sh/ruff-pre-commit", 1)[1].split("  - repo:", 1)[0]
+    assert f"rev: v{pins['ruff']}" in ruff_hook
 
     assert "PIP_CONSTRAINT: ${{ github.workspace }}/constraints.txt" in ci_workflow
     assert (
@@ -115,6 +132,32 @@ def test_wheel_build_removes_stale_hash_assets_from_staging() -> None:
         assert completed.returncode == 0, completed.stderr
         assert {path.name for path in staged_assets.iterdir()} == source_assets
         assert not (staged_assets / "index-stale-private.js").exists()
+        embedded_path = build_lib / "crypto_options_report/_build_info.json"
+        embedded = json.loads(embedded_path.read_text(encoding="utf-8"))["build_info"]
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        assert embedded["package_version"] == project["version"]
+        assert embedded["source_digest"].startswith("sha256:")
+        assert not (ROOT / "crypto_options_report/_build_info.json").exists()
+        with TemporaryDirectory(prefix="isolated-build-identity-") as isolated:
+            installed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    "import json,sys; sys.path.insert(0,sys.argv[1]); "
+                    "from crypto_options_report.build_info import get_build_info; "
+                    "print(json.dumps(get_build_info().to_dict()))",
+                    str(build_lib),
+                ],
+                cwd=isolated,
+                env={**os.environ, "GITHUB_SHA": "f" * 40},
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        observed = json.loads(installed.stdout)
+        assert observed == {**embedded, "source_kind": "embedded"}
 
 
 def test_wheel_build_refuses_external_or_linked_build_directories() -> None:

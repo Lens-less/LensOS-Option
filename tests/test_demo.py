@@ -162,6 +162,7 @@ def test_demo_ctrl_c_shuts_down_cleanly() -> None:
     assert exit_code == 0
     server.server_close.assert_called_once_with()
     assert "Press Ctrl+C to stop" in stdout.getvalue()
+    assert "/index.html?view=demo" in stdout.getvalue()
     assert "Stopping LensOS Option demo" in stderr.getvalue()
 
 

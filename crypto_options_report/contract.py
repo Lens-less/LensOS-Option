@@ -19,27 +19,33 @@ from .account_risk import (
     ACCOUNT_GATE_NO_TRADE,
     ACCOUNT_MARGIN_HALT,
     account_reason_codes,
-    build_account_status,
-    load_account_scenario,
     risk_state_from_account_status,
+)
+from .analysis_inputs import (
+    AnalysisInputs,
+    ReportProjectionOptions,
+    _data_trust_source_class,
+    compute_analysis_inputs,
+)
+from .analysis_inputs import (
+    _build_data_trust_summary as _build_data_trust_summary,
+)
+from .analysis_inputs import (
+    _calibration_status_from_walk_forward as _calibration_status_from_walk_forward,
 )
 from .calibration import (
     CALIBRATION_NOT_IMPLEMENTED,
-    build_walk_forward_calibration_report,
     validate_walk_forward_calibration_report,
 )
 from .combination_risk import build_combination_risk_report
-from .ev_scanner import build_ev_candidate_scanner
 from .full_surface import (
     build_full_system_surface_report,
     validate_full_system_surface_report,
 )
-from .market_data import build_market_data_status, parse_timestamp_ms
 from .paper_ledger import (
     build_paper_proposal_ledger,
     validate_paper_proposal_ledger,
 )
-from .pnl import build_pnl_evidence_report
 from .portfolio_risk import (
     build_portfolio_risk_report,
     validate_portfolio_risk_report,
@@ -48,13 +54,11 @@ from .position_management import (
     build_position_management_report,
     validate_position_management_report,
 )
-from .regime import build_regime_permission_state
 from .strategy_brief import validate_strategy_brief
 from .strategy_research import (
     build_strategy_research,
     validate_strategy_research,
 )
-from .surface import build_vol_surface_and_candidate_research
 
 SCHEMA_VERSION = "research_report.v1"
 SUPPORTED_MODES = {"research_only", "paper", "manual_execution"}
@@ -135,35 +139,46 @@ def _build_research_report_v1_projection(
     persist_paper_ledger: bool = True,
     underlying_history: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the legacy projection before the AnalysisRun migration layer."""
-
-    if mode not in SUPPORTED_MODES:
-        raise ValueError(
-            f"unsupported mode {mode!r}; expected one of {sorted(SUPPORTED_MODES)}"
-        )
-
-    generated = generated_at or utc_timestamp()
-    evaluation_now_ms = parse_timestamp_ms(generated)
-    if account_payload is not None and account_scenario is not None:
-        raise ValueError("pass account_payload or account_scenario, not both")
-    if account_scenario is not None:
-        account_payload = load_account_scenario(account_scenario)
-
-    data_status = (
-        build_market_data_status(market_snapshot, now_ms=evaluation_now_ms)
-        if market_snapshot is not None
-        else {
-            "status": "missing",
-            "validated": False,
-            "source": "not_configured",
-            "reason_code": "MISSING_VALIDATED_MARKET_DATA",
-        }
+    """Legacy caller adapter; both paths share independent calculation results."""
+    options = ReportProjectionOptions(
+        mode, paper_ledger_path, manual_approval_runbook_path, persist_paper_ledger
     )
-    account_status = build_account_status(
-        generated_at=generated,
+    inputs = compute_analysis_inputs(
+        evaluation_clock=generated_at or utc_timestamp(),
+        market_snapshot=market_snapshot,
         account_payload=account_payload,
+        account_scenario=account_scenario,
+        backtest_artifact=backtest_artifact,
+        underlying_history=underlying_history,
     )
+    return project_analysis_inputs(inputs, options)
 
+
+def project_analysis_inputs(
+    inputs: AnalysisInputs,
+    options: ReportProjectionOptions,
+) -> dict[str, Any]:
+    """Build the compatibility output from already calculated observations.
+
+    Position/paper/report-only sections are deliberately calculated here, after
+    the immutable pre-entry decision. They never feed back into that decision.
+    """
+    generated = inputs.evaluation_clock
+    mode = options.mode
+    paper_ledger_path = options.paper_ledger_path
+    manual_approval_runbook_path = options.manual_approval_runbook_path
+    persist_paper_ledger = options.persist_paper_ledger
+    data_status = dict(inputs.market.data.read())
+    data_trust = dict(inputs.market.trust.read())
+    account_status = dict(inputs.account.read())
+    vol_surface_status = dict(inputs.market.surface.read())
+    candidate_research = inputs.market.candidates.read()
+    permission_state = inputs.market.permission.read()
+    pnl_evidence = inputs.research.pnl.read()
+    walk_forward_calibration = inputs.research.walk_forward.read()
+    calibration_status = inputs.research.calibration.read()
+    backtest_status = inputs.research.backtest.read()
+    ev_candidate_scanner = inputs.research.scanner.read()
     reason_codes: list[str] = []
     if data_status["status"] == "missing":
         reason_codes.append("MISSING_VALIDATED_MARKET_DATA")
@@ -172,7 +187,6 @@ def _build_research_report_v1_projection(
 
     reason_codes.extend(account_reason_codes(account_status))
 
-    data_trust = _build_data_trust_summary(data_status)
     if data_trust["verdict"] != "trusted":
         reason_codes.extend(data_trust["reason_codes"])
 
@@ -192,45 +206,10 @@ def _build_research_report_v1_projection(
     if data_status["status"] == "blocked":
         risk_state = ACCOUNT_MARGIN_HALT
 
-    pnl_evidence = build_pnl_evidence_report()
-    vol_surface_status, candidate_research = build_vol_surface_and_candidate_research(
-        market_snapshot=market_snapshot,
-        generated_at=generated,
-        data_status=data_status,
-        pnl_evidence=pnl_evidence,
-    )
-
-    permission_state = build_regime_permission_state(
-        market_snapshot=market_snapshot,
-        data_status=data_status,
-        vol_surface_status=vol_surface_status,
-    )
-    reason_codes.extend(permission_state["reason_codes"])
-
-    walk_forward_calibration = build_walk_forward_calibration_report(
-        generated_at=generated,
-        baseline_backtest=(backtest_artifact or {}).get("backtest_report"),
-    )
-    calibration_status = _calibration_status_from_walk_forward(
-        walk_forward_calibration
-    )
-    backtest_status = _backtest_status_from_artifact(backtest_artifact)
-    if calibration_status.get("reason_code"):
-        reason_codes.append(str(calibration_status["reason_code"]))
-    if backtest_status.get("reason_code"):
-        reason_codes.append(str(backtest_status["reason_code"]))
-    ev_candidate_scanner = build_ev_candidate_scanner(
-        generated_at=generated,
-        data_status=data_status,
-        account_status=account_status,
-        calibration_status=calibration_status,
-        permission_state=permission_state,
-        candidate_research=candidate_research,
-        vol_surface_status=vol_surface_status,
-        underlying_history=underlying_history,
-    )
-    if ev_candidate_scanner.get("reason_code"):
-        reason_codes.append(str(ev_candidate_scanner["reason_code"]))
+    reason_codes.extend(permission_state.get("reason_codes") or [])
+    for status in (calibration_status, backtest_status, ev_candidate_scanner):
+        if status.get("reason_code"):
+            reason_codes.append(str(status["reason_code"]))
     # The combination view covers the rows a reader would actually consider
     # together: the frontier candidates the scanner surfaced, not every row in
     # the table. Combining rejected rows would describe a book nobody would hold.
@@ -399,67 +378,6 @@ def _validate_runtime_safety_invariants(report: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _calibration_status_from_walk_forward(
-    calibration: dict[str, Any],
-) -> dict[str, Any]:
-    registry = calibration.get("model_registry") or {}
-    model_version = registry.get("model_version")
-    promotion_status = registry.get("promotion_status")
-    if (
-        calibration.get("status") == "not_implemented"
-        and registry.get("status") == "unavailable"
-    ):
-        return {
-            "status": "unavailable",
-            "calibrated": False,
-            "model_version": None,
-            "promotion_status": "not_implemented",
-            "evidence_class": "unavailable",
-            "reason_code": CALIBRATION_NOT_IMPLEMENTED,
-        }
-    if not model_version or not promotion_status:
-        return {
-            "status": "missing",
-            "calibrated": False,
-            "model_version": None,
-            "promotion_status": "missing",
-            "evidence_class": None,
-            "reason_code": "MISSING_CALIBRATION_EVIDENCE",
-        }
-
-    promoted = (
-        registry.get("promoted_for_sizing") is True
-        and promotion_status == "promoted"
-    )
-    return {
-        "status": "calibrated" if promoted else "research_fixture",
-        "calibrated": promoted,
-        "model_version": str(model_version),
-        "promotion_status": str(promotion_status),
-        "evidence_class": calibration.get("evidence_class"),
-        "reason_code": None if promoted else "CALIBRATION_PROMOTION_PENDING",
-    }
-
-
-def _backtest_status_from_artifact(
-    artifact: dict[str, Any] | None,
-) -> dict[str, Any]:
-    if not artifact:
-        return {
-            "status": "not_run",
-            "aligned": False,
-            "artifact_id": None,
-            "reason_code": "BACKTEST_NOT_RUN",
-        }
-    aligned = artifact.get("aligned") is True
-    return {
-        "status": "completed",
-        "aligned": aligned,
-        "artifact_id": artifact.get("report_id"),
-        "reason_code": None if aligned else "BACKTEST_ALIGNMENT_FAIL",
-    }
-
-
 def report_shape(value: Any) -> Any:
     """Return a comparable shape with values replaced by type names."""
 
@@ -505,7 +423,9 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
             if code not in report.get("reason_codes", []):
                 errors.append(f"missing quality reason code: {code}")
     account_reason_code = (report.get("account_status", {}) or {}).get("reason_code")
-    if account_reason_code and account_reason_code not in report.get("reason_codes", []):
+    if account_reason_code and account_reason_code not in report.get(
+        "reason_codes", []
+    ):
         errors.append("account_status reason_code must appear in report reason_codes")
 
     mode = report.get("mode")
@@ -540,7 +460,9 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
         errors.append("calibration_status must match walk-forward model registry")
     calibration_reason = calibration_status.get("reason_code")
     if calibration_reason and calibration_reason not in report.get("reason_codes", []):
-        errors.append("calibration_status reason_code must appear in report reason_codes")
+        errors.append(
+            "calibration_status reason_code must appear in report reason_codes"
+        )
 
     backtest_status = report.get("backtest_status", {})
     if backtest_status.get("status") not in {"not_run", "completed"}:
@@ -551,7 +473,9 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
         if backtest_status.get("artifact_id") is not None:
             errors.append("not-run backtest_status.artifact_id must be null")
         if backtest_status.get("reason_code") != "BACKTEST_NOT_RUN":
-            errors.append("not-run backtest_status.reason_code must be BACKTEST_NOT_RUN")
+            errors.append(
+                "not-run backtest_status.reason_code must be BACKTEST_NOT_RUN"
+            )
         if "BACKTEST_NOT_RUN" not in report.get("reason_codes", []):
             errors.append("missing reason code: BACKTEST_NOT_RUN")
     else:
@@ -559,7 +483,9 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
         if not isinstance(artifact_id, str) or not artifact_id.startswith("bt-"):
             errors.append("completed backtest_status must name its artifact")
         expected_reason = (
-            None if backtest_status.get("aligned") is True else "BACKTEST_ALIGNMENT_FAIL"
+            None
+            if backtest_status.get("aligned") is True
+            else "BACKTEST_ALIGNMENT_FAIL"
         )
         if backtest_status.get("reason_code") != expected_reason:
             errors.append("completed backtest_status reason must match alignment")
@@ -567,8 +493,8 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
     walk_forward = report.get("walk_forward_calibration") or {}
     comparison_status = walk_forward.get("comparison_status") or {}
     comparison_rows = walk_forward.get("system_comparison")
-    surface_comparison = (
-        (report.get("full_system_surface") or {}).get("backtest_comparison")
+    surface_comparison = (report.get("full_system_surface") or {}).get(
+        "backtest_comparison"
     )
     if backtest_status.get("status") == "not_run":
         if comparison_status.get("status") == "available":
@@ -597,14 +523,16 @@ def validate_report_contract(report: dict[str, Any]) -> list[str]:
         errors.extend(validate_strategy_brief(strategy_brief))
     errors.extend(_validate_ev_candidate_scanner(report.get("ev_candidate_scanner")))
     errors.extend(validate_portfolio_risk_report(report.get("portfolio_risk")))
-    errors.extend(validate_position_management_report(report.get("position_management")))
     errors.extend(
-        validate_walk_forward_calibration_report(
-            report.get("walk_forward_calibration")
-        )
+        validate_position_management_report(report.get("position_management"))
+    )
+    errors.extend(
+        validate_walk_forward_calibration_report(report.get("walk_forward_calibration"))
     )
     errors.extend(validate_paper_proposal_ledger(report.get("paper_proposal_ledger")))
-    errors.extend(validate_full_system_surface_report(report.get("full_system_surface")))
+    errors.extend(
+        validate_full_system_surface_report(report.get("full_system_surface"))
+    )
 
     forbidden = _find_forbidden_keys(report)
     if forbidden:
@@ -623,7 +551,9 @@ def _validate_data_status(data_status: dict[str, Any]) -> list[str]:
         if data_status.get("source") != "not_configured":
             errors.append("missing data_status.source must be not_configured")
         if data_status.get("reason_code") != "MISSING_VALIDATED_MARKET_DATA":
-            errors.append("data_status reason_code must be MISSING_VALIDATED_MARKET_DATA")
+            errors.append(
+                "data_status reason_code must be MISSING_VALIDATED_MARKET_DATA"
+            )
         return errors
 
     if status not in {"validated", "blocked"}:
@@ -674,7 +604,9 @@ def _validate_data_status(data_status: dict[str, Any]) -> list[str]:
         if gate.get("passed") is not False:
             errors.append("blocked quality gate must fail")
         if data_status.get("reason_code") != "MARKET_DATA_QUALITY_FAIL":
-            errors.append("blocked data_status.reason_code must be MARKET_DATA_QUALITY_FAIL")
+            errors.append(
+                "blocked data_status.reason_code must be MARKET_DATA_QUALITY_FAIL"
+            )
         if not gate.get("reason_codes"):
             errors.append("blocked quality gate must include reason_codes")
 
@@ -762,7 +694,9 @@ def _validate_account_status(account_status: dict[str, Any]) -> list[str]:
 
     if status == "missing":
         if account_status.get("reason_code") != "MISSING_ACCOUNT_API_SNAPSHOT":
-            errors.append("missing account_status must use MISSING_ACCOUNT_API_SNAPSHOT")
+            errors.append(
+                "missing account_status must use MISSING_ACCOUNT_API_SNAPSHOT"
+            )
         if live_snapshot is not False:
             errors.append("missing account_status.live_snapshot must be false")
         if margin_light != ACCOUNT_MARGIN_HALT:
@@ -950,8 +884,12 @@ def _validate_pnl_evidence(pnl_evidence: Any) -> list[str]:
         if check.get("id") == "inverse-known-long-call-settlement":
             found_known_settlement = True
             outputs = check.get("outputs", {})
-            if outputs.get("actual_settlement_coin") != outputs.get("expected_settlement_coin"):
-                errors.append("known inverse settlement example must match expected output")
+            if outputs.get("actual_settlement_coin") != outputs.get(
+                "expected_settlement_coin"
+            ):
+                errors.append(
+                    "known inverse settlement example must match expected output"
+                )
 
     if not found_known_settlement:
         errors.append("pnl_evidence must include inverse-known-long-call-settlement")
@@ -966,7 +904,10 @@ def _validate_permission_state(permission_state: Any) -> list[str]:
     if permission_state.get("status") not in {"blocked", "validated"}:
         errors.append("permission_state.status must be blocked or validated")
     sell_permission = permission_state.get("sell_permission")
-    if not isinstance(sell_permission, (int, float)) or not 0.0 <= float(sell_permission) <= 1.0:
+    if (
+        not isinstance(sell_permission, (int, float))
+        or not 0.0 <= float(sell_permission) <= 1.0
+    ):
         errors.append("sell_permission must be a number between 0.0 and 1.0")
     if permission_state.get("naked_permission") not in {True, False}:
         errors.append("naked_permission must be a bool")
@@ -1003,7 +944,10 @@ def _validate_permission_state(permission_state: Any) -> list[str]:
             errors.append("zero sell_permission must keep naked_permission false")
         if permission_state.get("spread_permission") is not False:
             errors.append("zero sell_permission must keep spread_permission false")
-    if permission_state.get("naked_permission") is True and permission_state.get("spread_permission") is not True:
+    if (
+        permission_state.get("naked_permission") is True
+        and permission_state.get("spread_permission") is not True
+    ):
         errors.append("naked_permission true requires spread_permission true")
 
     required_scores = {
@@ -1074,7 +1018,9 @@ def _validate_vol_surface_status(vol_surface_status: Any) -> list[str]:
         return ["vol_surface_status must be a dict"]
 
     if vol_surface_status.get("status") not in {"missing", "blocked", "validated"}:
-        errors.append("vol_surface_status.status must be missing, blocked, or validated")
+        errors.append(
+            "vol_surface_status.status must be missing, blocked, or validated"
+        )
     if vol_surface_status.get("validated") not in {True, False}:
         errors.append("vol_surface_status.validated must be a bool")
     if vol_surface_status.get("fit_model") not in {
@@ -1123,7 +1069,9 @@ def _validate_vol_surface_status(vol_surface_status: Any) -> list[str]:
                 "greek_consistency",
             ):
                 if key not in point:
-                    errors.append(f"vol_surface_status surface point missing key: {key}")
+                    errors.append(
+                        f"vol_surface_status surface point missing key: {key}"
+                    )
 
     return errors
 
@@ -1217,21 +1165,35 @@ def _validate_ev_candidate_scanner(ev_candidate_scanner: Any) -> list[str]:
                 if key not in candidate:
                     errors.append(f"ev_candidate_scanner candidate missing key: {key}")
             if candidate.get("action") not in {"RESEARCH_ONLY", "REVIEW", "REJECT"}:
-                errors.append("ev_candidate_scanner candidate action must be RESEARCH_ONLY, REVIEW, or REJECT")
+                errors.append(
+                    "ev_candidate_scanner candidate action must be RESEARCH_ONLY, REVIEW, or REJECT"
+                )
             if candidate.get("score_status") != "UNCALIBRATED_RESEARCH_ONLY":
-                errors.append("ev_candidate_scanner candidate score_status must stay UNCALIBRATED_RESEARCH_ONLY")
+                errors.append(
+                    "ev_candidate_scanner candidate score_status must stay UNCALIBRATED_RESEARCH_ONLY"
+                )
             if not isinstance(candidate.get("kill_conditions"), list):
-                errors.append("ev_candidate_scanner candidate kill_conditions must be a list")
+                errors.append(
+                    "ev_candidate_scanner candidate kill_conditions must be a list"
+                )
             if not isinstance(candidate.get("reason_codes"), list):
-                errors.append("ev_candidate_scanner candidate reason_codes must be a list")
+                errors.append(
+                    "ev_candidate_scanner candidate reason_codes must be a list"
+                )
             if not isinstance(candidate.get("fair_iv_diagnostics"), dict):
-                errors.append("ev_candidate_scanner candidate fair_iv_diagnostics must be a dict")
+                errors.append(
+                    "ev_candidate_scanner candidate fair_iv_diagnostics must be a dict"
+                )
             if not isinstance(candidate.get("path_risk"), dict):
                 errors.append("ev_candidate_scanner candidate path_risk must be a dict")
             if not isinstance(candidate.get("margin_snapshot"), dict):
-                errors.append("ev_candidate_scanner candidate margin_snapshot must be a dict")
+                errors.append(
+                    "ev_candidate_scanner candidate margin_snapshot must be a dict"
+                )
             if not isinstance(candidate.get("hazard_zone"), dict):
-                errors.append("ev_candidate_scanner candidate hazard_zone must be a dict")
+                errors.append(
+                    "ev_candidate_scanner candidate hazard_zone must be a dict"
+                )
 
     if status == "unavailable":
         path_evidence = ev_candidate_scanner.get("path_risk_evidence") or {}
@@ -1340,9 +1302,7 @@ def _validate_data_trust(
 
     if status == "missing":
         if verdict != "untrusted":
-            errors.append(
-                "missing market data must have untrusted data_trust.verdict"
-            )
+            errors.append("missing market data must have untrusted data_trust.verdict")
         if source_class != "missing":
             errors.append(
                 "missing market data must have missing data_trust.source_class"
@@ -1355,9 +1315,7 @@ def _validate_data_trust(
             )
     elif status in {"blocked", "validated"}:
         if status == "blocked" and verdict != "untrusted":
-            errors.append(
-                "blocked market data must have untrusted data_trust.verdict"
-            )
+            errors.append("blocked market data must have untrusted data_trust.verdict")
 
         expected_source_class = _data_trust_source_class(data_status)
         if source_class != expected_source_class:
@@ -1381,165 +1339,6 @@ def _validate_data_trust(
         # Canonical equality above permits live evidence to be degraded while
         # collecting, trusted after promotion, or untrusted after an evidence reset.
     return errors
-
-
-def _build_data_trust_summary(data_status: dict[str, Any]) -> dict[str, Any]:
-    status = data_status.get("status")
-    if status == "missing":
-        return {
-            "verdict": "untrusted",
-            "reason_codes": ["MISSING_VALIDATED_MARKET_DATA"],
-            "source_class": "missing",
-        }
-
-    source_class = _data_trust_source_class(data_status)
-    quality_reasons = list(
-        (data_status.get("quality_gate") or {}).get("reason_codes") or []
-    )
-    if status != "validated":
-        return {
-            "verdict": "untrusted",
-            "reason_codes": _unique_codes(
-                quality_reasons
-                or [str(data_status.get("reason_code") or "MARKET_DATA_QUALITY_FAIL")]
-            ),
-            "source_class": source_class,
-        }
-    if source_class != "live":
-        return {
-            "verdict": "untrusted",
-            "reason_codes": ["DATA_TRUST_PROMOTION_PENDING"],
-            "source_class": source_class,
-        }
-
-    evidence = data_status.get("trust_evidence") or {}
-    evidence_status = str(
-        evidence.get("status") or evidence.get("promotion_status") or "collecting"
-    ).lower()
-    if evidence_status == "reset":
-        return {
-            "verdict": "untrusted",
-            "reason_codes": _unique_codes(
-                list(evidence.get("reason_codes") or [])
-                or ["DATA_TRUST_EVIDENCE_RESET"]
-            ),
-            "source_class": "live",
-        }
-    consecutive_passes = _nonnegative_number(evidence.get("consecutive_passes"))
-    supplied_minimum_passes = _positive_number(
-        evidence.get(
-            "minimum_consecutive_passes",
-            evidence.get("required_consecutive_passes"),
-        )
-    )
-    policy_minimum_passes, policy_minimum_observation_seconds = (
-        _trust_promotion_thresholds()
-    )
-    minimum_passes = max(
-        policy_minimum_passes,
-        supplied_minimum_passes
-        if supplied_minimum_passes is not None
-        else policy_minimum_passes,
-    )
-    observation_seconds = _nonnegative_number(
-        evidence.get("observation_seconds", evidence.get("observation_sec"))
-    )
-    supplied_minimum_observation_seconds = _positive_number(
-        evidence.get(
-            "minimum_observation_seconds", evidence.get("required_observation_sec")
-        )
-    )
-    minimum_observation_seconds = max(
-        policy_minimum_observation_seconds,
-        supplied_minimum_observation_seconds
-        if supplied_minimum_observation_seconds is not None
-        else policy_minimum_observation_seconds,
-    )
-    threshold_evidence_missing = (
-        supplied_minimum_passes is None
-        or supplied_minimum_observation_seconds is None
-        or "TRUST_PROMOTION_MINIMUMS_MISSING"
-        in {str(item) for item in evidence.get("reason_codes") or []}
-    )
-    feed_coverage = data_status.get("feed_coverage") or {}
-    response_contract = data_status.get("public_response_contract") or {}
-    feeds_complete = bool(feed_coverage) and not feed_coverage.get("missing_feeds")
-    response_pass = (
-        bool(response_contract)
-        and response_contract.get("overall_status") == "pass"
-    )
-    promoted = (
-        evidence_status in {"promoted", "trusted"}
-        and not threshold_evidence_missing
-        and consecutive_passes >= minimum_passes
-        and observation_seconds >= minimum_observation_seconds
-        and feeds_complete
-        and evidence.get("feed_graph_complete") is True
-        and response_pass
-        and not quality_reasons
-    )
-    if promoted:
-        return {
-            "verdict": "trusted",
-            "reason_codes": [],
-            "source_class": "live",
-        }
-
-    reasons = list(evidence.get("reason_codes") or [])
-    if threshold_evidence_missing:
-        reasons.append("DATA_TRUST_THRESHOLD_EVIDENCE_MISSING")
-    elif (
-        consecutive_passes < minimum_passes
-        or observation_seconds < minimum_observation_seconds
-    ):
-        reasons.append("DATA_TRUST_OBSERVATION_COLLECTING")
-    if not feeds_complete:
-        reasons.append("PUBLIC_FEED_GRAPH_INCOMPLETE")
-    if not response_pass:
-        reasons.append("PUBLIC_RESPONSE_CONTRACT_NOT_VERIFIED")
-    reasons.extend(quality_reasons)
-    if not reasons:
-        reasons.append("DATA_TRUST_PROMOTION_PENDING")
-    return {
-        "verdict": "degraded",
-        "reason_codes": _unique_codes(reasons),
-        "source_class": "live",
-    }
-
-
-def _nonnegative_number(value: Any) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0.0
-    return max(0.0, float(value))
-
-
-def _positive_number(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    parsed = _nonnegative_number(value)
-    return parsed if parsed > 0 else None
-
-
-def _trust_promotion_thresholds() -> tuple[float, float]:
-    from .analysis_run import PolicyCatalog
-
-    policy = PolicyCatalog()
-    return (
-        float(policy.trust_minimum_consecutive_passes),
-        float(policy.trust_minimum_observation_seconds),
-    )
-
-
-def _data_trust_source_class(data_status: dict[str, Any]) -> str:
-    if data_status.get("status") == "missing":
-        return "missing"
-
-    source = str(data_status.get("source") or "").lower()
-    if "replay" in source:
-        return "replay"
-    if source.startswith("deribit_live:"):
-        return "live"
-    return "fixture"
 
 
 def _find_forbidden_keys(value: Any) -> set[str]:

@@ -8,6 +8,7 @@ import { loadPublicReport, type LoadedPublicReport } from "./loadPublicReport";
 import { PublicEvidenceView } from "./PublicEvidenceView";
 import { PublicShell } from "./PublicShell";
 import { selectPublicFreshness, type PublicView } from "./publicModel";
+import { ReportLoadError, reportLoadErrorCopy, reportLoadErrorKind, type ReportLoadErrorKind } from "../transport/requestJson";
 
 function readViewFromLocation(): PublicView {
   if (typeof window === "undefined") {
@@ -19,7 +20,7 @@ function readViewFromLocation(): PublicView {
 
 type AppState =
   | { status: "loading" }
-  | { status: "error" }
+  | { status: "error"; kind: ReportLoadErrorKind }
   | {
       status: "ready";
       loaded: LoadedPublicReport;
@@ -47,15 +48,19 @@ function PublicLoadingState(): React.JSX.Element {
 
 function PublicErrorState({
   onRetry,
+  kind,
 }: {
   onRetry: () => void;
+  kind: ReportLoadErrorKind;
 }): React.JSX.Element {
+  const failure = reportLoadErrorCopy(kind);
   return (
     <div className="app-shell state-shell">
       <main className="state-main">
         <section className="state-card error-card" role="alert">
           <p className="section-kicker">public report unavailable / fail closed</p>
           <h1>公开研究数据不可用</h1>
+          <p><strong>{failure.title}</strong>。{failure.action}</p>
           <p>公开报告无法验证时，页面会保留失败关闭边界，不展示当前市场数字。</p>
           <div className="error-boundary">
             <span>运行边界</span>
@@ -72,8 +77,8 @@ function PublicErrorState({
 
 function ensurePublicReport(loaded: LoadedPublicReport): LoadedPublicReport {
   const report = loaded.report as ResearchReport;
-  if (report.schema_version !== "research_report.v1") {
-    throw new Error("public report schema is invalid");
+  if (report?.schema_version !== "research_report.v1" || !Number.isFinite(loaded.receivedAtMs)) {
+    throw new ReportLoadError("invalid");
   }
   return loaded;
 }
@@ -97,10 +102,12 @@ export function PublicApp(): React.JSX.Element {
   const signalArtifact = useSignalArtifact(
     artifactIdentity ? `./research/signal${artifactQuery}` : null,
     artifactCapturedAt,
+    loadedPublication,
   );
   const seriesArtifact = useSeriesArtifact(
     artifactIdentity ? `./research/series${artifactQuery}` : null,
     artifactCapturedAt,
+    loadedPublication,
   );
   const requestSequence = useRef(0);
 
@@ -128,9 +135,9 @@ export function PublicApp(): React.JSX.Element {
         setNowMs(Date.now());
         setState({ status: "ready", loaded, refreshing: false });
       }
-    } catch {
+    } catch (error) {
       if (requestSequence.current === sequence) {
-        setState({ status: "error" });
+        setState({ status: "error", kind: reportLoadErrorKind(error) });
       }
     }
   }, []);
@@ -176,11 +183,16 @@ export function PublicApp(): React.JSX.Element {
     return <PublicLoadingState />;
   }
   if (state.status === "error") {
-    return <PublicErrorState onRetry={() => void refresh()} />;
+    return <PublicErrorState kind={state.kind} onRetry={() => void refresh()} />;
   }
 
   const report = state.loaded.report;
   const freshness = selectPublicFreshness(report, state.loaded.receivedAtMs, nowMs);
+  const recoveryProps = {
+    resetKey: state.loaded,
+    onRetry: () => void refresh(),
+    retrying: state.refreshing,
+  };
 
   return (
     <PublicShell
@@ -191,15 +203,15 @@ export function PublicApp(): React.JSX.Element {
       view={view}
     >
       {view === "signal" ? (
-        <ResearchErrorBoundary label="信号验证视图">
+        <ResearchErrorBoundary label="信号验证视图" {...recoveryProps}>
           <SignalValidationView artifact={signalArtifact} />
         </ResearchErrorBoundary>
       ) : view === "series" ? (
-        <ResearchErrorBoundary label="序列历史视图">
+        <ResearchErrorBoundary label="序列历史视图" {...recoveryProps}>
           <SeriesHistoryView artifact={seriesArtifact} />
         </ResearchErrorBoundary>
       ) : (
-        <ResearchErrorBoundary label="公开证据视图">
+        <ResearchErrorBoundary label="公开证据视图" {...recoveryProps}>
           <PublicEvidenceView
             freshness={freshness}
             report={report}

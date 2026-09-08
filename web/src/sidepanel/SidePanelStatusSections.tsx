@@ -1,4 +1,5 @@
 import React from "react";
+import { reportLoadErrorCopy, reportLoadErrorKind } from "../transport/requestJson";
 import type { DeribitContext } from "../extension/messages";
 import type { SidePanelViewModel } from "../report";
 import {
@@ -16,19 +17,12 @@ const ENGINE_START_COMMAND =
   "python -m crypto_options_report.api --host 127.0.0.1 --port 8000";
 
 interface SidePanelStatusSectionsProps {
+  currentEvidence?: boolean;
   context: DeribitContext | null;
   effectiveInstrument: string;
-  error: string | null;
-  evidenceUrl: string;
-  /** True only while `status === "offline"` and a last-known report is being
-   * shown from cache; drives the persistent "stale" banner instead of the
-   * full-page first-run checklist. */
-  isStaleOffline: boolean;
   manualInstrument: string;
   model: SidePanelViewModel | null;
-  status: PanelStatus;
   onManualInstrumentChange: (value: string) => void;
-  onRetry: () => void;
   onSyncContext: () => void;
 }
 
@@ -86,16 +80,12 @@ export function SidePanelSettings({
 }
 
 export function SidePanelStatusSections({
+  currentEvidence = true,
   context,
   effectiveInstrument,
-  error,
-  evidenceUrl,
-  isStaleOffline,
   manualInstrument,
   model,
-  status,
   onManualInstrumentChange,
-  onRetry,
   onSyncContext,
 }: SidePanelStatusSectionsProps): React.JSX.Element {
   const entryPointNotice = contextEntryPointNotice(
@@ -150,7 +140,7 @@ export function SidePanelStatusSections({
           >
             {entryPointNotice.text}
           </p>
-        ) : model ? (
+        ) : model && currentEvidence ? (
           <p
             className={`panel-context-message${
               model.contractMatch.status === "mismatch" ||
@@ -165,7 +155,7 @@ export function SidePanelStatusSections({
 
         <dl className="panel-stats">
           <div>
-            <dt>来源</dt>
+            <dt>{currentEvidence ? "来源" : "快照来源"}</dt>
             <dd>{model ? labelForSource(model.sourceLabel) : "读取中…"}</dd>
           </div>
           <div>
@@ -173,11 +163,11 @@ export function SidePanelStatusSections({
             <dd>{model ? labelForFreshness(model) : "读取中…"}</dd>
           </div>
           <div>
-            <dt>信任</dt>
-            <dd>{model ? labelForTrust(model.trustVerdict) : "读取中…"}</dd>
+            <dt>{currentEvidence ? "信任" : "当前依据"}</dt>
+            <dd>{!currentEvidence ? "不可作为当前研究依据" : model ? labelForTrust(model.trustVerdict) : "读取中…"}</dd>
           </div>
           <div>
-            <dt>当前上下文</dt>
+            <dt>{currentEvidence ? "当前上下文" : "快照合约匹配"}</dt>
             <dd>{model ? labelForMatch(model) : "等待中…"}</dd>
           </div>
         </dl>
@@ -204,6 +194,23 @@ export function SidePanelStatusSections({
         ) : null}
       </section>
 
+    </>
+  );
+}
+
+/** Connection failures must remain visible even when research evidence is collapsed. */
+export function SidePanelConnectionStatus({
+  status, isStaleOffline, error, evidenceUrl, onRetry,
+}: {
+  status: PanelStatus;
+  isStaleOffline: boolean;
+  error: string | null;
+  evidenceUrl: string;
+  onRetry: () => void;
+}): React.JSX.Element {
+  const failure = reportLoadErrorCopy(reportLoadErrorKind(new Error(error ?? "")));
+  return (
+    <>
       {status === "loading" ? (
         <section className="panel-card panel-status" role="status">
           <p>正在读取本地研究报告…</p>
@@ -217,14 +224,10 @@ export function SidePanelStatusSections({
         >
           <p className="panel-status-title">本地引擎离线 · 显示上次结果</p>
           <p>
-            当前无法连接本地研究引擎；下方仍是最近一次成功读取的研究结果，可能已经过期。请核对证据年龄后再参考。
+            当前无法连接本地研究引擎；仅保留上次快照的来源与年龄。当前排名和策略条件已收起，请重新连接后再查看。
           </p>
           <pre className="panel-status-command">{ENGINE_START_COMMAND}</pre>
-          {error ? (
-            <p className="panel-status-detail">
-              技术细节：<code>{error}</code>
-            </p>
-          ) : null}
+          <p className="panel-status-detail">{failure.action}</p>
           <div className="panel-inline-actions">
             <button className="panel-button" onClick={onRetry} type="button">
               重试
@@ -247,15 +250,11 @@ export function SidePanelStatusSections({
           <p>还没有连接到本地研究引擎，也没有可显示的历史结果。三步即可开始：</p>
           <ol className="panel-onboarding-steps">
             <li>在本机启动研究引擎（下方命令可直接复制）。</li>
-            <li>在 Chrome 中打开一个 Deribit 期权详情页。</li>
+            <li>确认下方引擎地址与启动端口一致，并在 Chrome 中打开 Deribit 期权详情页。</li>
             <li>回到这里点击“重试”。</li>
           </ol>
           <pre className="panel-status-command">{ENGINE_START_COMMAND}</pre>
-          {error ? (
-            <p className="panel-status-detail">
-              技术细节：<code>{error}</code>
-            </p>
-          ) : null}
+          <p className="panel-status-detail">{failure.action}</p>
           <div className="panel-inline-actions">
             <button className="panel-button" onClick={onRetry} type="button">
               重试
@@ -274,13 +273,9 @@ export function SidePanelStatusSections({
 
       {status === "error" ? (
         <section className="panel-card panel-status" role="alert">
-          <p className="panel-status-title">报告校验失败</p>
-          <p>报告未通过校验，已按 fail-closed 策略拒绝显示。</p>
-          {error ? (
-            <p className="panel-status-detail">
-              技术细节：<code>{error}</code>
-            </p>
-          ) : null}
+          <p className="panel-status-title">{failure.title}</p>
+          <p>本次报告不可验证，已按 fail-closed 策略拒绝显示。</p>
+          <p className="panel-status-detail">{failure.action}</p>
           <div className="panel-inline-actions">
             <button className="panel-button" onClick={onRetry} type="button">
               重试

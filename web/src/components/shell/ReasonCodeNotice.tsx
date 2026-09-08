@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { REPORT_REASON_COPY } from "../../reasonCodes/catalog";
 import { readReasonCode } from "./reasonCodes";
 
 function CopyableCommand({ command }: { command: string }): React.JSX.Element {
@@ -37,9 +38,11 @@ function CopyableCommand({ command }: { command: string }): React.JSX.Element {
 export function ReasonCodeNotice({
   codes,
   heading,
+  showNextSteps = false,
 }: {
   codes: string[];
   heading?: string;
+  showNextSteps?: boolean;
 }): React.JSX.Element | null {
   const unique = Array.from(new Set(codes.filter(Boolean)));
   if (unique.length === 0) {
@@ -48,9 +51,15 @@ export function ReasonCodeNotice({
   return (
     <section className="reason-notice" aria-label={heading ?? "阻断原因"}>
       {heading ? <h3>{heading}</h3> : null}
+      {unique.some((code) => readReasonCode(code).remedy) ? (
+        <p>
+          命令用于准备或检查输入；完成后仍须重新生成报告并通过校验，不能保证消除所有阻断。
+        </p>
+      ) : null}
       <ul>
         {unique.map((code) => {
           const reading = readReasonCode(code);
+          const nextStep = showNextSteps ? REPORT_REASON_COPY[code] : undefined;
           return (
             <li key={code}>
               <div className="reason-notice-head">
@@ -58,9 +67,14 @@ export function ReasonCodeNotice({
                 <code className="reason-notice-code">{code}</code>
               </div>
               <p>{reading.detail}</p>
+              {nextStep ? (
+                <p>
+                  <strong>{nextStep.ownerLabel}</strong> · {nextStep.action}
+                </p>
+              ) : null}
               {reading.remedy ? (
                 <div className="reason-remedy">
-                  <span>{reading.remedy.label}</span>
+                  <span>可尝试的操作 · {reading.remedy.label}</span>
                   <CopyableCommand command={reading.remedy.command} />
                 </div>
               ) : null}

@@ -1,0 +1,759 @@
+{
+  "Summary": {
+    "alert": {
+      "code": "NO_CHANGE_ALERT",
+      "level": "info",
+      "message": "No exceptional public alert condition is active."
+    },
+    "cadence": "daily",
+    "captured_at": "2026-07-07T00:01:00Z",
+    "change": {
+      "status": "unavailable",
+      "prior_observed_at": null,
+      "current_observed_at": null,
+      "vrp_percent_points_delta": null,
+      "dvol_percent_delta": null,
+      "rv30_percent_delta": null,
+      "percentile_delta": null,
+      "band_changed": null
+    },
+    "data_status": {
+      "evidence_class": "untrusted",
+      "status": "missing"
+    },
+    "disclaimer_url": "/disclaimer.html",
+    "methodology_url": "/methodology.html",
+    "publication_history": {
+      "status": "collecting",
+      "window_days": 30,
+      "history": [],
+      "reason": "No durable publication receipts are available in the 30-day window."
+    },
+    "published_at": "2026-07-07T00:01:00Z",
+    "release_gates": [
+      {
+        "evidence_class": "published_research_manifest",
+        "evidence_state": "verified",
+        "execution_allowed": false,
+        "missing_prerequisites": [],
+        "name": "research_publication",
+        "owner": "research_team",
+        "publication_evidence": {
+          "data_quality": "validated",
+          "disclaimer": "present",
+          "methodology": "present",
+          "publish_manifest": "verified"
+        },
+        "reason_codes": [],
+        "satisfied": true,
+        "status": "GO"
+      },
+      {
+        "configurable": false,
+        "evidence_class": "hard_coded_product_boundary",
+        "evidence_state": "product_boundary",
+        "execution_allowed": false,
+        "name": "execution_authorization",
+        "owner": "system",
+        "reason_codes": [
+          "EXECUTION_DISABLED_BY_PRODUCT_DEFINITION"
+        ],
+        "satisfied": false,
+        "status": "NO-GO"
+      }
+    ],
+    "schema_version": "public_summary.v1",
+    "stale_after": "2026-07-09T00:01:00Z",
+    "vrp": {
+      "band": null,
+      "dvol_observed_at": null,
+      "dvol_percent": null,
+      "evaluation_at": null,
+      "evidence_class": "validated_public_deribit_histories",
+      "field_evidence": {
+        "dvol_percent": {
+          "evidence_class": "validated_public_deribit_histories",
+          "unit": "percent"
+        },
+        "percentile": {
+          "evidence_class": "validated_public_deribit_histories",
+          "unit": "fraction_0_1"
+        },
+        "rv30_percent": {
+          "evidence_class": "validated_public_deribit_histories",
+          "unit": "percent"
+        },
+        "vrp_percent_points": {
+          "evidence_class": "validated_public_deribit_histories",
+          "unit": "percent_points"
+        }
+      },
+      "percentile": null,
+      "rv30_percent": null,
+      "underlying_observed_at": null,
+      "vrp_percent_points": null
+    }
+  },
+  "Health": {
+    "cadence": "daily",
+    "captured_at": "2026-07-07T00:01:00Z",
+    "data_status": "missing",
+    "disclaimer_url": "/disclaimer.html",
+    "execution_authorization_status": "NO-GO",
+    "is_stale_at_publish": false,
+    "last_published_at": "2026-07-07T00:01:00Z",
+    "manifest_verification": {
+      "artifact_count": 34,
+      "errors": [],
+      "status": "verified"
+    },
+    "next_expected_at": "2026-07-08T00:01:00Z",
+    "publication_history": {
+      "status": "collecting",
+      "window_days": 30,
+      "history": [],
+      "reason": "No durable publication receipts are available in the 30-day window."
+    },
+    "publish_manifest_status": "verified",
+    "published_at": "2026-07-07T00:01:00Z",
+    "research_publication_status": "NO-GO",
+    "runtime_mode": "published",
+    "schema_version": "public_health.v1",
+    "stale_after": "2026-07-09T00:01:00Z",
+    "status_url": "/status.html"
+  },
+  "ResearchSignal": {
+    "schema_version": "signal_validation_report.v1",
+    "generated_at": "2026-07-07T00:01:00Z",
+    "status": "blocked",
+    "research_only": true,
+    "reason_codes": [
+      "INSUFFICIENT_SIGNAL_SAMPLE"
+    ],
+    "signals": {}
+  },
+  "ResearchSeries": {
+    "schema_version": "instrument_series_history.v1",
+    "generated_at": "2026-07-07T00:01:00Z",
+    "status": "blocked",
+    "research_only": true,
+    "instruments": []
+  },
+  "ResearchReport": {
+    "schema_version": "research_report.v1",
+    "generated_at": "2026-07-07T00:01:00Z",
+    "action": "RESEARCH_ONLY",
+    "mode": "research_only",
+    "effective_mode": "research_only",
+    "risk_state": "HALT",
+    "reason_codes": [
+      "MISSING_VALIDATED_MARKET_DATA",
+      "MISSING_ACCOUNT_API_SNAPSHOT",
+      "SIMULATION_NOT_REQUESTED",
+      "CALIBRATION_NOT_IMPLEMENTED",
+      "BACKTEST_NOT_RUN",
+      "MISSING_VALIDATED_PATH_RISK",
+      "NO_OPEN_POSITIONS"
+    ],
+    "event_status": {
+      "source": null,
+      "source_status": null,
+      "scope": null,
+      "macro_calendar_covered": false,
+      "event_score": null,
+      "exchange_lock_state": "unknown",
+      "reason_code": "EVENT_SOURCE_UNAVAILABLE"
+    },
+    "runtime_context": {
+      "profile": null,
+      "mode": null,
+      "replay": null,
+      "evaluation_clock": null,
+      "snapshot_fixture": null,
+      "live_fetch_allowed": null,
+      "notice": null
+    },
+    "publish_edition": {
+      "captured_at": null,
+      "published_at": null,
+      "next_expected_at": null,
+      "cadence": null,
+      "stale_after": null
+    },
+    "vrp_status": {
+      "schema_version": null,
+      "status": null,
+      "current_vrp_percent_points": null,
+      "current_dvol_percent": null,
+      "current_rv30_percent": null,
+      "percentile": null,
+      "band": null,
+      "evidence_class": null,
+      "reason_code": null,
+      "series": [],
+      "missing_dates": [],
+      "sample_count": null,
+      "minimum_series_sample_count": null,
+      "window_days": null
+    },
+    "blocked_outputs": [
+      "trade_recommendation",
+      "recommended_size",
+      "order_instructions",
+      "paper_manual_trade_candidates"
+    ],
+    "data_trust": {
+      "verdict": "untrusted",
+      "source_class": "published_snapshot",
+      "reason_codes": [
+        "MISSING_VALIDATED_MARKET_DATA"
+      ]
+    },
+    "data_status": {
+      "status": "missing",
+      "source": "deribit_published_snapshot",
+      "validated": false,
+      "reason_code": "MISSING_VALIDATED_MARKET_DATA",
+      "market_data_age_sec": null,
+      "collection_scope": {
+        "selected_instrument_count": null,
+        "upstream_instrument_count": null,
+        "coverage_ratio": null,
+        "scope": null
+      },
+      "quality_gate": {
+        "passed": null,
+        "reason_codes": [],
+        "advisory_reason_codes": [],
+        "summary": {
+          "expiries_evaluated": null,
+          "fetch_errors": null,
+          "invalid_quotes": null,
+          "market_data_age_sec": null,
+          "total_quotes": null,
+          "valid_quotes": null
+        },
+        "thresholds": {
+          "market_data_max_age_sec": null
+        }
+      }
+    },
+    "calibration_status": {
+      "status": "unavailable",
+      "model_version": null,
+      "reason_code": "CALIBRATION_NOT_IMPLEMENTED"
+    },
+    "backtest_status": {
+      "status": "not_run",
+      "model_version": null,
+      "reason_code": "BACKTEST_NOT_RUN"
+    },
+    "vol_surface_status": {
+      "status": "missing",
+      "validated": false,
+      "reason_code": "MISSING_VALIDATED_MARKET_DATA",
+      "fit_model": "quadratic_iv_vs_log_moneyness",
+      "summary": {
+        "eligible_expiries": 0,
+        "expiries_evaluated": 0,
+        "quality_passing_quotes": 0
+      },
+      "expiries": []
+    },
+    "candidate_research": {
+      "status": "blocked",
+      "reason_code": "MISSING_VALIDATED_MARKET_DATA",
+      "summary": {
+        "eligible_call_credit_spreads": 0,
+        "eligible_put_credit_spreads": 0,
+        "eligible_iron_condors": 0,
+        "eligible_expiries": 0,
+        "eligible_naked_short_calls": 0,
+        "expiries_considered": 0,
+        "rejected_call_credit_spreads": 0,
+        "rejected_put_credit_spreads": 0,
+        "rejected_iron_condors": 0,
+        "rejected_naked_short_calls": 0,
+        "review_call_credit_spreads": 0,
+        "review_put_credit_spreads": 0,
+        "review_iron_condors": 0,
+        "review_naked_short_calls": 0
+      },
+      "naked_short_calls": {
+        "eligible": [],
+        "review": [],
+        "rejected": []
+      },
+      "call_credit_spreads": {
+        "eligible": [],
+        "review": [],
+        "rejected": []
+      },
+      "put_credit_spreads": {
+        "eligible": [],
+        "review": [],
+        "rejected": []
+      },
+      "iron_condors": {
+        "eligible": [],
+        "review": [],
+        "rejected": []
+      }
+    },
+    "strategy_research": {
+      "schema_version": "strategy_research.v1",
+      "generated_at": "2026-07-07T00:01:00Z",
+      "status": "blocked",
+      "advisory_only": true,
+      "execution_allowed": false,
+      "confidence_ceiling": "insufficient_data",
+      "pipeline": [
+        {
+          "output": "source_freshness_coverage_quality",
+          "stage": "COLLECT",
+          "status": "blocked"
+        },
+        {
+          "output": "market_regime_term_structure_skew_expected_move",
+          "stage": "ANALYZE",
+          "status": "blocked"
+        },
+        {
+          "output": "defined_risk_structure_and_ranked_candidate",
+          "stage": "SELECT",
+          "status": "blocked"
+        },
+        {
+          "output": "conditional_gate_checklist",
+          "stage": "ENTER",
+          "status": "blocked"
+        },
+        {
+          "output": "nav_relative_budget_and_one_contract_shadow",
+          "stage": "RISK",
+          "status": "blocked"
+        },
+        {
+          "output": "profit_time_and_position_state_policy",
+          "stage": "EXIT",
+          "status": "blocked"
+        },
+        {
+          "output": "refresh_triggers_and_responses",
+          "stage": "MONITOR",
+          "status": "blocked"
+        },
+        {
+          "output": "journal_backtest_calibration_and_promotion",
+          "stage": "REVIEW",
+          "status": "blocked"
+        }
+      ],
+      "decision": {
+        "stance": "NO_RESEARCH_SETUP",
+        "primary_structure": null,
+        "entry_readiness": "BLOCKED",
+        "summary": "No validated option structure is available for research.",
+        "why_now": [],
+        "why_not": [
+          "Regime evidence has not been promoted.",
+          "A fresh read-only account snapshot is unavailable.",
+          "Validated path-risk and EV ranking are unavailable.",
+          "Walk-forward calibration is not promoted.",
+          "The bounded historical backtest has not run."
+        ],
+        "rejected_structures": [
+          {
+            "reason_codes": [
+              "UNBOUNDED_TAIL_LOSS",
+              "DEFINED_RISK_STRUCTURE_PREFERRED",
+              "NAKED_PERMISSION_FALSE"
+            ],
+            "status": "rejected_for_current_research_plan",
+            "structure": "NAKED_SHORT_CALL"
+          }
+        ]
+      },
+      "collection": {
+        "status": "missing",
+        "source": "deribit_published_snapshot",
+        "captured_at": null,
+        "market_data_age_sec": null,
+        "coverage": {
+          "scope": null,
+          "selected_instrument_count": 0,
+          "upstream_instrument_count": 0,
+          "coverage_ratio": null,
+          "is_research_sample": false
+        },
+        "quality": {
+          "valid_quotes": 0,
+          "total_quotes": 0,
+          "invalid_quotes": 0,
+          "fetch_errors": 0,
+          "expiries_evaluated": 0
+        },
+        "feed_graph": {
+          "complete": false,
+          "missing_required_feeds": []
+        }
+      },
+      "analysis": {
+        "market": {
+          "spot_usd": null,
+          "dvol_percent": null,
+          "near_term_atm_iv_percent": null,
+          "dvol_minus_atm_iv_points": null,
+          "funding_rate": null,
+          "basis_rate": null,
+          "event_score": null,
+          "regime_label": "Unavailable",
+          "regime_status": "blocked",
+          "sell_permission": 0.0,
+          "spread_permission": false,
+          "naked_permission": false
+        },
+        "volatility": {
+          "surface_status": "missing",
+          "fit_model": "quadratic_iv_vs_log_moneyness",
+          "term_slope_iv_points": null,
+          "candidate_expiry_atm_iv_percent": null,
+          "expected_move_usd": null,
+          "expected_move_percent": null,
+          "call_wing_richness_iv_points": null,
+          "front_expiry": {
+            "expiry_date": null,
+            "dte_days": null,
+            "atm_fitted_iv_percent": null,
+            "fit_quality_score": null,
+            "no_arbitrage_pass": null,
+            "candidate_eligible": null
+          },
+          "next_expiry": {
+            "expiry_date": null,
+            "dte_days": null,
+            "atm_fitted_iv_percent": null,
+            "fit_quality_score": null,
+            "no_arbitrage_pass": null,
+            "candidate_eligible": null
+          }
+        },
+        "interpretation_limits": [
+          "DVOL and fitted ATM IV are both implied-volatility measures; their gap is not labelled a volatility risk premium.",
+          "Expected move is a one-standard-deviation approximation, not a forecast or probability guarantee.",
+          "Candidate ranking uses observable screening quality because validated path-risk and EV evidence are unavailable."
+        ]
+      },
+      "strategy_selection": {
+        "selection_method": "screening_rank_no_path_risk",
+        "eligible_spread_count": 0,
+        "ranked_candidate_ids": [],
+        "ranking_dimensions": [
+          "surface_fit_quality",
+          "no_arbitrage_pass",
+          "credit_to_width_shadow",
+          "delta_distance_from_0.10",
+          "leg_spread_quality"
+        ]
+      },
+      "playbook": null,
+      "monitoring": [],
+      "review": {
+        "status": "blocked",
+        "backtest_status": "not_run",
+        "calibration_status": "unavailable",
+        "path_risk_status": "unavailable",
+        "missing_evidence": [
+          "MISSING_ACCOUNT_API_SNAPSHOT",
+          "CALIBRATION_NOT_IMPLEMENTED",
+          "BACKTEST_NOT_RUN",
+          "MISSING_VALIDATED_PATH_RISK"
+        ],
+        "promotion_conditions": [
+          "Persist enough rolling observations to promote regime evidence.",
+          "Run an aligned bounded backtest on licensed historical data.",
+          "Promote walk-forward calibration and validated path-risk outputs.",
+          "Reconcile paper observations, fees, slippage, and forced-exit behavior.",
+          "Attach a fresh read-only account snapshot before any sizing study."
+        ],
+        "journal_template": [
+          "market_thesis_and_invalidation",
+          "selected_structure_and_rejected_alternatives",
+          "entry_gate_snapshot",
+          "risk_budget_assumptions",
+          "exit_state_transitions",
+          "post_observation_review"
+        ]
+      },
+      "degradation": [
+        {
+          "condition": "validated_path_risk_unavailable",
+          "effect": "screening_rank_only_no_ev_or_p_touch_claim"
+        },
+        {
+          "condition": "account_snapshot_missing_or_halted",
+          "effect": "risk_budget_formula_only_no_contract_count"
+        },
+        {
+          "condition": "regime_history_not_promoted",
+          "effect": "monitor_only_even_when_surface_candidates_exist"
+        },
+        {
+          "condition": "backtest_or_calibration_not_promoted",
+          "effect": "exit_policy_remains_template_only"
+        }
+      ]
+    },
+    "ev_candidate_scanner": {
+      "status": "unavailable",
+      "score_status": "UNAVAILABLE",
+      "reason_code": "MISSING_VALIDATED_PATH_RISK",
+      "summary": {
+        "candidates_scanned": 0,
+        "kill_condition_candidates": 0,
+        "rejected_candidates": 0,
+        "review_candidates": 0,
+        "top_candidate_action": null,
+        "top_candidate_id": null
+      },
+      "ranking_basis": {
+        "method": null,
+        "tie_break_order": [],
+        "absolute_ev_available": null
+      },
+      "ranked_candidates": [],
+      "rejected_count": 0
+    },
+    "mode_gate": {
+      "trade_recommendation_allowed": false,
+      "recommended_size_allowed": false,
+      "order_instructions_allowed": false,
+      "paper_manual_candidates_allowed": false,
+      "reason_codes": [
+        "MISSING_VALIDATED_MARKET_DATA",
+        "MISSING_ACCOUNT_API_SNAPSHOT",
+        "SIMULATION_NOT_REQUESTED",
+        "CALIBRATION_NOT_IMPLEMENTED",
+        "BACKTEST_NOT_RUN",
+        "MISSING_VALIDATED_PATH_RISK",
+        "NO_OPEN_POSITIONS"
+      ]
+    },
+    "full_system_surface": {
+      "schema_version": "full_system_surface_report.v1",
+      "generated_at": "2026-07-07T00:01:00Z",
+      "status": "declared_not_probed",
+      "release_readiness": {
+        "status": "NO-GO",
+        "prerequisites": [
+          {
+            "action": "Obtain separately authorized manual/external release evidence; this research runtime cannot grant it.",
+            "evidence_class": "manual_external_authorization",
+            "evidence_state": "not_configured",
+            "name": "external_release_authorization",
+            "owner": "external_operator",
+            "reason_codes": [
+              "EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED"
+            ],
+            "release_blocking": true,
+            "release_state": "awaiting_external",
+            "root_cause": "EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED",
+            "satisfied": false
+          }
+        ],
+        "missing_prerequisites": [
+          "external_release_authorization"
+        ],
+        "blocking_prerequisites": [
+          "external_release_authorization"
+        ]
+      },
+      "release_gates": [
+        {
+          "evidence_class": "published_research_manifest",
+          "evidence_state": "incomplete",
+          "execution_allowed": false,
+          "missing_prerequisites": [
+            "data_quality",
+            "publish_manifest",
+            "methodology",
+            "disclaimer"
+          ],
+          "name": "research_publication",
+          "owner": "research_team",
+          "publication_evidence": {},
+          "reason_codes": [
+            "RESEARCH_PUBLICATION_EVIDENCE_INCOMPLETE"
+          ],
+          "satisfied": false,
+          "status": "NO-GO"
+        },
+        {
+          "configurable": false,
+          "evidence_class": "hard_coded_product_boundary",
+          "evidence_state": "product_boundary",
+          "execution_allowed": false,
+          "name": "execution_authorization",
+          "owner": "system",
+          "reason_codes": [
+            "EXECUTION_DISABLED_BY_PRODUCT_DEFINITION"
+          ],
+          "satisfied": false,
+          "status": "NO-GO"
+        }
+      ]
+    },
+    "strategy_brief": {
+      "action": "NO_TRADE",
+      "analysis_run_id": "analysis:529dd81389741b15d6b92af185bc03759ae0a8fb82e3002ec0d7f9b838fa8380",
+      "brief_id": "brief:b35680fb2cfcc6e2d85f0b9ef4ec57d7fc7775147fe2d7c60044982d992cfbc5",
+      "evidence_summary": {
+        "as_of": "2026-07-07T00:01:00Z",
+        "candidate_count": 0,
+        "default_structure_family": null,
+        "hard_gate_pass_count": 0,
+        "items": [
+          {
+            "label": "市场证据",
+            "status": "BLOCK",
+            "summary_zh": "执行口径与报价同步通过硬门禁",
+            "detail_zh": "组合入场使用 short bid / long ask 的冻结成本模型，不使用 mid 或 mark。",
+            "artifact_id": null
+          },
+          {
+            "label": "历史证据",
+            "status": "WARN",
+            "summary_zh": "只有 VALIDATED 才显示历史胜率",
+            "detail_zh": "未验证或未对齐的历史结果自动退化为状态标签。",
+            "artifact_id": null
+          },
+          {
+            "label": "预测胜率",
+            "status": "WARN",
+            "summary_zh": "只有 CALIBRATED 才显示预测区间",
+            "detail_zh": "未校准、过期或超出适用范围的预测不会显示概率区间。",
+            "artifact_id": null
+          }
+        ],
+        "primary_reason_codes": [
+          "NO_ELIGIBLE_STRATEGY"
+        ],
+        "recommended_count": 0,
+        "rejection_counts": {
+          "NO_ELIGIBLE_STRATEGY": 1
+        },
+        "selected_count": 0,
+        "summary_zh": "当前没有通过全部硬门禁的有限风险策略。",
+        "surface": {
+          "freshness_status": "UNAVAILABLE",
+          "presented_as": "published",
+          "source_kind": "fallback",
+          "source_label": "Presentation context unavailable"
+        },
+        "valid_until": "2026-07-07T00:02:00Z",
+        "watch_count": 0
+      },
+      "execution_allowed": false,
+      "generated_at": "2026-07-07T00:01:00Z",
+      "market": {
+        "action": "NO_TRADE",
+        "as_of": "2026-07-07T00:01:00Z",
+        "confidence": "UNAVAILABLE",
+        "direction": "UNCLEAR",
+        "expires_at": "2026-07-07T00:02:00Z",
+        "liquidity": "UNAVAILABLE",
+        "summary_zh": "BTC: 方向不明 | 隐含波动率未知 | 流动性不可用",
+        "underlying": "BTC",
+        "volatility": "UNKNOWN"
+      },
+      "no_trade": {
+        "active": true,
+        "headline_zh": "今日暂无可靠策略",
+        "summary_zh": "当前没有通过全部硬门禁的有限风险策略。",
+        "primary_reason_codes": [
+          "NO_ELIGIBLE_STRATEGY"
+        ],
+        "next_update_at": "2026-07-07T00:02:00Z"
+      },
+      "research_only": true,
+      "schema_version": "strategy_brief.v1",
+      "strategies": []
+    }
+  },
+  "StrategyBrief": {
+    "action": "NO_TRADE",
+    "analysis_run_id": "analysis:529dd81389741b15d6b92af185bc03759ae0a8fb82e3002ec0d7f9b838fa8380",
+    "brief_id": "brief:b35680fb2cfcc6e2d85f0b9ef4ec57d7fc7775147fe2d7c60044982d992cfbc5",
+    "evidence_summary": {
+      "as_of": "2026-07-07T00:01:00Z",
+      "candidate_count": 0,
+      "default_structure_family": null,
+      "hard_gate_pass_count": 0,
+      "items": [
+        {
+          "label": "市场证据",
+          "status": "BLOCK",
+          "summary_zh": "执行口径与报价同步通过硬门禁",
+          "detail_zh": "组合入场使用 short bid / long ask 的冻结成本模型，不使用 mid 或 mark。",
+          "artifact_id": null
+        },
+        {
+          "label": "历史证据",
+          "status": "WARN",
+          "summary_zh": "只有 VALIDATED 才显示历史胜率",
+          "detail_zh": "未验证或未对齐的历史结果自动退化为状态标签。",
+          "artifact_id": null
+        },
+        {
+          "label": "预测胜率",
+          "status": "WARN",
+          "summary_zh": "只有 CALIBRATED 才显示预测区间",
+          "detail_zh": "未校准、过期或超出适用范围的预测不会显示概率区间。",
+          "artifact_id": null
+        }
+      ],
+      "primary_reason_codes": [
+        "NO_ELIGIBLE_STRATEGY"
+      ],
+      "recommended_count": 0,
+      "rejection_counts": {
+        "NO_ELIGIBLE_STRATEGY": 1
+      },
+      "selected_count": 0,
+      "summary_zh": "当前没有通过全部硬门禁的有限风险策略。",
+      "surface": {
+        "freshness_status": "UNAVAILABLE",
+        "presented_as": "published",
+        "source_kind": "fallback",
+        "source_label": "Presentation context unavailable"
+      },
+      "valid_until": "2026-07-07T00:02:00Z",
+      "watch_count": 0
+    },
+    "execution_allowed": false,
+    "generated_at": "2026-07-07T00:01:00Z",
+    "market": {
+      "action": "NO_TRADE",
+      "as_of": "2026-07-07T00:01:00Z",
+      "confidence": "UNAVAILABLE",
+      "direction": "UNCLEAR",
+      "expires_at": "2026-07-07T00:02:00Z",
+      "liquidity": "UNAVAILABLE",
+      "summary_zh": "BTC: 方向不明 | 隐含波动率未知 | 流动性不可用",
+      "underlying": "BTC",
+      "volatility": "UNKNOWN"
+    },
+    "no_trade": {
+      "active": true,
+      "headline_zh": "今日暂无可靠策略",
+      "summary_zh": "当前没有通过全部硬门禁的有限风险策略。",
+      "primary_reason_codes": [
+        "NO_ELIGIBLE_STRATEGY"
+      ],
+      "next_update_at": "2026-07-07T00:02:00Z"
+    },
+    "research_only": true,
+    "schema_version": "strategy_brief.v1",
+    "strategies": []
+  }
+}

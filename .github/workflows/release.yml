@@ -18,7 +18,13 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: refs/tags/${{ inputs.tag || github.ref_name }}
+
   build:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -48,20 +54,14 @@ jobs:
 
       - name: Verify Python release surface
         run: |
+          python tools/check_release_versions.py --tag "$RELEASE_TAG"
           python -m pip install --upgrade -c constraints.txt pip setuptools
           python -m pip install --no-build-isolation -c constraints.txt -e ".[dev]"
           python -m ruff check crypto_options_report tools tests
+          python -m mypy --no-incremental
           python -m pytest -q
           python -m crypto_options_report.api --smoke >/dev/null
-
-      - name: Build and verify wheel
-        run: |
-          mkdir release
-          python -m pip wheel --no-build-isolation --no-deps . -w release
-          python -m venv wheel-venv
-          wheel-venv/bin/python -m pip install --no-deps release/*.whl
-          wheel-venv/bin/python -m pip check
-          wheel-venv/bin/crypto-options-report demo --help >/dev/null
+          python tools/reproduce_research.py --check
 
       - name: Verify and build web release surfaces
         working-directory: web
@@ -75,6 +75,25 @@ jobs:
           npm run test:public-bundle
           npm run build:extension
 
+      - name: Build and verify final wheel
+        run: |
+          mkdir release
+          python -m pip wheel --no-build-isolation --no-deps . -w release
+          python tools/check_release_versions.py --tag "$RELEASE_TAG" --wheel release/*.whl --extension-dir web/dist/chrome-extension
+          python -m venv wheel-venv
+          wheel-venv/bin/python -m pip install --no-index --no-deps release/*.whl
+          python tools/check_installed_wheel.py --python wheel-venv/bin/python
+
+      - name: Verify installed release wheel in isolated Chrome
+        run: node tools/browser-smoke.mjs --python "${{ github.workspace }}/wheel-venv/bin/python" --extension-dir web/dist/chrome-extension --public-build-dir web/dist-public --output-dir browser-artifacts
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: release-browser-acceptance
+          path: browser-artifacts/
+          if-no-files-found: ignore
+
       - name: Package Chrome extension and checksums
         run: |
           git diff --exit-code -- crypto_options_report/static/evidence
@@ -84,6 +103,7 @@ jobs:
             cd web/dist/chrome-extension
             zip -q -r "../../../release/lensos-option-chrome-extension-${RELEASE_TAG}.zip" .
           )
+          python tools/check_release_versions.py --tag "$RELEASE_TAG" --wheel release/*.whl --extension-zip "release/lensos-option-chrome-extension-${RELEASE_TAG}.zip"
           (
             cd release
             sha256sum -- *.whl *.zip > SHA256SUMS

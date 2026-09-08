@@ -1083,10 +1083,13 @@ class ReviewTransportSecurityTests(unittest.TestCase):
 
     def test_operator_docs_expose_transport_security_contracts(self):
         readme = (self.REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        operator_guide = (self.REPO_ROOT / "docs/guides/operator-guide.md").read_text(
+            encoding="utf-8"
+        )
         runbook = (
             self.REPO_ROOT / "docs" / "operations" / "production-runbook.md"
         ).read_text(encoding="utf-8")
-        operator_docs = readme + "\n" + runbook
+        operator_docs = readme + "\n" + operator_guide + "\n" + runbook
 
         self.assertIn("JSON-RPC POST", operator_docs)
         self.assertIn("Authorization: Bearer", operator_docs)

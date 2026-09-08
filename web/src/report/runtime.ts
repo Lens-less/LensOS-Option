@@ -1,5 +1,6 @@
 import type { ResearchReport, StrategyResearch } from "../contracts";
 import { validateStrategyBrief } from "./strategyBrief";
+import { ResearchReportStructureError, validateReportStructure } from "./structure";
 
 export const REQUIRED_BLOCKED_OUTPUTS = [
   "trade_recommendation",
@@ -17,12 +18,16 @@ const SAFE_RESEARCH_ACTIONS = new Set([
 const REQUIRED_RELEASE_STATUS = "NO-GO";
 const REQUIRED_STRATEGY_SCHEMA = "strategy_research.v1";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+export class ResearchReportSafetyError extends Error {
+  readonly kind = "safety";
+  constructor(message: string) {
+    super(message);
+    this.name = "ResearchReportSafetyError";
+  }
 }
 
 function fail(message: string): never {
-  throw new Error(message);
+  throw new ResearchReportSafetyError(message);
 }
 
 function validateStrategySafety(strategy: StrategyResearch): void {
@@ -82,15 +87,8 @@ function validatePublishedSafety(report: ResearchReport): void {
 }
 
 export function validateResearchReport(payload: unknown): ResearchReport {
-  if (!isRecord(payload)) {
-    fail("research report payload must be an object");
-  }
-
-  if (payload.schema_version !== "research_report.v1") {
-    fail(`unexpected research report schema: ${String(payload.schema_version)}`);
-  }
-
-  const report = payload as unknown as ResearchReport;
+  validateReportStructure(payload);
+  const report = payload;
   const blockedOutputs = new Set(report.blocked_outputs ?? []);
   const gate = report.mode_gate;
   const remainsResearchOnly =
@@ -114,8 +112,18 @@ export function validateResearchReport(payload: unknown): ResearchReport {
   if (report.strategy_research) {
     validateStrategySafety(report.strategy_research);
   }
-  if (report.strategy_brief) {
-    validateStrategyBrief(report.strategy_brief);
+  if (report.strategy_brief !== undefined && report.strategy_brief !== null) {
+    if (typeof report.strategy_brief === "object" && !Array.isArray(report.strategy_brief)) {
+      const boundary = report.strategy_brief as Record<string, unknown>;
+      if (boundary.research_only === false || boundary.execution_allowed === true) {
+        fail("strategy brief attempted to weaken the safety boundary");
+      }
+    }
+    try {
+      validateStrategyBrief(report.strategy_brief);
+    } catch {
+      throw new ResearchReportStructureError("report.strategy_brief");
+    }
   }
   validatePublishedSafety(report);
 

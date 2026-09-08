@@ -353,8 +353,14 @@ def test_public_cutover_docs_keep_history_and_raw_artifacts_fail_closed() -> Non
     docs_map = (ROOT / "docs/README.md").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/publish.yml").read_text(encoding="utf-8")
 
-    assert "mandatory precondition" in security
-    assert "read-only pull-request" in security
+    security_policy = " ".join(security.split())
+    assert "https://github.com/Lens-less/LensOS-Option" in security_policy
+    assert "The earlier private archive has a separate history." in security_policy
+    assert "Keep archive branches, tags, pull-request refs, and old clone history isolated." in security_policy
+    assert "Never merge them into the public history." in security_policy
+    assert "apply them on the public baseline without importing archive ancestry" in security_policy
+    assert "Check the actual remote URL before any push" in security_policy
+    assert "all affected refs, workflow artifacts, and cached views" in security_policy
     assert "passed_with_remote_blockers" in history
     assert "refs/heads/main" in history
     assert "new private repository" in history

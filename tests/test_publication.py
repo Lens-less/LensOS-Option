@@ -16,6 +16,7 @@ from crypto_options_report.market_data import (
     load_public_replay_fixture,
     load_snapshot_fixture,
 )
+from crypto_options_report.public_api_contract import validate_public_projection
 from crypto_options_report.publication import (
     _build_public_report,
     _build_release_gates_from_disk,
@@ -107,57 +108,14 @@ def _allow_public_quantity(
         return value == 1
     path_text = tuple(str(item) for item in path)
     return (
-        path_text[:5]
-        == (
-            "components",
-            "schemas",
-            "ResearchReport",
-            "properties",
-            "strategy_brief",
+        (
+            path_text[:5] == ("components", "schemas", "ResearchReport", "properties", "strategy_brief")
+            or path_text[:3] == ("components", "schemas", "StrategyBrief")
         )
         and "strategies" in path_text
         and "legs" in path_text
         and path_text[-1] == "quantity"
     )
-
-
-def _assert_schema_accepts(value: object, schema: dict, *, path: str = "$") -> None:
-    if "anyOf" in schema:
-        failures = []
-        for candidate in schema["anyOf"]:
-            try:
-                _assert_schema_accepts(value, candidate, path=path)
-                return
-            except AssertionError as exc:
-                failures.append(str(exc))
-        raise AssertionError(f"{path} matched no anyOf branch: {failures}")
-
-    expected_type = schema.get("type")
-    if expected_type == "null":
-        assert value is None, path
-    elif expected_type == "boolean":
-        assert isinstance(value, bool), path
-    elif expected_type == "integer":
-        assert isinstance(value, int) and not isinstance(value, bool), path
-    elif expected_type == "number":
-        assert isinstance(value, (int, float)) and not isinstance(value, bool), path
-    elif expected_type == "string":
-        assert isinstance(value, str), path
-    elif expected_type == "array":
-        assert isinstance(value, list), path
-        for index, item in enumerate(value):
-            _assert_schema_accepts(item, schema.get("items", {}), path=f"{path}[{index}]")
-    elif expected_type == "object":
-        assert isinstance(value, dict), path
-        properties = schema.get("properties", {})
-        missing = set(schema.get("required", [])) - set(value)
-        assert not missing, f"{path} missing {sorted(missing)}"
-        if schema.get("additionalProperties") is False:
-            extra = set(value) - set(properties)
-            assert not extra, f"{path} has additional properties {sorted(extra)}"
-        for key, item in value.items():
-            if key in properties:
-                _assert_schema_accepts(item, properties[key], path=f"{path}.{key}")
 
 
 def _build_underlying_history_fixture(
@@ -2164,10 +2122,7 @@ class PublicationTests(unittest.TestCase):
                     payload = json.loads(
                         (output_dir / relative_path).read_text(encoding="utf-8")
                     )
-                    _assert_schema_accepts(
-                        payload,
-                        openapi["components"]["schemas"][component],
-                    )
+                    validate_public_projection(component, payload)
             openapi_text = canonical_json_text(openapi).lower()
             for private_term in ("margin_snapshot", "account_status", "api_key"):
                 self.assertNotIn(private_term, openapi_text)

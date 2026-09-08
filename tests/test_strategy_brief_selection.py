@@ -10,6 +10,7 @@ from crypto_options_report.strategy_forecast import selection_binding_key_from_s
 from crypto_options_report.strategy_history import expected_history_binding_key
 from tests.test_strategy_brief_contract import (
     _candidate,
+    _entry_cost_identity,
     _forecast,
     _history,
     _leg,
@@ -57,6 +58,7 @@ def _candidate_with_family(
         "exit_basis": "hold_to_expiry_cash_settlement",
         "selection": {
             "expiry_date": str(legs[0]["expiry_date"]),
+            "entry_costs": _entry_cost_identity(candidate),
             "legs": [
                 {
                     "instrument_name": leg["instrument_name"],
@@ -257,7 +259,7 @@ class StrategyBriefSelectionTests(unittest.TestCase):
         )
 
         self.assertEqual([], validate_strategy_brief(brief))
-        self.assertEqual("STRATEGIES_AVAILABLE", brief["action"])
+        self.assertEqual("WATCH", brief["action"])
         self.assertEqual(3, len(brief["strategies"]))
         self.assertEqual(
             [
@@ -268,7 +270,7 @@ class StrategyBriefSelectionTests(unittest.TestCase):
             [item["structure_type"] for item in brief["strategies"]],
         )
         self.assertEqual(
-            ["RECOMMENDED", "RECOMMENDED", "WATCH"],
+            ["WATCH", "WATCH", "WATCH"],
             [item["recommendation_status"] for item in brief["strategies"]],
         )
         self.assertEqual(
@@ -276,8 +278,8 @@ class StrategyBriefSelectionTests(unittest.TestCase):
                 "candidate_count": 4,
                 "hard_gate_pass_count": 4,
                 "selected_count": 3,
-                "recommended_count": 2,
-                "watch_count": 1,
+                "recommended_count": 0,
+                "watch_count": 3,
             },
             {
                 key: brief["evidence_summary"][key]
@@ -521,7 +523,7 @@ class StrategyBriefSelectionTests(unittest.TestCase):
 
         self.assertEqual([], validate_strategy_brief(brief))
         strategy = brief["strategies"][0]
-        self.assertEqual("RECOMMENDED", strategy["recommendation_status"])
+        self.assertEqual("WATCH", strategy["recommendation_status"])
         self.assertEqual("RETIRED", strategy["forecast"]["status"])
         self.assertIn("FORECAST_SELECTION_MISMATCH", strategy["primary_reason_codes"])
 

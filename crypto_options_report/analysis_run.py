@@ -2,8 +2,8 @@
 
 This module deliberately stops at :class:`EntryAdmissionDecision`.  It has no
 order, fill, position, exit, settlement, or reconciliation interface.  The
-existing ``research_report.v1`` builder is accepted only as a migration
-projection and is converted into typed, fail-closed domain records here.
+``research_report.v1`` adapter remains available for legacy callers; the main
+path evaluates typed calculation results before creating compatibility outputs.
 """
 
 from __future__ import annotations
@@ -12,15 +12,23 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
 from ._canonical import canonical_json_text
+from ._time import utc_timestamp
+from .analysis_inputs import (
+    AnalysisInputs,
+    ReportProjectionOptions,
+    compute_analysis_inputs,
+)
+from .build_info import BuildInfo, get_build_info
+from .compatibility_projection import CompatibilityProjection
 from .market_data import snapshot_payload_sha256
-from .strategy_brief import build_strategy_brief
+from .strategy_brief import build_strategy_brief, candidate_entry_cost_identity
 from .strategy_forecast import (
     project_strategy_forecast,
     selection_binding_key_from_scope,
@@ -46,6 +54,7 @@ ANALYSIS_MANDATE_SCHEMA = "analysis_mandate.v1"
 MODEL_BUNDLE_SCHEMA = "model_bundle_ref.v1"
 PRE_ENTRY_RISK_CLAIM_SCHEMA = "pre_entry_risk_claim.v1"
 CODE_VERSION = "lensos-option-pre-entry-p0.v1"
+_DEFAULT_REPORT_OPTIONS = ReportProjectionOptions()
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _UNTRUSTED_SOURCE_TOKENS = ("fixture", "replay", "synthetic", "tracer", "fallback")
@@ -151,10 +160,7 @@ def _parse_timestamp(value: str, *, field: str) -> datetime:
 
 def _timestamp(value: datetime) -> str:
     return (
-        value.astimezone(UTC)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
+        value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
 
 
@@ -212,7 +218,9 @@ class AnalysisMandate:
         if self.effective_mode != "research_only":
             raise ValueError("AnalysisMandate effective_mode must remain research_only")
         if self.output_ceiling != "entry_admission_only":
-            raise ValueError("AnalysisMandate output ceiling must stop at entry admission")
+            raise ValueError(
+                "AnalysisMandate output ceiling must stop at entry admission"
+            )
         if self.evaluation_clock is not None:
             _parse_timestamp(self.evaluation_clock, field="evaluation_clock")
         for name, values in (
@@ -222,7 +230,9 @@ class AnalysisMandate:
             ("option_types", self.option_types),
             ("expiry_scope", self.expiry_scope),
         ):
-            if not values or any(not isinstance(item, str) or not item for item in values):
+            if not values or any(
+                not isinstance(item, str) or not item for item in values
+            ):
                 raise ValueError(f"{name} must contain non-empty strings")
         for name, scope in (
             ("delta_scope", self.delta_scope),
@@ -275,9 +285,7 @@ class PolicyCatalog:
     minimum_open_interest: float = 10.0
     maximum_event_score: float = 0.75
     model_required_edge_classes: tuple[str, ...] = ("E2", "E3")
-    pre_entry_risk_veto_states: tuple[str, ...] = (
-        PreEntryRiskState.VETO.value,
-    )
+    pre_entry_risk_veto_states: tuple[str, ...] = (PreEntryRiskState.VETO.value,)
     exchange_health_blocking_states: tuple[str, ...] = (
         ExchangeHealthState.BLOCKED.value,
     )
@@ -320,18 +328,17 @@ class PolicyCatalog:
             for value in self.settlement_window_utc
         ):
             raise ValueError("settlement_window_utc must contain two HH:MM values")
-        if any(item not in {edge.value for edge in EdgeClass} for item in self.model_required_edge_classes):
-            raise ValueError("model_required_edge_classes contains an unknown edge class")
-        if (
-            tuple(self.pre_entry_risk_veto_states)
-            != (PreEntryRiskState.VETO.value,)
+        if any(
+            item not in {edge.value for edge in EdgeClass}
+            for item in self.model_required_edge_classes
         ):
             raise ValueError(
-                "pre_entry_risk_veto_states must be exactly ('VETO',)"
+                "model_required_edge_classes contains an unknown edge class"
             )
-        if (
-            tuple(self.exchange_health_blocking_states)
-            != (ExchangeHealthState.BLOCKED.value,)
+        if tuple(self.pre_entry_risk_veto_states) != (PreEntryRiskState.VETO.value,):
+            raise ValueError("pre_entry_risk_veto_states must be exactly ('VETO',)")
+        if tuple(self.exchange_health_blocking_states) != (
+            ExchangeHealthState.BLOCKED.value,
         ):
             raise ValueError(
                 "exchange_health_blocking_states must be exactly ('BLOCKED',)"
@@ -364,9 +371,7 @@ class PolicyCatalog:
             "minimum_open_interest": self.minimum_open_interest,
             "maximum_event_score": self.maximum_event_score,
             "model_required_edge_classes": list(self.model_required_edge_classes),
-            "pre_entry_risk_veto_states": list(
-                self.pre_entry_risk_veto_states
-            ),
+            "pre_entry_risk_veto_states": list(self.pre_entry_risk_veto_states),
             "exchange_health_blocking_states": list(
                 self.exchange_health_blocking_states
             ),
@@ -429,7 +434,11 @@ class ModelBundleRef:
     def __post_init__(self) -> None:
         if self.schema_version != MODEL_BUNDLE_SCHEMA:
             raise ValueError(f"schema_version must be {MODEL_BUNDLE_SCHEMA}")
-        if self.promotion_status not in {"not_implemented", "research_only", "promoted"}:
+        if self.promotion_status not in {
+            "not_implemented",
+            "research_only",
+            "promoted",
+        }:
             raise ValueError("unknown model promotion status")
         if self.artifact_hash is not None:
             _ensure_hash(self.artifact_hash, field="artifact_hash")
@@ -449,7 +458,9 @@ class ModelBundleRef:
                 (self.model_bundle_id, self.evidence_class, *self.reason_codes)
             ).lower()
             if any(token in lowered for token in _UNTRUSTED_SOURCE_TOKENS):
-                raise ValueError("fixture/replay/tracer model bundles cannot be promoted")
+                raise ValueError(
+                    "fixture/replay/tracer model bundles cannot be promoted"
+                )
         elif self.promotion_evidence_hash is not None:
             raise ValueError(
                 "non-promoted model bundles cannot carry promotion evidence"
@@ -543,8 +554,15 @@ class EvidenceRecord:
     def __post_init__(self) -> None:
         if self.schema_version != EVIDENCE_RECORD_SCHEMA:
             raise ValueError(f"schema_version must be {EVIDENCE_RECORD_SCHEMA}")
-        if not self.evidence_id or not self.kind or not self.source or not self.payload_ref:
-            raise ValueError("evidence identity, kind, source, and payload_ref are required")
+        if (
+            not self.evidence_id
+            or not self.kind
+            or not self.source
+            or not self.payload_ref
+        ):
+            raise ValueError(
+                "evidence identity, kind, source, and payload_ref are required"
+            )
         _ensure_hash(self.payload_hash, field="payload_hash")
         _parse_timestamp(self.received_at, field="received_at")
         if self.observed_at is not None:
@@ -573,9 +591,13 @@ class EvidenceRecord:
                 raise ValueError("trusted evidence must be authenticated")
             lowered = f"{self.source} {self.payload_ref}".lower()
             if any(token in lowered for token in _UNTRUSTED_SOURCE_TOKENS):
-                raise ValueError("fixture/replay/synthetic/tracer evidence cannot be trusted")
+                raise ValueError(
+                    "fixture/replay/synthetic/tracer evidence cannot be trusted"
+                )
             if self.reason_codes:
-                raise ValueError("trusted evidence must not carry blocking reason codes")
+                raise ValueError(
+                    "trusted evidence must not carry blocking reason codes"
+                )
             if self.kind == "market_snapshot" and (
                 self.trust_consecutive_passes is None
                 or self.trust_observation_seconds is None
@@ -649,9 +671,7 @@ class PreEntryRiskClaim:
 
     def __post_init__(self) -> None:
         if self.schema_version != PRE_ENTRY_RISK_CLAIM_SCHEMA:
-            raise ValueError(
-                f"schema_version must be {PRE_ENTRY_RISK_CLAIM_SCHEMA}"
-            )
+            raise ValueError(f"schema_version must be {PRE_ENTRY_RISK_CLAIM_SCHEMA}")
 
     @property
     def payload_hash(self) -> str:
@@ -804,9 +824,7 @@ class StrategyLeg:
             "expiry": self.expiry,
             "product_economics": self.product_economics.to_dict(),
             "premium_coordinate": (
-                self.premium_coordinate.to_dict()
-                if self.premium_coordinate
-                else None
+                self.premium_coordinate.to_dict() if self.premium_coordinate else None
             ),
             "entry_price_policy": self.entry_price_policy,
             "source_quote": self.source_quote.to_dict(),
@@ -860,9 +878,7 @@ class OpportunityRecord:
             "apparent_edge": (
                 self.apparent_edge.to_dict() if self.apparent_edge else None
             ),
-            "uncertainty": (
-                self.uncertainty.to_dict() if self.uncertainty else None
-            ),
+            "uncertainty": (self.uncertainty.to_dict() if self.uncertainty else None),
             "evidence_refs": list(self.evidence_refs),
             "reason_codes": list(self.reason_codes),
             "invalidation_conditions": list(self.invalidation_conditions),
@@ -984,9 +1000,7 @@ class StrategyPlan:
             "depth_impact": economic(self.depth_impact),
             "legging_reserve": economic(self.legging_reserve),
             "hedge_reserve": economic(self.hedge_reserve),
-            "model_uncertainty_reserve": economic(
-                self.model_uncertainty_reserve
-            ),
+            "model_uncertainty_reserve": economic(self.model_uncertainty_reserve),
             "exit_liquidity_proxy": self.exit_liquidity_proxy,
             "research_capacity_class": self.research_capacity_class,
             "conservative_net_edge": economic(self.conservative_net_edge),
@@ -1186,6 +1200,7 @@ class DomainEvent:
 class DecisionManifest:
     manifest_id: str
     code_version: str
+    build_info: BuildInfo
     configuration_hash: str
     policy_bundle_id: str
     policy_bundle_hash: str
@@ -1201,11 +1216,17 @@ class DecisionManifest:
     output_hash: str
     schema_version: str = DECISION_MANIFEST_SCHEMA
 
+    @property
+    def analysis_inputs_hash(self) -> str:
+        """The legacy projection_hash name now aliases the typed input digest."""
+        return self.projection_hash
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "manifest_id": self.manifest_id,
             "code_version": self.code_version,
+            "build_info": self.build_info.to_dict(),
             "configuration_hash": self.configuration_hash,
             "policy_bundle_id": self.policy_bundle_id,
             "policy_bundle_hash": self.policy_bundle_hash,
@@ -1218,6 +1239,8 @@ class DecisionManifest:
             "pre_entry_risk_evidence_hash": self.pre_entry_risk_evidence_hash,
             "detector_versions": list(self.detector_versions),
             "projection_hash": self.projection_hash,
+            "analysis_inputs_hash": self.analysis_inputs_hash,
+            "analysis_inputs_schema": "analysis_inputs.v1",
             "output_hash": self.output_hash,
         }
 
@@ -1239,13 +1262,17 @@ class AnalysisRequest:
     strategy_forecast_runtime_evidence_json: str
     opportunity_detected_at: str
     detector_versions: tuple[str, ...]
+    analysis_inputs: AnalysisInputs | None = None
+    report_options: ReportProjectionOptions = _DEFAULT_REPORT_OPTIONS
 
     def __post_init__(self) -> None:
-        _parse_timestamp(self.evaluation_clock, field="evaluation_clock")
-        _parse_timestamp(
+        evaluation_clock = _parse_timestamp(self.evaluation_clock, field="evaluation_clock")
+        detected_at = _parse_timestamp(
             self.opportunity_detected_at,
             field="opportunity_detected_at",
         )
+        if detected_at > evaluation_clock:
+            raise ValueError("opportunity_detected_at must not be after evaluation_clock")
         _ensure_hash(self.configuration_hash, field="configuration_hash")
         if self.policy_bundle.mandate.evaluation_clock != self.evaluation_clock:
             raise ValueError("mandate and request evaluation clocks must match")
@@ -1256,9 +1283,9 @@ class AnalysisRequest:
             raise ValueError("mandate and request model bundles must match")
         if not self.detector_versions:
             raise ValueError("detector_versions must not be empty")
-        projection = json.loads(self.report_projection_json)
-        if projection.get("generated_at") != self.evaluation_clock:
-            raise ValueError("report projection must use the fixed evaluation clock")
+        inputs = self.inputs()
+        if inputs.evaluation_clock != self.evaluation_clock:
+            raise ValueError("analysis inputs must use the fixed evaluation clock")
         _strategy_history_artifacts_from_json(self.strategy_history_artifacts_json)
         _strategy_forecast_runtime_evidence_from_json(
             self.strategy_forecast_runtime_evidence_json
@@ -1268,10 +1295,9 @@ class AnalysisRequest:
         if self.account_evidence is not None:
             if self.account_evidence.kind != "account_snapshot":
                 raise ValueError("account evidence kind must be account_snapshot")
-            account_projection = projection.get("account_status") or {}
-            if (
-                self.account_evidence.payload_hash
-                != canonical_sha256(account_projection)
+            account_projection = inputs.account.read()
+            if self.account_evidence.payload_hash != canonical_sha256(
+                account_projection
             ):
                 raise ValueError(
                     "account evidence hash must match the account projection"
@@ -1308,16 +1334,14 @@ class AnalysisRequest:
         if self.model_bundle.promoted_for:
             if (
                 self.historical_artifact is None
-                or self.historical_artifact.kind
-                != "historical_oos_promotion_artifact"
+                or self.historical_artifact.kind != "historical_oos_promotion_artifact"
                 or self.historical_artifact.state is not EvidenceState.TRUSTED
                 or self.historical_artifact.payload_hash
                 != self.model_bundle.promotion_evidence_hash
                 or not self.historical_artifact.is_current_at(
                     self.evaluation_clock,
                     max_age_seconds=(
-                        self.policy_bundle.catalog
-                        .model_promotion_evidence_max_age_seconds
+                        self.policy_bundle.catalog.model_promotion_evidence_max_age_seconds
                     ),
                     require_expiry=False,
                 )
@@ -1332,8 +1356,7 @@ class AnalysisRequest:
                 raise ValueError("market evidence hash must match the market snapshot")
             if (
                 self.market_evidence.state is EvidenceState.TRUSTED
-                and str(snapshot.get("source") or "")
-                != self.market_evidence.source
+                and str(snapshot.get("source") or "") != self.market_evidence.source
             ):
                 raise ValueError(
                     "trusted market evidence source must match the snapshot source"
@@ -1361,13 +1384,59 @@ class AnalysisRequest:
         opportunity_detected_at: str | None = None,
         detector_versions: tuple[str, ...] = ("legacy-candidate-screen:v1",),
     ) -> AnalysisRequest:
-        _parse_timestamp(evaluation_clock, field="evaluation_clock")
+        """Adapt legacy callers once; the evaluator only consumes typed inputs."""
         projection_json = _canonical_json(report_projection)
-        projection = json.loads(projection_json)
-        if projection.get("generated_at") != evaluation_clock:
-            raise ValueError("report projection must use the fixed evaluation clock")
+        return cls.from_inputs(
+            evaluation_clock=evaluation_clock,
+            analysis_inputs=AnalysisInputs.from_legacy_report(
+                json.loads(projection_json)
+            ),
+            market_snapshot=market_snapshot,
+            market_evidence=market_evidence,
+            account_evidence=account_evidence,
+            historical_artifact=historical_artifact,
+            pre_entry_risk_claim=pre_entry_risk_claim,
+            pre_entry_risk_evidence=pre_entry_risk_evidence,
+            mandate=mandate,
+            policy_catalog=policy_catalog,
+            model_bundle=model_bundle,
+            configuration=configuration,
+            configuration_hash=configuration_hash,
+            strategy_history_artifacts=strategy_history_artifacts,
+            strategy_forecast_runtime_evidence=strategy_forecast_runtime_evidence,
+            opportunity_detected_at=opportunity_detected_at,
+            detector_versions=detector_versions,
+            _legacy_report_json=projection_json,
+        )
 
-        model = model_bundle or _model_bundle_from_projection(projection)
+    @classmethod
+    def from_inputs(
+        cls,
+        *,
+        evaluation_clock: str,
+        analysis_inputs: AnalysisInputs,
+        market_snapshot: Mapping[str, Any] | None,
+        market_evidence: EvidenceRecord | None = None,
+        account_evidence: EvidenceRecord | None = None,
+        historical_artifact: EvidenceRecord | None = None,
+        pre_entry_risk_claim: PreEntryRiskClaim | None = None,
+        pre_entry_risk_evidence: EvidenceRecord | None = None,
+        mandate: AnalysisMandate | None = None,
+        policy_catalog: PolicyCatalog | None = None,
+        model_bundle: ModelBundleRef | None = None,
+        configuration: Any | None = None,
+        configuration_hash: str | None = None,
+        strategy_history_artifacts: Iterable[Mapping[str, Any]] = (),
+        strategy_forecast_runtime_evidence: Iterable[Mapping[str, Any]] = (),
+        opportunity_detected_at: str | None = None,
+        detector_versions: tuple[str, ...] = ("legacy-candidate-screen:v1",),
+        report_options: ReportProjectionOptions = _DEFAULT_REPORT_OPTIONS,
+        _legacy_report_json: str = "",
+    ) -> AnalysisRequest:
+        _parse_timestamp(evaluation_clock, field="evaluation_clock")
+        if analysis_inputs.evaluation_clock != evaluation_clock:
+            raise ValueError("analysis inputs must use the fixed evaluation clock")
+        model = model_bundle or ModelBundleRef.unavailable()
         catalog = policy_catalog or PolicyCatalog()
         selected_mandate = mandate or AnalysisMandate(
             policy_version=catalog.policy_version,
@@ -1397,10 +1466,8 @@ class AnalysisRequest:
         history_artifacts_json = _normalize_strategy_history_artifacts(
             strategy_history_artifacts
         )
-        forecast_runtime_evidence_json = (
-            _normalize_strategy_forecast_runtime_evidence(
-                strategy_forecast_runtime_evidence
-            )
+        forecast_runtime_evidence_json = _normalize_strategy_forecast_runtime_evidence(
+            strategy_forecast_runtime_evidence
         )
         if history_artifacts_json != "[]" or forecast_runtime_evidence_json != "[]":
             config_hash = canonical_sha256(
@@ -1424,15 +1491,15 @@ class AnalysisRequest:
             snapshot_value = json.loads(snapshot_json)
         else:
             snapshot_value = None
-        resolved_market_evidence = market_evidence or _market_evidence_from_projection(
-            projection,
+        resolved_market_evidence = market_evidence or _market_evidence_from_inputs(
+            analysis_inputs,
             snapshot_value,
             evaluation_clock=evaluation_clock,
             max_age_seconds=catalog.market_snapshot_max_age_seconds,
         )
         if account_evidence is None:
-            account_evidence = _account_evidence_from_projection(
-                projection,
+            account_evidence = _account_evidence_from_inputs(
+                analysis_inputs,
                 evaluation_clock=evaluation_clock,
             )
         return cls(
@@ -1445,7 +1512,9 @@ class AnalysisRequest:
             pre_entry_risk_evidence=pre_entry_risk_evidence,
             model_bundle=model,
             configuration_hash=config_hash,
-            report_projection_json=projection_json,
+            report_projection_json=_legacy_report_json,
+            analysis_inputs=analysis_inputs,
+            report_options=report_options,
             market_snapshot_json=snapshot_json,
             strategy_history_artifacts_json=history_artifacts_json,
             strategy_forecast_runtime_evidence_json=forecast_runtime_evidence_json,
@@ -1453,8 +1522,22 @@ class AnalysisRequest:
             detector_versions=tuple(sorted(set(detector_versions))),
         )
 
+    def inputs(self) -> AnalysisInputs:
+        if self.analysis_inputs is not None:
+            return self.analysis_inputs
+        return AnalysisInputs.from_legacy_report(
+            json.loads(self.report_projection_json)
+        )
+
     def projection(self) -> dict[str, Any]:
-        return json.loads(self.report_projection_json)
+        if self.report_projection_json:
+            payload = json.loads(self.report_projection_json)
+            if not isinstance(payload, dict):
+                raise ValueError("report projection must be an object")
+            return payload
+        from .contract import project_analysis_inputs
+
+        return project_analysis_inputs(self.inputs(), self.report_options)
 
     def market_snapshot(self) -> dict[str, Any] | None:
         return (
@@ -1479,18 +1562,19 @@ class AnalysisRecord:
     evidence_lineage: tuple[EvidenceRecord, ...]
     domain_events: tuple[DomainEvent, ...]
     output_hash: str
-    _research_report_projection_json: str
+    _compatibility_projection: CompatibilityProjection
+    _analysis_inputs: AnalysisInputs
     _strategy_history_artifacts_json: str
     _strategy_forecast_runtime_evidence_json: str
     schema_version: str = ANALYSIS_RECORD_SCHEMA
 
     def _base_research_report_projection(self) -> dict[str, Any]:
-        return json.loads(self._research_report_projection_json)
+        return self._compatibility_projection.read()
 
     def project_strategy_brief_v1(self) -> dict[str, Any]:
-        report = self._base_research_report_projection()
-        candidates = _strategy_brief_candidates(self, report)
-        generated_at = str(report.get("generated_at") or self.manifest.evaluation_clock)
+        inputs = self._analysis_inputs
+        candidates = _strategy_brief_candidates(self, inputs)
+        generated_at = inputs.evaluation_clock
         history_by_candidate = _strategy_brief_history_by_candidate(
             generated_at=generated_at,
             candidates=candidates,
@@ -1508,7 +1592,7 @@ class AnalysisRecord:
         return build_strategy_brief(
             analysis_run_id=self.analysis_run_id,
             generated_at=generated_at,
-            market=_strategy_brief_market(self, report, candidates=candidates),
+            market=_strategy_brief_market(self, inputs, candidates=candidates),
             candidates=candidates,
             history_by_candidate=history_by_candidate,
             forecast_by_candidate=forecast_by_candidate,
@@ -1536,9 +1620,7 @@ class AnalysisRecord:
                 item.to_dict() for item in self.entry_admission_decisions
             ],
             "global_reason_codes": list(self.global_reason_codes),
-            "evidence_lineage": [
-                item.to_dict() for item in self.evidence_lineage
-            ],
+            "evidence_lineage": [item.to_dict() for item in self.evidence_lineage],
             "domain_events": [item.to_dict() for item in self.domain_events],
             "output_hash": self.output_hash,
             "research_only": True,
@@ -1556,48 +1638,39 @@ class AnalysisRun:
     """Deep application seam for deterministic pre-entry analysis."""
 
     def evaluate(self, request: AnalysisRequest) -> AnalysisRecord:
-        projection = request.projection()
+        inputs = request.inputs()
         snapshot = request.market_snapshot()
         policy = request.policy_bundle.catalog
         evidence = _effective_market_evidence(
             request.market_evidence,
-            projection,
+            inputs,
             policy=policy,
         )
         market_snapshot_id = f"market:{evidence.payload_hash}"
-        manifest_inputs = {
-            "schema_version": DECISION_MANIFEST_SCHEMA,
-            "code_version": CODE_VERSION,
-            "configuration_hash": request.configuration_hash,
-            "policy_bundle_id": request.policy_bundle.policy_bundle_id,
-            "policy_bundle_hash": request.policy_bundle.bundle_hash,
-            "model_bundle_id": request.model_bundle.model_bundle_id,
-            "model_bundle_hash": request.model_bundle.model_hash,
-            "evaluation_clock": request.evaluation_clock,
-            "market_snapshot_hash": evidence.payload_hash,
-            "account_evidence_hash": (
-                request.account_evidence.payload_hash
-                if request.account_evidence
-                else None
-            ),
-            "historical_artifact_hash": (
-                request.historical_artifact.payload_hash
-                if request.historical_artifact
-                else None
-            ),
-            "pre_entry_risk_evidence_hash": (
-                request.pre_entry_risk_evidence.payload_hash
-                if request.pre_entry_risk_evidence
-                else None
-            ),
-            "detector_versions": list(request.detector_versions),
-            "projection_hash": canonical_sha256(projection),
-        }
+        build_identity = get_build_info()
+        manifest_template = DecisionManifest(
+            manifest_id="", output_hash="", code_version=CODE_VERSION, build_info=build_identity,
+            configuration_hash=request.configuration_hash,
+            policy_bundle_id=request.policy_bundle.policy_bundle_id,
+            policy_bundle_hash=request.policy_bundle.bundle_hash,
+            model_bundle_id=request.model_bundle.model_bundle_id,
+            model_bundle_hash=request.model_bundle.model_hash,
+            evaluation_clock=request.evaluation_clock,
+            market_snapshot_hash=evidence.payload_hash,
+            account_evidence_hash=(request.account_evidence.payload_hash if request.account_evidence else None),
+            historical_artifact_hash=(request.historical_artifact.payload_hash if request.historical_artifact else None),
+            pre_entry_risk_evidence_hash=(request.pre_entry_risk_evidence.payload_hash if request.pre_entry_risk_evidence else None),
+            detector_versions=request.detector_versions,
+            projection_hash=canonical_sha256(inputs.identity_payload()),
+        )
+        manifest_inputs = manifest_template.to_dict()
+        manifest_inputs.pop("manifest_id")
+        manifest_inputs.pop("output_hash")
         manifest_id = f"manifest:{canonical_sha256(manifest_inputs)}"
         analysis_run_id = f"analysis:{canonical_sha256({'manifest': manifest_inputs})}"
 
         market_analysis = _market_analysis(
-            projection,
+            inputs,
             snapshot=snapshot,
             market_snapshot_id=market_snapshot_id,
             market_evidence=evidence,
@@ -1605,8 +1678,8 @@ class AnalysisRun:
         opportunities: tuple[OpportunityRecord, ...]
         strategies: tuple[StrategyPlan, ...]
         if evidence.state is EvidenceState.TRUSTED:
-            opportunities = _opportunities_from_projection(
-                projection,
+            opportunities = _opportunities_from_inputs(
+                inputs,
                 market_snapshot_id=market_snapshot_id,
                 market_evidence=evidence,
                 detected_at=request.opportunity_detected_at,
@@ -1616,7 +1689,7 @@ class AnalysisRun:
             )
             strategies = _strategies_from_opportunities(
                 opportunities,
-                projection=projection,
+                inputs=inputs,
                 snapshot=snapshot,
                 market_evidence=evidence,
                 evaluation_clock=request.evaluation_clock,
@@ -1632,7 +1705,7 @@ class AnalysisRun:
 
         decisions = _entry_admission_decisions(
             analysis_run_id=analysis_run_id,
-            projection=projection,
+            inputs=inputs,
             market_evidence=evidence,
             market_snapshot_id=market_snapshot_id,
             opportunities=opportunities,
@@ -1658,11 +1731,7 @@ class AnalysisRun:
         reasons = _unique_codes(
             [
                 *evidence.reason_codes,
-                *[
-                    code
-                    for decision in decisions
-                    for code in decision.reason_codes
-                ],
+                *[code for decision in decisions for code in decision.reason_codes],
             ]
         )
         events = _domain_events(
@@ -1673,11 +1742,7 @@ class AnalysisRun:
             decisions=decisions,
             global_reason_codes=reasons,
         )
-        manifest = DecisionManifest(
-            manifest_id=manifest_id,
-            output_hash="",
-            **manifest_inputs,
-        )
+        manifest = replace(manifest_template, manifest_id=manifest_id)
         preliminary = AnalysisRecord(
             analysis_run_id=analysis_run_id,
             manifest=manifest,
@@ -1692,7 +1757,9 @@ class AnalysisRun:
             evidence_lineage=lineage,
             domain_events=events,
             output_hash="",
-            _research_report_projection_json=request.report_projection_json,
+            _compatibility_projection=CompatibilityProjection(
+                inputs, request.report_options, request.report_projection_json),
+            _analysis_inputs=inputs,
             _strategy_history_artifacts_json=request.strategy_history_artifacts_json,
             _strategy_forecast_runtime_evidence_json=(
                 request.strategy_forecast_runtime_evidence_json
@@ -1736,25 +1803,23 @@ def build_analysis_record(
     opportunity_detected_at: str | None = None,
     underlying_history: dict[str, Any] | None = None,
 ) -> AnalysisRecord:
-    """Build the legacy projection once, then evaluate one immutable record."""
-    from . import contract as contract_module
-
-    evaluation_clock = generated_at or contract_module.utc_timestamp()
-    projection = contract_module._build_research_report_v1_projection(
-        mode=mode,
-        generated_at=evaluation_clock,
+    """Calculate independent inputs once, then evaluate and project one record."""
+    options = ReportProjectionOptions(
+        mode, paper_ledger_path, manual_approval_runbook_path, persist_paper_ledger
+    )
+    evaluation_clock = generated_at or utc_timestamp()
+    inputs = compute_analysis_inputs(
+        evaluation_clock=evaluation_clock,
         market_snapshot=market_snapshot,
         account_payload=account_payload,
         account_scenario=account_scenario,
         backtest_artifact=backtest_artifact,
-        paper_ledger_path=paper_ledger_path,
-        manual_approval_runbook_path=manual_approval_runbook_path,
-        persist_paper_ledger=persist_paper_ledger,
         underlying_history=underlying_history,
     )
-    request = AnalysisRequest.from_projection(
+    request = AnalysisRequest.from_inputs(
         evaluation_clock=evaluation_clock,
-        report_projection=projection,
+        analysis_inputs=inputs,
+        report_options=options,
         market_snapshot=market_snapshot,
         market_evidence=market_evidence,
         account_evidence=account_evidence,
@@ -1800,10 +1865,10 @@ def validate_analysis_record(value: AnalysisRecord | Mapping[str, Any]) -> list[
                 "reason_code",
             }:
                 errors.append("admission conditions must preserve all audit fields")
-        if (
-            decision.get("status")
-            == EntryAdmissionStatus.CONDITIONALLY_ELIGIBLE.value
-            and decision.get("unknown_conditions")
+        if decision.get(
+            "status"
+        ) == EntryAdmissionStatus.CONDITIONALLY_ELIGIBLE.value and decision.get(
+            "unknown_conditions"
         ):
             errors.append("unknown conditions cannot be conditionally eligible")
     forbidden = _find_forbidden_keys(payload)
@@ -1846,12 +1911,12 @@ def _find_forbidden_keys(value: Any) -> set[str]:
 
 def _effective_market_evidence(
     supplied: EvidenceRecord,
-    projection: Mapping[str, Any],
+    inputs: AnalysisInputs,
     *,
     policy: PolicyCatalog,
 ) -> EvidenceRecord:
-    data_status = projection.get("data_status") or {}
-    evaluation_clock = str(projection.get("generated_at") or "")
+    data_status = inputs.market.data.read()
+    evaluation_clock = inputs.evaluation_clock
     clock = _parse_timestamp(evaluation_clock, field="evaluation clock")
     observed_at = (
         _parse_timestamp(supplied.observed_at, field="market evidence observed_at")
@@ -1881,34 +1946,25 @@ def _effective_market_evidence(
     future_receipt = received_at > clock
     trust_observation_shortfall = (
         supplied.trust_consecutive_passes is None
-        or supplied.trust_consecutive_passes
-        < policy.trust_minimum_consecutive_passes
+        or supplied.trust_consecutive_passes < policy.trust_minimum_consecutive_passes
         or supplied.trust_observation_seconds is None
-        or supplied.trust_observation_seconds
-        < policy.trust_minimum_observation_seconds
+        or supplied.trust_observation_seconds < policy.trust_minimum_observation_seconds
     )
-    if (
-        supplied.state is EvidenceState.TRUSTED
-        and (
-            data_status.get("status") != "validated"
-            or expired
-            or stale_observation
-            or future_receipt
-            or trust_observation_shortfall
-        )
+    if supplied.state is EvidenceState.TRUSTED and (
+        data_status.get("status") != "validated"
+        or expired
+        or stale_observation
+        or future_receipt
+        or trust_observation_shortfall
     ):
         reasons = _unique_codes(
             [
                 *list(
-                    (data_status.get("quality_gate") or {}).get("reason_codes")
-                    or []
+                    (data_status.get("quality_gate") or {}).get("reason_codes") or []
                 ),
                 "MARKET_EVIDENCE_EXPIRED" if expired else None,
                 (
-                    str(
-                        data_status.get("reason_code")
-                        or "MARKET_DATA_QUALITY_FAIL"
-                    )
+                    str(data_status.get("reason_code") or "MARKET_DATA_QUALITY_FAIL")
                     if data_status.get("status") != "validated"
                     else None
                 ),
@@ -1921,11 +1977,7 @@ def _effective_market_evidence(
                     if stale_observation
                     else None
                 ),
-                (
-                    "MARKET_EVIDENCE_RECEIVED_FROM_FUTURE"
-                    if future_receipt
-                    else None
-                ),
+                ("MARKET_EVIDENCE_RECEIVED_FROM_FUTURE" if future_receipt else None),
                 (
                     "MARKET_TRUST_THRESHOLD_NOT_MET"
                     if trust_observation_shortfall
@@ -1942,15 +1994,15 @@ def _effective_market_evidence(
     return supplied
 
 
-def _market_evidence_from_projection(
-    projection: Mapping[str, Any],
+def _market_evidence_from_inputs(
+    inputs: AnalysisInputs,
     snapshot: Mapping[str, Any] | None,
     *,
     evaluation_clock: str,
     max_age_seconds: float,
 ) -> EvidenceRecord:
-    data_status = projection.get("data_status") or {}
-    trust = projection.get("data_trust") or {}
+    data_status = inputs.market.data.read()
+    trust = inputs.market.trust.read()
     if snapshot is None:
         digest = canonical_sha256({"market_snapshot": None})
     else:
@@ -1972,9 +2024,7 @@ def _market_evidence_from_projection(
         and raw_passes >= 0
         else None
     )
-    observation_seconds = _optional_finite(
-        trust_evidence.get("observation_seconds")
-    )
+    observation_seconds = _optional_finite(trust_evidence.get("observation_seconds"))
     minimum_passes = _optional_positive(
         trust_evidence.get(
             "minimum_consecutive_passes",
@@ -2010,10 +2060,7 @@ def _market_evidence_from_projection(
                 (
                     "MARKET_TRUST_THRESHOLD_EVIDENCE_MISSING"
                     if verdict == "trusted"
-                    and (
-                        minimum_passes is None
-                        or minimum_observation_seconds is None
-                    )
+                    and (minimum_passes is None or minimum_observation_seconds is None)
                     else (
                         "MARKET_TRUST_OBSERVATIONS_MISSING"
                         if verdict == "trusted"
@@ -2040,12 +2087,12 @@ def _market_evidence_from_projection(
     )
 
 
-def _account_evidence_from_projection(
-    projection: Mapping[str, Any],
+def _account_evidence_from_inputs(
+    inputs: AnalysisInputs,
     *,
     evaluation_clock: str,
 ) -> EvidenceRecord | None:
-    account = projection.get("account_status") or {}
+    account = inputs.account.read()
     if account.get("status") == "missing":
         return None
     digest = canonical_sha256(account)
@@ -2056,11 +2103,7 @@ def _account_evidence_from_projection(
         and (account.get("private_adapter_contract") or {}).get("replay_fixture")
         is False
     )
-    state = (
-        EvidenceState.TRUSTED
-        if authenticated_live
-        else EvidenceState.UNTRUSTED
-    )
+    state = EvidenceState.TRUSTED if authenticated_live else EvidenceState.UNTRUSTED
     reason = str(account.get("reason_code") or "ACCOUNT_EVIDENCE_NOT_TRUSTED")
     return EvidenceRecord(
         evidence_id=f"account:{digest}",
@@ -2077,23 +2120,14 @@ def _account_evidence_from_projection(
     )
 
 
-def _model_bundle_from_projection(
-    projection: Mapping[str, Any],
-) -> ModelBundleRef:
-    # P2 owns ModelRegistry promotion. A legacy report claim is never enough
-    # to promote a model into the P0 trusted graph.
-    del projection
-    return ModelBundleRef.unavailable()
-
-
 def _market_analysis(
-    projection: Mapping[str, Any],
+    inputs: AnalysisInputs,
     *,
     snapshot: Mapping[str, Any] | None,
     market_snapshot_id: str,
     market_evidence: EvidenceRecord,
 ) -> MarketAnalysis:
-    data_status = projection.get("data_status") or {}
+    data_status = inputs.market.data.read()
     feeds = (snapshot or {}).get("feeds") or {}
     index_spot = feeds.get("index_spot") or {}
     spot_amount = _optional_finite(index_spot.get("index_price"))
@@ -2134,10 +2168,8 @@ def _market_analysis(
     )
     reasons = _unique_codes(
         [
-            *list((projection.get("data_trust") or {}).get("reason_codes") or []),
-            *list(
-                (data_status.get("quality_gate") or {}).get("reason_codes") or []
-            ),
+            *list((inputs.market.trust.read()).get("reason_codes") or []),
+            *list((data_status.get("quality_gate") or {}).get("reason_codes") or []),
             *market_evidence.reason_codes,
         ]
     )
@@ -2152,10 +2184,7 @@ def _market_analysis(
         spot=spot,
         dvol_percent=dvol,
         surface_status=(
-            str(
-                (projection.get("vol_surface_status") or {}).get("status")
-                or "missing"
-            )
+            str((inputs.market.surface.read()).get("status") or "missing")
             if trusted
             else "not_trusted"
         ),
@@ -2163,8 +2192,8 @@ def _market_analysis(
     )
 
 
-def _opportunities_from_projection(
-    projection: Mapping[str, Any],
+def _opportunities_from_inputs(
+    inputs: AnalysisInputs,
     *,
     market_snapshot_id: str,
     market_evidence: EvidenceRecord,
@@ -2173,7 +2202,7 @@ def _opportunities_from_projection(
     policy: PolicyCatalog,
     model_bundle: ModelBundleRef,
 ) -> tuple[OpportunityRecord, ...]:
-    candidates = projection.get("candidate_research") or {}
+    candidates = inputs.market.candidates.read()
     rows: list[Mapping[str, Any]] = []
     # Candidate discovery already publishes all three defined-risk families.
     # The typed migration seam used to lift only call spreads, which silently
@@ -2364,12 +2393,12 @@ def _fair_interval_from_candidate(
 def _strategies_from_opportunities(
     opportunities: tuple[OpportunityRecord, ...],
     *,
-    projection: Mapping[str, Any],
+    inputs: AnalysisInputs,
     snapshot: Mapping[str, Any] | None,
     market_evidence: EvidenceRecord,
     evaluation_clock: str,
 ) -> tuple[StrategyPlan, ...]:
-    candidate_lookup = _candidate_lookup(projection)
+    candidate_lookup = _candidate_lookup(inputs.market.candidates.read())
     row_lookup = {
         str(row.get("instrument_name")): row
         for row in (snapshot or {}).get("rows", [])
@@ -2401,6 +2430,7 @@ def _strategies_from_opportunities(
         legs = tuple(
             _strategy_leg(
                 side=side,
+                quantity_ratio=quantity_ratio,
                 instrument_id=instrument,
                 strike_value=strike,
                 price_policy=price_policy,
@@ -2410,16 +2440,13 @@ def _strategies_from_opportunities(
                 market_evidence=market_evidence,
                 evaluation_clock=evaluation_clock,
             )
-            for side, instrument, strike, price_policy, option_type in leg_specs
-            if instrument and _optional_finite(strike) is not None
+            for side, quantity_ratio, instrument, strike, price_policy, option_type in leg_specs
         )
         if not legs:
             continue
         net_premium = _economic_from_candidate(
             candidate,
-            field=(
-                "net_credit"
-            ),
+            field=("net_credit"),
             kind="net_credit",
             as_of=market_evidence.observed_at or evaluation_clock,
         )
@@ -2432,7 +2459,8 @@ def _strategies_from_opportunities(
                 currency="USD",
                 contract_scale=1.0,
             )
-            if structure in {
+            if structure
+            in {
                 "CALL_CREDIT_SPREAD",
                 "BULL_PUT_CREDIT_SPREAD",
                 "IRON_CONDOR",
@@ -2477,8 +2505,7 @@ def _strategies_from_opportunities(
                 ),
             )
             for name in ("delta", "gamma", "theta", "vega")
-            if (value := _optional_finite(candidate.get(f"model_{name}")))
-            is not None
+            if (value := _optional_finite(candidate.get(f"model_{name}"))) is not None
         )
         rejected_alternatives = (
             RejectedAlternative(
@@ -2519,9 +2546,7 @@ def _strategies_from_opportunities(
             if conservative_net_edge is not None
             and max_loss is not None
             and max_loss.amount > 0
-            and _economic_dimensions_consistent(
-                (conservative_net_edge, max_loss)
-            )
+            and _economic_dimensions_consistent((conservative_net_edge, max_loss))
             else None
         )
         plans.append(
@@ -2544,9 +2569,7 @@ def _strategies_from_opportunities(
                 depth_impact=costs.get("depth_impact"),
                 legging_reserve=costs.get("legging_reserve"),
                 hedge_reserve=costs.get("hedge_reserve"),
-                model_uncertainty_reserve=costs.get(
-                    "model_uncertainty_reserve"
-                ),
+                model_uncertainty_reserve=costs.get("model_uncertainty_reserve"),
                 exit_liquidity_proxy="not_evaluated",
                 research_capacity_class=(
                     str(candidate.get("analysis_capacity_class"))
@@ -2581,38 +2604,62 @@ def _strategies_from_opportunities(
 
 def _defined_risk_leg_specs(
     candidate: Mapping[str, Any],
-) -> tuple[tuple[str, str, Any, str, str], ...]:
+) -> tuple[tuple[str, float, str, float, str, str], ...]:
     """Return exact executable leg grammar from the canonical signed legs."""
 
     raw_legs = candidate.get("structure_legs")
     if not isinstance(raw_legs, list):
         return ()
-    specs: list[tuple[str, str, Any, str, str]] = []
+    specs: list[tuple[str, float, str, float, str, str]] = []
     for raw in raw_legs:
         if not isinstance(raw, Mapping):
             return ()
         quantity = _optional_finite(raw.get("quantity"))
+        strike = _optional_positive(raw.get("strike"))
         instrument = str(raw.get("instrument_name") or "")
         option_type = str(raw.get("option_type") or "")
         if (
             quantity is None
             or quantity == 0
+            or strike is None
             or not instrument
             or option_type not in {"call", "put"}
+            or raw.get("expiry_date", candidate.get("expiry_date")) != candidate.get("expiry_date")
         ):
             return ()
         side = "BUY" if quantity > 0 else "SELL"
         specs.append(
             (
                 side,
+                abs(quantity),
                 instrument,
-                raw.get("strike"),
+                strike,
                 "buy_ask" if side == "BUY" else "sell_bid",
                 option_type,
             )
         )
-    if len(specs) not in {2, 4}:
+    if len({item[2] for item in specs}) != len(specs):
         return ()
+    structure_type = candidate.get("structure_type")
+    expected_types = {
+        "call_credit_spread": {"call"},
+        "put_credit_spread": {"put"},
+        "iron_condor": {"call", "put"},
+    }.get(str(structure_type))
+    if expected_types is None or len(specs) != 2 * len(expected_types):
+        return ()
+    for option_type in expected_types:
+        wing = [item for item in specs if item[5] == option_type]
+        if len(wing) != 2:
+            return ()
+        bought = [item for item in wing if item[0] == "BUY"]
+        sold = [item for item in wing if item[0] == "SELL"]
+        if len(bought) != 1 or len(sold) != 1 or bought[0][1] != sold[0][1]:
+            return ()
+        if option_type == "call" and bought[0][3] <= sold[0][3]:
+            return ()
+        if option_type == "put" and bought[0][3] >= sold[0][3]:
+            return ()
     return tuple(specs)
 
 
@@ -2668,9 +2715,7 @@ def _aggregate_linear_payoff(
                 for leg in legs
             ],
         )
-        profile = typed_structure.risk_profile(
-            entry_cash=net_premium.amount * scale
-        )
+        profile = typed_structure.risk_profile(entry_cash=net_premium.amount * scale)
     except ValueError:
         return "unresolved_product_economics", None, None, None
     if not profile.loss_is_bounded or profile.max_loss is None:
@@ -2688,9 +2733,7 @@ def _aggregate_linear_payoff(
         )
 
     breakeven = (
-        derived(profile.breakevens[0], "breakeven")
-        if profile.breakevens
-        else None
+        derived(profile.breakevens[0], "breakeven") if profile.breakevens else None
     )
     max_profit = (
         derived(profile.max_profit, "max_profit")
@@ -2748,12 +2791,8 @@ def _classify_opportunity_economics(
             item is not None and item.contract_scale is not None
             for item in (*costs, edge)
         )
-        dimensions_consistent = _economic_dimensions_consistent(
-            (*costs, edge)
-        )
-        costs_nonnegative = all(
-            item is not None and item.amount >= 0 for item in costs
-        )
+        dimensions_consistent = _economic_dimensions_consistent((*costs, edge))
+        costs_nonnegative = all(item is not None and item.amount >= 0 for item in costs)
         known = (
             all(item is not None for item in costs)
             and edge is not None
@@ -2798,8 +2837,7 @@ def _classify_opportunity_economics(
                                     "COST_COVERAGE_FAILED"
                                     if known
                                     else "ECONOMIC_DIMENSIONS_MISMATCH"
-                                    if dimensions_known
-                                    and not dimensions_consistent
+                                    if dimensions_known and not dimensions_consistent
                                     else "ECONOMIC_COST_INVALID"
                                     if dimensions_known
                                     and dimensions_consistent
@@ -2833,10 +2871,9 @@ def _economic_dimensions_consistent(
 
 
 def _candidate_lookup(
-    projection: Mapping[str, Any],
+    candidates: Mapping[str, Any],
 ) -> dict[str, Mapping[str, Any]]:
     result: dict[str, Mapping[str, Any]] = {}
-    candidates = projection.get("candidate_research") or {}
     for section in (
         "call_credit_spreads",
         "put_credit_spreads",
@@ -2853,14 +2890,14 @@ def _candidate_lookup(
 
 def _strategy_brief_candidates(
     record: AnalysisRecord,
-    projection: Mapping[str, Any],
+    inputs: AnalysisInputs,
 ) -> list[dict[str, Any]]:
-    ranked = (projection.get("ev_candidate_scanner") or {}).get("ranked_candidates") or []
+    ranked = (inputs.research.scanner.read()).get(
+        "ranked_candidates"
+    ) or []
     supported = {"call_credit_spread", "put_credit_spread", "iron_condor"}
-    candidate_lookup = _candidate_lookup(projection)
-    opportunities = {
-        item.source_candidate_id: item for item in record.opportunities
-    }
+    candidate_lookup = _candidate_lookup(inputs.market.candidates.read())
+    opportunities = {item.source_candidate_id: item for item in record.opportunities}
     plan_by_opportunity = {item.opportunity_id: item for item in record.strategy_plans}
     candidates: list[dict[str, Any]] = []
     for raw in ranked:
@@ -2907,7 +2944,10 @@ def _strategy_brief_candidates(
             "premium_currency",
             _strategy_brief_premium_currency(candidate, plan),
         )
-        if candidate.get("ev_after_cost") is None and candidate.get("ev_after_cost_usdc") is not None:
+        if (
+            candidate.get("ev_after_cost") is None
+            and candidate.get("ev_after_cost_usdc") is not None
+        ):
             candidate["ev_after_cost"] = candidate.get("ev_after_cost_usdc")
         candidate.setdefault(
             "cost_components_complete",
@@ -2915,7 +2955,9 @@ def _strategy_brief_candidates(
         )
         candidate.setdefault(
             "relative_value_status",
-            "AVAILABLE" if candidate.get("ranking_score") is not None else "UNAVAILABLE",
+            "AVAILABLE"
+            if candidate.get("ranking_score") is not None
+            else "UNAVAILABLE",
         )
         candidates.append(candidate)
     return candidates
@@ -2951,6 +2993,13 @@ def _strategy_brief_vertical_legs(
     quoted_legs = []
     for side_name, quantity in (("sell", -1.0), ("buy", 1.0)):
         instrument_name = candidate.get(f"{side_name}_leg_instrument_name")
+        source_leg = next(
+            (
+                leg for leg in candidate.get("structure_legs") or []
+                if isinstance(leg, Mapping) and leg.get("instrument_name") == instrument_name
+            ),
+            {},
+        )
         strike = candidate.get(f"{side_name}_leg_strike_price")
         bid = candidate.get(f"{side_name}_leg_market_bid")
         ask = candidate.get(f"{side_name}_leg_market_ask")
@@ -2972,13 +3021,18 @@ def _strategy_brief_vertical_legs(
                 "instrument_name": instrument_name,
                 "option_type": option_type,
                 "strike": strike,
-                "quantity": quantity,
+                "quantity": source_leg.get("quantity", quantity),
                 "market_bid": bid,
                 "market_ask": ask,
                 "observed_at": observed_at,
                 "expiry_date": expiry_date,
                 "premium_unit": premium_unit,
                 "premium_currency": premium_currency,
+                **{
+                    name: source_leg.get(name, candidate.get(name))
+                    for name in ("contract_size", "contract_scale")
+                    if name in source_leg or name in candidate
+                },
             }
         )
     return quoted_legs
@@ -3006,7 +3060,7 @@ def _strategy_brief_leg_observed_at(
 
 
 def _strategy_brief_latest_observed_at(
-    legs: list[Mapping[str, Any]],
+    legs: Sequence[Mapping[str, Any]],
 ) -> str | None:
     if not legs:
         return None
@@ -3052,13 +3106,16 @@ def _strategy_brief_exact_legs(
                 "instrument_name": leg.instrument_id,
                 "option_type": leg.option_type,
                 "strike": leg.strike.amount,
-                "quantity": leg.quantity_ratio if leg.side == "BUY" else -leg.quantity_ratio,
+                "quantity": leg.quantity_ratio
+                if leg.side == "BUY"
+                else -leg.quantity_ratio,
                 "market_bid": bid.amount,
                 "market_ask": ask.amount,
                 "observed_at": leg.source_quote.observed_at,
                 "expiry_date": leg.expiry,
                 "premium_unit": premium_unit,
                 "premium_currency": bid.currency,
+                "contract_scale": leg.product_economics.contract_scale,
             }
         )
     return legs
@@ -3112,7 +3169,10 @@ def _strategy_brief_cost_components_complete(
 ) -> bool:
     if candidate.get("cost_components_complete") is True:
         return True
-    if candidate.get("fees_included") is True and candidate.get("slippage_included") is True:
+    if (
+        candidate.get("fees_included") is True
+        and candidate.get("slippage_included") is True
+    ):
         return bool(
             candidate.get("legging_included") is True
             and candidate.get("settlement_included") is True
@@ -3128,21 +3188,20 @@ def _strategy_brief_cost_components_complete(
 
 def _strategy_brief_market(
     record: AnalysisRecord,
-    projection: Mapping[str, Any],
+    inputs: AnalysisInputs,
     *,
     candidates: Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    as_of = (
-        record.market_analysis.as_of
-        or str(projection.get("generated_at") or record.manifest.evaluation_clock)
-    )
+    as_of = record.market_analysis.as_of or inputs.evaluation_clock
     as_of_dt = _parse_timestamp(as_of, field="strategy brief market as_of")
     expires_at = _timestamp(
         as_of_dt
-        + timedelta(seconds=record.policy_bundle.catalog.market_snapshot_max_age_seconds)
+        + timedelta(
+            seconds=record.policy_bundle.catalog.market_snapshot_max_age_seconds
+        )
     )
-    data_status = projection.get("data_status") or {}
-    permission_state = projection.get("permission_state") or {}
+    data_status = inputs.market.data.read()
+    permission_state = inputs.market.permission.read()
     market_trusted = (
         record.trust_verdict == EvidenceState.TRUSTED.value
         and str(data_status.get("status") or "") == "validated"
@@ -3154,12 +3213,14 @@ def _strategy_brief_market(
             _strategy_brief_direction(permission_state) if market_trusted else "UNCLEAR"
         ),
         "volatility": (
-            _strategy_brief_volatility(permission_state) if market_trusted else "UNKNOWN"
+            _strategy_brief_volatility(permission_state)
+            if market_trusted
+            else "UNKNOWN"
         ),
         "liquidity": _strategy_brief_liquidity(
             record,
             data_status=data_status,
-            surface_status=projection.get("vol_surface_status") or {},
+            surface_status=inputs.market.surface.read(),
         ),
         "confidence": _strategy_brief_confidence(
             record,
@@ -3170,9 +3231,7 @@ def _strategy_brief_market(
 
 
 def _strategy_brief_direction(permission_state: Mapping[str, Any]) -> str:
-    regime = str(
-        permission_state.get("primary_regime_label") or ""
-    ).strip()
+    regime = str(permission_state.get("primary_regime_label") or "").strip()
     return {
         "Bear Trend": "BEARISH",
         "Range": "RANGE",
@@ -3185,9 +3244,11 @@ def _strategy_brief_volatility(permission_state: Mapping[str, Any]) -> str:
     volatility_inputs = permission_state.get("volatility_inputs") or {}
     dvol_percentile = _optional_finite(volatility_inputs.get("dvol_percentile"))
     atm_percentile = _optional_finite(volatility_inputs.get("atm_iv_percentile"))
-    percentile = max(
-        value for value in (dvol_percentile, atm_percentile) if value is not None
-    ) if any(value is not None for value in (dvol_percentile, atm_percentile)) else None
+    percentile = (
+        max(value for value in (dvol_percentile, atm_percentile) if value is not None)
+        if any(value is not None for value in (dvol_percentile, atm_percentile))
+        else None
+    )
     if percentile is None:
         return "UNKNOWN"
     if percentile >= 0.70:
@@ -3221,9 +3282,7 @@ def _strategy_brief_confidence(
     if not market_trusted:
         return "UNAVAILABLE"
     return (
-        "HIGH"
-        if str(permission_state.get("status") or "") == "validated"
-        else "MEDIUM"
+        "HIGH" if str(permission_state.get("status") or "") == "validated" else "MEDIUM"
     )
 
 
@@ -3254,12 +3313,16 @@ def _strategy_history_artifacts_from_json(value: str) -> tuple[dict[str, Any], .
     try:
         payload = json.loads(value)
     except (TypeError, json.JSONDecodeError) as exc:
-        raise ValueError("strategy history artifact payload must be canonical JSON") from exc
+        raise ValueError(
+            "strategy history artifact payload must be canonical JSON"
+        ) from exc
     if not isinstance(payload, list):
         raise ValueError("strategy history artifact payload must be a list")
     normalized = _normalize_strategy_history_artifacts(payload)
     if normalized != value:
-        raise ValueError("strategy history artifact payload must use canonical ordering")
+        raise ValueError(
+            "strategy history artifact payload must use canonical ordering"
+        )
     return tuple(json.loads(normalized))
 
 
@@ -3282,11 +3345,8 @@ def _normalize_strategy_forecast_runtime_evidence(
         if isinstance(selection_binding_key, str) and selection_binding_key:
             identity_key = f"selection:{selection_binding_key}"
         else:
-            identity_key = (
-                "legacy:"
-                + _canonical_json(
-                    _strategy_brief_forecast_public_scope_from_scope(artifact.get("scope"))
-                )
+            identity_key = "legacy:" + _canonical_json(
+                _strategy_brief_forecast_public_scope_from_scope(artifact.get("scope"))
             )
         if identity_key in identities:
             raise ValueError(
@@ -3425,7 +3485,9 @@ def _strategy_brief_forecast_by_candidate(
             "win_rate_low": projection["win_rate_low"],
             "win_rate_high": projection["win_rate_high"],
             "confidence": projection["confidence"],
-            "scope": projection["scope"] if projection["status"] == "CALIBRATED" else None,
+            "scope": projection["scope"]
+            if projection["status"] == "CALIBRATED"
+            else None,
             "artifact_id": projection["artifact_id"],
             "reason_codes": list(projection["reason_codes"]),
             "selection_binding_key": (
@@ -3460,7 +3522,9 @@ def _strategy_brief_forecast_scope(candidate: Mapping[str, Any]) -> dict[str, An
     return scope
 
 
-def _strategy_brief_forecast_public_scope(candidate: Mapping[str, Any]) -> dict[str, Any]:
+def _strategy_brief_forecast_public_scope(
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
     scope = _strategy_brief_forecast_scope(candidate)
     scope.pop("selection", None)
     return scope
@@ -3469,11 +3533,7 @@ def _strategy_brief_forecast_public_scope(candidate: Mapping[str, Any]) -> dict[
 def _strategy_brief_forecast_public_scope_from_scope(scope: Any) -> dict[str, Any]:
     if not isinstance(scope, Mapping):
         return {}
-    return {
-        key: value
-        for key, value in dict(scope).items()
-        if key != "selection"
-    }
+    return {key: value for key, value in dict(scope).items() if key != "selection"}
 
 
 def _strategy_brief_forecast_selection(
@@ -3500,6 +3560,8 @@ def _strategy_brief_forecast_selection(
         option_type = leg.get("option_type")
         strike = leg.get("strike")
         quantity = leg.get("quantity")
+        if strike is None or quantity is None:
+            return None
         if (
             not isinstance(instrument_name, str)
             or not instrument_name
@@ -3518,15 +3580,20 @@ def _strategy_brief_forecast_selection(
             )
         except (TypeError, ValueError):
             return None
-    return {
+    selection: dict[str, Any] = {
         "expiry_date": expiry_date,
         "legs": normalized_legs,
     }
+    entry_costs = candidate_entry_cost_identity(candidate, legs)
+    if entry_costs is not None:
+        selection["entry_costs"] = entry_costs
+    return selection
 
 
 def _strategy_leg(
     *,
     side: str,
+    quantity_ratio: float,
     instrument_id: str,
     strike_value: Any,
     price_policy: str,
@@ -3576,8 +3643,12 @@ def _strategy_leg(
         else None
     )
     currency = str(candidate.get("premium_currency") or quote or "UNKNOWN")
-    bid_amount = _optional_finite(ticker.get("best_bid_price", summary.get("bid_price")))
-    ask_amount = _optional_finite(ticker.get("best_ask_price", summary.get("ask_price")))
+    bid_amount = _optional_finite(
+        ticker.get("best_bid_price", summary.get("bid_price"))
+    )
+    ask_amount = _optional_finite(
+        ticker.get("best_ask_price", summary.get("ask_price"))
+    )
     value_as_of = observed_at or market_evidence.observed_at or evaluation_clock
 
     def quote_value(amount: float | None, kind: str) -> EconomicValue | None:
@@ -3614,7 +3685,7 @@ def _strategy_leg(
     quote_ref = f"{market_evidence.evidence_id}:{instrument_id}"
     return StrategyLeg(
         side=side,
-        quantity_ratio=1.0,
+        quantity_ratio=quantity_ratio,
         instrument_id=instrument_id,
         option_type=option_type,
         strike=EconomicValue(
@@ -3684,7 +3755,7 @@ def _bid_ask_cost(
         ask = leg.source_quote.ask
         if bid is None or ask is None or bid.currency != ask.currency:
             return None
-        spreads.append(max(0.0, ask.amount - bid.amount))
+        spreads.append(max(0.0, ask.amount - bid.amount) * leg.quantity_ratio)
         currency = bid.currency
         scale = bid.contract_scale
     if not spreads or currency is None:
@@ -3707,7 +3778,17 @@ def _migration_cost_evidence(
 ) -> dict[str, EconomicValue | None]:
     raw = candidate.get("analysis_cost_evidence")
     if not isinstance(raw, Mapping):
-        return dict.fromkeys(("fee", "slippage_reserve", "depth_impact", "legging_reserve", "hedge_reserve", "model_uncertainty_reserve", "conservative_net_edge"))
+        return dict.fromkeys(
+            (
+                "fee",
+                "slippage_reserve",
+                "depth_impact",
+                "legging_reserve",
+                "hedge_reserve",
+                "model_uncertainty_reserve",
+                "conservative_net_edge",
+            )
+        )
     result: dict[str, EconomicValue | None] = {}
     for name in (
         "fee",
@@ -3727,12 +3808,9 @@ def _migration_cost_evidence(
         kind = item.get("kind")
         product_type = item.get("product_type")
         provenance = item.get("provenance")
-        if (
-            amount is None
-            or not all(
-                isinstance(value, str) and value
-                for value in (currency, kind, product_type, provenance)
-            )
+        if amount is None or not all(
+            isinstance(value, str) and value
+            for value in (currency, kind, product_type, provenance)
         ):
             result[name] = None
             continue
@@ -3751,7 +3829,7 @@ def _migration_cost_evidence(
 def _entry_admission_decisions(
     *,
     analysis_run_id: str,
-    projection: Mapping[str, Any],
+    inputs: AnalysisInputs,
     market_evidence: EvidenceRecord,
     market_snapshot_id: str,
     opportunities: tuple[OpportunityRecord, ...],
@@ -3795,7 +3873,7 @@ def _entry_admission_decisions(
             ),
         )
     if not opportunities:
-        conditions = (
+        conditions: tuple[AdmissionCondition, ...] = (
             AdmissionCondition(
                 condition_id="snapshot_trusted",
                 observed="trusted",
@@ -3839,7 +3917,7 @@ def _entry_admission_decisions(
         conditions, veto_sources = _admission_conditions(
             opportunity=opportunity,
             strategy=strategy,
-            projection=projection,
+            inputs=inputs,
             market_evidence=market_evidence,
             account_evidence=account_evidence,
             pre_entry_risk_claim=pre_entry_risk_claim,
@@ -3912,7 +3990,7 @@ def _admission_conditions(
     *,
     opportunity: OpportunityRecord,
     strategy: StrategyPlan,
-    projection: Mapping[str, Any],
+    inputs: AnalysisInputs,
     market_evidence: EvidenceRecord,
     account_evidence: EvidenceRecord | None,
     pre_entry_risk_claim: PreEntryRiskClaim | None,
@@ -3921,610 +3999,23 @@ def _admission_conditions(
     model_bundle: ModelBundleRef,
     evaluated_at: str,
 ) -> tuple[tuple[AdmissionCondition, ...], tuple[str, ...]]:
-    data_status = projection.get("data_status") or {}
-    quality = data_status.get("quality_gate") or {}
-    feeds = data_status.get("feed_coverage") or {}
-    permission = projection.get("permission_state") or {}
-    account = projection.get("account_status") or {}
-    leg_times = [
-        _parse_timestamp(leg.source_quote.observed_at, field="leg quote observed_at")
-        for leg in strategy.legs
-        if leg.source_quote.observed_at
-    ]
-    sync_delta = (
-        (max(leg_times) - min(leg_times)).total_seconds()
-        if len(leg_times) == len(strategy.legs)
-        else None
-    )
-    quote_ages = [leg.source_quote.quote_age_seconds for leg in strategy.legs]
-    max_quote_age = (
-        max(float(item) for item in quote_ages if item is not None)
-        if all(item is not None for item in quote_ages)
-        else None
-    )
-    units_explicit = all(
-        leg.product_economics.units_explicit for leg in strategy.legs
-    )
-    settlement_explicit = all(
-        leg.product_economics.settlement_explicit for leg in strategy.legs
-    )
-    quotes_valid = all(
-        leg.source_quote.bid is not None
-        and leg.source_quote.ask is not None
-        and leg.source_quote.bid.amount > 0
-        and leg.source_quote.ask.amount >= leg.source_quote.bid.amount
-        for leg in strategy.legs
-    )
-    gaps = [
-        item
-        for item in data_status.get("adapter_events") or []
-        if isinstance(item, Mapping)
-        and any(
-            token in str(item.get("kind") or item.get("reason_code") or "").lower()
-            for token in ("gap", "resync")
-        )
-    ]
-    graph_complete = feeds.get("graph_complete")
-    no_gap_status = (
-        ConditionStatus.PASS
-        if graph_complete is True and not gaps
-        else ConditionStatus.BLOCK
-        if gaps
-        else ConditionStatus.UNKNOWN
-    )
-    model_required = opportunity.edge_class.value in policy.model_required_edge_classes
-    model_pass = not model_required or model_bundle.promoted_for
-    expired = _parse_timestamp(
-        opportunity.valid_until,
-        field="opportunity valid_until",
-    ) <= _parse_timestamp(evaluated_at, field="evaluated_at")
-    invalidated = opportunity.status is OpportunityStatus.INVALIDATED
-    costs = (
-        strategy.bid_ask_cost,
-        strategy.fee,
-        strategy.slippage_reserve,
-        strategy.depth_impact,
-        strategy.legging_reserve,
-        strategy.hedge_reserve,
-        strategy.model_uncertainty_reserve,
-    )
-    conservative_edge = strategy.conservative_net_edge
-    economic_dimensions_known = all(
-        item is not None and item.contract_scale is not None
-        for item in (*costs, conservative_edge)
-    )
-    economic_dimensions_consistent = _economic_dimensions_consistent(
-        (*costs, conservative_edge)
-    )
-    costs_nonnegative = all(
-        item is not None and item.amount >= 0 for item in costs
-    )
-    costs_known = (
-        all(item is not None for item in costs)
-        and economic_dimensions_consistent
-        and costs_nonnegative
-    )
-    total_cost = (
-        sum(float(item.amount) for item in costs if item is not None)
-        if costs_known
-        else None
-    )
-    spread_ratios = [
-        leg.source_quote.spread_ratio for leg in strategy.legs
-    ]
-    depths = [leg.source_quote.depth for leg in strategy.legs]
-    open_interests = [leg.source_quote.open_interest for leg in strategy.legs]
-    event_score = _optional_finite(
-        (permission.get("regime_scores") or {}).get("event")
-    )
-    event_clear = (
-        event_score is not None
-        and event_score <= policy.maximum_event_score
-    )
-    account_trusted = (
-        account_evidence is not None
-        and account_evidence.kind == "account_snapshot"
-        and account_evidence.state is EvidenceState.TRUSTED
-        and account_evidence.is_current_at(
-            evaluated_at,
-            max_age_seconds=policy.account_snapshot_max_age_seconds,
-        )
-    )
-    risk_evidence_trusted = (
-        pre_entry_risk_evidence is not None
-        and pre_entry_risk_evidence.state is EvidenceState.TRUSTED
-        and pre_entry_risk_evidence.is_current_at(
-            evaluated_at,
-            max_age_seconds=policy.pre_entry_risk_max_age_seconds,
-        )
-    )
-    pre_entry_risk_state = (
-        pre_entry_risk_claim.portfolio_state
-        if risk_evidence_trusted and pre_entry_risk_claim is not None
-        else PreEntryRiskState.UNKNOWN
-    )
-    exchange_health_state = (
-        pre_entry_risk_claim.exchange_health_state
-        if risk_evidence_trusted and pre_entry_risk_claim is not None
-        else ExchangeHealthState.UNKNOWN
-    )
-    portfolio_veto = (
-        pre_entry_risk_state.value in policy.pre_entry_risk_veto_states
-    )
-    exchange_blocked = (
-        exchange_health_state.value in policy.exchange_health_blocking_states
-    )
-    simulation_available = (
-        account_trusted
-        and (account.get("simulation_status") or {}).get("status") == "available"
-        and (account.get("simulation_status") or {}).get("attempted") is True
-    )
-    outside_settlement = _outside_settlement_window(evaluated_at, policy)
+    from .admission_conditions import build_admission_conditions
 
-    conditions = (
-        _condition_bool(
-            "snapshot_trusted",
-            market_evidence.state is EvidenceState.TRUSTED,
-            observed=market_evidence.state.value,
-            requirement="trusted authenticated market evidence",
-            pass_code="MARKET_EVIDENCE_TRUSTED",
-            block_code="MARKET_EVIDENCE_NOT_TRUSTED",
-        ),
-        _condition_bool(
-            "coverage_complete",
-            quality.get("passed") is True,
-            observed=str(data_status.get("status") or "missing"),
-            requirement="market quality and declared coverage pass",
-            pass_code="MARKET_COVERAGE_PASSED",
-            block_code="MARKET_COVERAGE_INCOMPLETE",
-        ),
-        _condition_numeric_max(
-            "legs_synchronized",
-            sync_delta,
-            policy.leg_sync_window_seconds,
-            reason_prefix="LEG_SYNCHRONIZATION",
-        ),
-        _condition_numeric_max(
-            "legs_fresh",
-            max_quote_age,
-            policy.quote_max_age_seconds,
-            reason_prefix="LEG_FRESHNESS",
-        ),
-        AdmissionCondition(
-            condition_id="no_gap_or_resync",
-            observed=(
-                "gap_or_resync"
-                if gaps
-                else "complete"
-                if graph_complete is True
-                else "not_observed"
-            ),
-            requirement="no gap and no resync pending",
-            status=no_gap_status,
-            reason_code=(
-                "NO_GAP_OR_RESYNC_PENDING"
-                if no_gap_status is ConditionStatus.PASS
-                else "MARKET_GAP_OR_RESYNC_PENDING"
-                if no_gap_status is ConditionStatus.BLOCK
-                else "MARKET_GAP_STATE_UNKNOWN"
-            ),
-        ),
-        _condition_bool(
-            "explicit_units",
-            units_explicit,
-            observed="explicit" if units_explicit else "unknown",
-            requirement="premium unit, product style, and contract scale explicit",
-            pass_code="PRODUCT_UNITS_EXPLICIT",
-            block_code="PRODUCT_UNIT_UNKNOWN",
-        ),
-        _condition_bool(
-            "explicit_settlement",
-            settlement_explicit,
-            observed="explicit" if settlement_explicit else "unknown",
-            requirement="venue-explicit settlement currency",
-            pass_code="SETTLEMENT_EXPLICIT",
-            block_code="SETTLEMENT_UNKNOWN",
-        ),
-        _condition_bool(
-            "quotes_valid",
-            quotes_valid,
-            observed="valid" if quotes_valid else "crossed_empty_or_missing",
-            requirement="positive non-crossed bid and ask for every leg",
-            pass_code="LEG_QUOTES_VALID",
-            block_code="LEG_QUOTES_INVALID",
-        ),
-        _condition_bool(
-            "detector_allowed",
-            f"{opportunity.detector_id}:{opportunity.detector_version}"
-            in policy.allowed_detectors,
-            observed=f"{opportunity.detector_id}:{opportunity.detector_version}",
-            requirement="detector is allowed by the policy catalog",
-            pass_code="DETECTOR_ALLOWED",
-            block_code="DETECTOR_NOT_ALLOWED",
-        ),
-        AdmissionCondition(
-            condition_id="defined_risk_policy",
-            observed=strategy.selection_role,
-            requirement="only the primary defined-risk expression may be admitted",
-            status=(
-                ConditionStatus.PASS
-                if strategy.selection_role == "primary_defined_risk_expression"
-                else ConditionStatus.BLOCK
-            ),
-            reason_code=(
-                "DEFINED_RISK_POLICY_PASSED"
-                if strategy.selection_role == "primary_defined_risk_expression"
-                else "NAKED_SHORT_RESTRICTED_COMPARISON"
-            ),
-        ),
-        _condition_bool(
-            "pricing_checks",
-            all(
-                (
-                    (projection.get("vol_surface_status") or {}).get("status")
-                    == "validated",
-                    all(
-                        item.get("fit_quality_pass") is True
-                        and item.get("no_arb_pass") is True
-                        for item in (
-                            (projection.get("vol_surface_status") or {}).get(
-                                "expiries"
-                            )
-                            or []
-                        )
-                    ),
-                )
-            ),
-            observed=str(
-                (projection.get("vol_surface_status") or {}).get("status")
-                or "missing"
-            ),
-            requirement="surface fit and no-arbitrage diagnostics pass",
-            pass_code="PRICING_CHECKS_PASSED",
-            block_code="PRICING_CHECKS_FAILED",
-        ),
-        _condition_known(
-            "fair_interval_available",
-            opportunity.fair_interval is not None,
-            observed="available" if opportunity.fair_interval else None,
-            requirement="typed fair-value interval available",
-            pass_code="FAIR_INTERVAL_AVAILABLE",
-            unknown_code="FAIR_INTERVAL_UNAVAILABLE",
-        ),
-        _condition_bool(
-            "model_promoted_if_required",
-            model_pass,
-            observed=model_bundle.promotion_status,
-            requirement=(
-                "promoted model required for E2/E3"
-                if model_required
-                else "no promoted model required for E1"
-            ),
-            pass_code="MODEL_REQUIREMENT_PASSED",
-            block_code="E3_MODEL_NOT_PROMOTED",
-        ),
-        _condition_bool(
-            "opportunity_not_expired",
-            not expired,
-            observed=opportunity.valid_until,
-            requirement=f"valid after {evaluated_at}",
-            pass_code="OPPORTUNITY_TTL_VALID",
-            block_code="OPPORTUNITY_EXPIRED",
-        ),
-        _condition_bool(
-            "invalidation_clear",
-            not invalidated,
-            observed=opportunity.status.value,
-            requirement="no invalidation condition triggered",
-            pass_code="OPPORTUNITY_INVALIDATION_CLEAR",
-            block_code="OPPORTUNITY_INVALIDATED",
-        ),
-        _condition_known(
-            "net_premium_finite",
-            strategy.net_premium is not None,
-            observed=(
-                strategy.net_premium.amount if strategy.net_premium else None
-            ),
-            requirement="finite typed net credit or debit",
-            pass_code="NET_PREMIUM_FINITE",
-            unknown_code="NET_PREMIUM_UNKNOWN",
-        ),
-        _condition_known(
-            "spread_and_fee_known",
-            strategy.bid_ask_cost is not None and strategy.fee is not None,
-            observed=(
-                "known"
-                if strategy.bid_ask_cost is not None and strategy.fee is not None
-                else None
-            ),
-            requirement="bid/ask cost and fee explicitly known",
-            pass_code="SPREAD_AND_FEE_KNOWN",
-            unknown_code="SPREAD_OR_FEE_UNKNOWN",
-        ),
-        _condition_known(
-            "slippage_reserve_known",
-            strategy.slippage_reserve is not None,
-            observed=(
-                strategy.slippage_reserve.amount
-                if strategy.slippage_reserve
-                else None
-            ),
-            requirement="slippage reserve explicitly known",
-            pass_code="SLIPPAGE_RESERVE_KNOWN",
-            unknown_code="SLIPPAGE_RESERVE_UNKNOWN",
-        ),
-        _condition_known(
-            "depth_impact_known",
-            strategy.depth_impact is not None,
-            observed=(
-                strategy.depth_impact.amount if strategy.depth_impact else None
-            ),
-            requirement="depth impact explicitly known",
-            pass_code="DEPTH_IMPACT_KNOWN",
-            unknown_code="DEPTH_IMPACT_UNKNOWN",
-        ),
-        _condition_known(
-            "legging_reserve_known",
-            strategy.legging_reserve is not None,
-            observed=(
-                strategy.legging_reserve.amount
-                if strategy.legging_reserve
-                else None
-            ),
-            requirement="legging reserve explicitly known",
-            pass_code="LEGGING_RESERVE_KNOWN",
-            unknown_code="LEGGING_RESERVE_UNKNOWN",
-        ),
-        _condition_known(
-            "hedge_reserve_known",
-            strategy.hedge_reserve is not None,
-            observed=(
-                strategy.hedge_reserve.amount
-                if strategy.hedge_reserve
-                else None
-            ),
-            requirement="hedge reserve explicitly known",
-            pass_code="HEDGE_RESERVE_KNOWN",
-            unknown_code="HEDGE_RESERVE_UNKNOWN",
-        ),
-        _condition_known(
-            "uncertainty_reserve_known",
-            strategy.model_uncertainty_reserve is not None,
-            observed=(
-                strategy.model_uncertainty_reserve.amount
-                if strategy.model_uncertainty_reserve
-                else None
-            ),
-            requirement="model uncertainty reserve explicitly known",
-            pass_code="UNCERTAINTY_RESERVE_KNOWN",
-            unknown_code="UNCERTAINTY_RESERVE_UNKNOWN",
-        ),
-        AdmissionCondition(
-            condition_id="economic_dimensions_consistent",
-            observed=(
-                "consistent"
-                if economic_dimensions_consistent
-                else "missing_or_mismatched"
-            ),
-            requirement=(
-                "edge and all cost values share currency, product type, "
-                "and contract scale"
-            ),
-            status=(
-                ConditionStatus.UNKNOWN
-                if not economic_dimensions_known
-                else ConditionStatus.PASS
-                if economic_dimensions_consistent and costs_nonnegative
-                else ConditionStatus.BLOCK
-            ),
-            reason_code=(
-                "ECONOMIC_DIMENSIONS_UNKNOWN"
-                if not economic_dimensions_known
-                else "ECONOMIC_DIMENSIONS_CONSISTENT"
-                if economic_dimensions_consistent and costs_nonnegative
-                else "ECONOMIC_COST_INVALID"
-                if economic_dimensions_consistent
-                else "ECONOMIC_DIMENSIONS_MISMATCH"
-            ),
-        ),
-        _condition_known_numeric_positive(
-            "conservative_net_edge_positive",
-            conservative_edge.amount if conservative_edge else None,
-            requirement="conservative typed net edge greater than zero",
-            pass_code="CONSERVATIVE_NET_EDGE_POSITIVE",
-            block_code="CONSERVATIVE_NET_EDGE_NONPOSITIVE",
-            unknown_code="CONSERVATIVE_NET_EDGE_UNKNOWN",
-        ),
-        _condition_known_numeric_positive(
-            "capital_at_risk_proxy_positive",
-            (
-                strategy.capital_at_risk_proxy.amount
-                if strategy.capital_at_risk_proxy
-                else None
-            ),
-            requirement="defined-risk capital-at-risk proxy greater than zero",
-            pass_code="CAPITAL_AT_RISK_PROXY_POSITIVE",
-            block_code="CAPITAL_AT_RISK_PROXY_NONPOSITIVE",
-            unknown_code="CAPITAL_AT_RISK_PROXY_UNKNOWN",
-        ),
-        _condition_known_numeric_positive(
-            "edge_to_capital_at_risk_positive",
-            strategy.edge_to_capital_at_risk,
-            requirement="conservative edge / capital-at-risk proxy greater than zero",
-            pass_code="EDGE_TO_CAPITAL_AT_RISK_POSITIVE",
-            block_code="EDGE_TO_CAPITAL_AT_RISK_NONPOSITIVE",
-            unknown_code="EDGE_TO_CAPITAL_AT_RISK_UNKNOWN",
-        ),
-        _condition_cost_coverage(
-            conservative_edge=conservative_edge,
-            total_cost=total_cost,
-            costs_known=costs_known,
-            required_ratio=policy.cost_coverage_ratio,
-        ),
-        _condition_collection_max(
-            "spread_ratio",
-            spread_ratios,
-            policy.max_spread_ratio,
-            reason_prefix="SPREAD_RATIO",
-        ),
-        _condition_collection_min(
-            "depth",
-            depths,
-            policy.minimum_depth,
-            reason_prefix="DEPTH",
-        ),
-        _condition_collection_min(
-            "open_interest",
-            open_interests,
-            policy.minimum_open_interest,
-            reason_prefix="OPEN_INTEREST",
-        ),
-        _condition_numeric_max(
-            "quote_age",
-            max_quote_age,
-            policy.quote_max_age_seconds,
-            reason_prefix="QUOTE_AGE",
-        ),
-        AdmissionCondition(
-            condition_id="research_capacity",
-            observed=strategy.research_capacity_class or "not_evaluated",
-            requirement="non-actionable research capacity class available",
-            status=(
-                ConditionStatus.PASS
-                if strategy.research_capacity_class
-                else ConditionStatus.UNKNOWN
-            ),
-            reason_code=(
-                "RESEARCH_CAPACITY_CLASS_AVAILABLE"
-                if strategy.research_capacity_class
-                else "RESEARCH_CAPACITY_NOT_EVALUATED"
-            ),
-        ),
-        _condition_bool(
-            "settlement_window",
-            outside_settlement,
-            observed="outside" if outside_settlement else "inside",
-            requirement=(
-                "outside "
-                f"{policy.settlement_window_utc[0]}-"
-                f"{policy.settlement_window_utc[1]} UTC"
-            ),
-            pass_code="OUTSIDE_SETTLEMENT_WINDOW",
-            block_code="SETTLEMENT_WINDOW_ACTIVE",
-        ),
-        AdmissionCondition(
-            condition_id="major_event_gate",
-            observed=event_score,
-            requirement=(
-                "event score observed and <= "
-                f"{policy.maximum_event_score:g}"
-            ),
-            status=(
-                ConditionStatus.UNKNOWN
-                if event_score is None
-                else ConditionStatus.PASS
-                if event_clear
-                else ConditionStatus.BLOCK
-            ),
-            reason_code=(
-                "MAJOR_EVENT_GATE_UNKNOWN"
-                if event_score is None
-                else "MAJOR_EVENT_GATE_CLEAR"
-                if event_clear
-                else "MAJOR_EVENT_GATE_BLOCKED"
-            ),
-        ),
-        AdmissionCondition(
-            condition_id="exchange_health",
-            observed=exchange_health_state.value,
-            requirement="current typed exchange-health evidence is CLEAR",
-            status=(
-                ConditionStatus.UNKNOWN
-                if exchange_health_state is ExchangeHealthState.UNKNOWN
-                else ConditionStatus.BLOCK
-                if exchange_blocked
-                else ConditionStatus.PASS
-            ),
-            reason_code=(
-                "EXCHANGE_HEALTH_UNKNOWN"
-                if exchange_health_state is ExchangeHealthState.UNKNOWN
-                else "EXCHANGE_HEALTH_BLOCKED"
-                if exchange_blocked
-                else "EXCHANGE_HEALTH_CLEAR"
-            ),
-        ),
-        _condition_bool(
-            "data_source_health",
-            market_evidence.state is EvidenceState.TRUSTED,
-            observed=market_evidence.state.value,
-            requirement="data source remains trusted",
-            pass_code="DATA_SOURCE_HEALTH_CLEAR",
-            block_code="DATA_SOURCE_DEGRADED",
-        ),
-        _condition_bool(
-            "policy_kill_switch",
-            not policy.kill_switch,
-            observed=policy.kill_switch,
-            requirement="policy kill switch is false",
-            pass_code="POLICY_KILL_SWITCH_CLEAR",
-            block_code="POLICY_KILL_SWITCH_ACTIVE",
-        ),
-        _condition_known(
-            "account_evidence",
-            account_trusted,
-            observed=(
-                account_evidence.state.value if account_evidence else None
-            ),
-            requirement="authenticated current read-only account evidence",
-            pass_code="ACCOUNT_EVIDENCE_TRUSTED",
-            unknown_code="ACCOUNT_EVIDENCE_MISSING_OR_UNTRUSTED",
-        ),
-        _condition_known(
-            "venue_margin_simulation",
-            simulation_available,
-            observed=(
-                (account.get("simulation_status") or {}).get("status")
-                if account_trusted
-                else None
-            ),
-            requirement="venue margin simulation attempted and available",
-            pass_code="VENUE_MARGIN_SIMULATION_AVAILABLE",
-            unknown_code="VENUE_MARGIN_SIMULATION_NOT_EVALUATED",
-        ),
-        AdmissionCondition(
-            condition_id="portfolio_veto",
-            observed=pre_entry_risk_state.value,
-            requirement="current pre-entry portfolio risk evidence is CLEAR",
-            status=(
-                ConditionStatus.BLOCK
-                if portfolio_veto
-                else ConditionStatus.PASS
-                if pre_entry_risk_state is PreEntryRiskState.CLEAR
-                else ConditionStatus.UNKNOWN
-            ),
-            reason_code=(
-                "PORTFOLIO_VETO_ACTIVE"
-                if portfolio_veto
-                else "PORTFOLIO_VETO_CLEAR"
-                if pre_entry_risk_state is PreEntryRiskState.CLEAR
-                else "PORTFOLIO_VETO_EVIDENCE_UNKNOWN"
-            ),
-        ),
+    return build_admission_conditions(
+        opportunity=opportunity,
+        strategy=strategy,
+        market_data=inputs.market.data.read(),
+        permission_state=inputs.market.permission.read(),
+        account_status=inputs.account.read(),
+        surface_status=inputs.market.surface.read(),
+        market_evidence=market_evidence,
+        account_evidence=account_evidence,
+        pre_entry_risk_claim=pre_entry_risk_claim,
+        pre_entry_risk_evidence=pre_entry_risk_evidence,
+        policy=policy,
+        model_bundle=model_bundle,
+        evaluated_at=evaluated_at,
     )
-    veto_sources: list[str] = []
-    if portfolio_veto:
-        veto_sources.append("PORTFOLIO_VETO_ACTIVE")
-    if policy.kill_switch:
-        veto_sources.append("POLICY_KILL_SWITCH_ACTIVE")
-    if not outside_settlement:
-        veto_sources.append("SETTLEMENT_WINDOW_ACTIVE")
-    if event_score is not None and not event_clear:
-        veto_sources.append("MAJOR_EVENT_GATE_BLOCKED")
-    if exchange_blocked:
-        veto_sources.append("EXCHANGE_HEALTH_BLOCKED")
-    if strategy.selection_role == "restricted_comparison_only":
-        veto_sources.append("NAKED_SHORT_RESTRICTED_COMPARISON")
-    return conditions, tuple(_unique_codes(veto_sources))
 
 
 def _admission_status(
@@ -4654,9 +4145,7 @@ def _domain_events(
                     "decision_id": decision.decision_id,
                     "status": decision.status.value,
                     "valid_until": decision.valid_until,
-                    "next_observable_condition": (
-                        decision.next_observable_condition
-                    ),
+                    "next_observable_condition": (decision.next_observable_condition),
                 },
             )
         )
@@ -4775,9 +4264,7 @@ def _condition_cost_coverage(
         observed=round(ratio, 9) if math.isfinite(ratio) else "infinite",
         requirement=f"conservative edge / costs >= {required_ratio:g}",
         status=ConditionStatus.PASS if passed else ConditionStatus.BLOCK,
-        reason_code=(
-            "COST_COVERAGE_PASSED" if passed else "COST_COVERAGE_FAILED"
-        ),
+        reason_code=("COST_COVERAGE_PASSED" if passed else "COST_COVERAGE_FAILED"),
     )
 
 
@@ -4859,9 +4346,7 @@ def _condition_collection_min(
         requirement=f">= {minimum:g}",
         status=ConditionStatus.PASS if passed else ConditionStatus.BLOCK,
         reason_code=(
-            f"{reason_prefix}_PASSED"
-            if passed
-            else f"{reason_prefix}_BELOW_MINIMUM"
+            f"{reason_prefix}_PASSED" if passed else f"{reason_prefix}_BELOW_MINIMUM"
         ),
     )
 

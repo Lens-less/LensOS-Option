@@ -16,7 +16,9 @@ function buildRuntime(
     getReport: vi.fn().mockResolvedValue(
       buildLoadedReport({
         report: safeResearchReport,
-        receivedAtMs: Date.parse("2026-07-25T08:00:10Z"),
+        // The ready scenario requires a fresh transport receipt. A historical
+        // receipt correctly suppresses current strategy evidence.
+        receivedAtMs: Date.now(),
       }),
     ),
     getCachedReport: vi.fn().mockResolvedValue(null),
@@ -46,6 +48,7 @@ describe("SidePanelApp safety boundary", () => {
     render(<SidePanelApp runtime={buildRuntime()} />);
 
     await screen.findByText("完整两腿");
+    expect(screen.queryByText("当前研究证据已失效")).not.toBeInTheDocument();
     expectSafetyBoundary();
     expect(screen.getByText(/风险与退出为未校准研究模板/)).toHaveTextContent(
       "NO_TRADE",

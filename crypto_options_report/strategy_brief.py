@@ -26,6 +26,8 @@ EXPECTED_DTE_BAND_DAYS = (7.0, 35.0)
 QUOTE_SYNC_MAX_SECONDS = 2.0
 QUOTE_PREMIUM_UNIT = "quote_currency"
 INVERSE_PREMIUM_UNIT = "inverse_base_currency"
+LOSS_BUDGET_BASIS = "PAYOFF_BOUND_PLUS_FROZEN_COST_BUDGET"
+COST_COMPONENTS = ("entry_fees", "slippage_reserve", "legging_reserve", "settlement_reserve")
 
 ALLOWED_ACTIONS = {ACTION_STRATEGIES_AVAILABLE, ACTION_WATCH, ACTION_NO_TRADE}
 ALLOWED_RECOMMENDATION_STATUS = {"RECOMMENDED", "WATCH"}
@@ -73,6 +75,7 @@ USER_REASON_TEXT_ZH = {
     "STRATEGY_EXPIRED": "策略已过期，等待下一次筛选",
     "KILL_CONDITION_HIT": "触发取消条件，当前不再成立",
     "MISSING_COST_COMPONENTS": "费用或滑点口径不完整，暂不推荐",
+    "COST_BUDGET_NOT_ABSOLUTE_LOSS_BOUND": "模型损失预算不保证实际交割费用上界，仅供观察",
     "MISSING_POSITIVE_TWO_SIDED_QUOTES": "关键腿缺少正的双边报价",
     "UNIT_MISMATCH": "报价、结算或风险单位不一致",
     "ONE_UNIT_ONLY": "当前简报只支持每条腿 1 张的一单位组合",
@@ -339,11 +342,17 @@ def _prepare_candidate(
     if rejection_codes:
         return None, _unique_codes(rejection_codes)
 
-    min_net_credit = _entry_credit(legs)
-    if min_net_credit <= 0:
+    costs = _cost_breakdown(candidate)
+    assert costs is not None  # The cost evidence gate above validates every amount.
+    min_net_credit = round(
+        _entry_credit(legs) - sum(costs[field] for field in COST_COMPONENTS[:3]), 6
+    )
+    if min_net_credit - costs["settlement_reserve"] <= 0:
         return None, ["NEGATIVE_EV_AFTER_COST"]
 
-    structure = _strategy_structure(structure_type, legs)
+    structure = _strategy_structure(
+        structure_type, legs, net_credit=min_net_credit - costs["settlement_reserve"]
+    )
     if structure is None:
         return None, ["UNBOUNDED_LOSS_STRUCTURE"]
 
@@ -364,6 +373,7 @@ def _prepare_candidate(
             direction=STRUCTURE_DIRECTIONS[structure_type],
             expiry_date=expiry_date,
             legs=legs,
+            entry_costs=candidate_entry_cost_identity(candidate, legs),
         ),
     )
     public_forecast_projection = {
@@ -371,11 +381,10 @@ def _prepare_candidate(
         for key, value in forecast_projection.items()
         if key != "_reason_codes"
     }
-    recommendation_status = (
-        "RECOMMENDED"
-        if history_projection["status"] == "VALIDATED" or forecast_projection["status"] == "CALIBRATED"
-        else "WATCH"
-    )
+    # A frozen reserve is a modelling budget, not proof of a venue fee cap.
+    # In particular, linear call delivery fees grow with settlement spot even
+    # when a vertical's intrinsic payoff is capped. Evidence cannot waive this.
+    recommendation_status = "WATCH"
 
     kill_conditions = _candidate_kill_conditions(candidate)[:2]
     normalized_path_risk_cvar_95 = _normalized_path_risk_cvar_95(candidate)
@@ -389,6 +398,7 @@ def _prepare_candidate(
             valid_until,
             kill_conditions,
             _settlement_currency(candidate, legs),
+            costs,
         ),
         "dte_days": expected_scope["dte_days"],
         "economics": {
@@ -400,6 +410,9 @@ def _prepare_candidate(
         "expiry_date": expiry_date,
         "entry": {
             "currency": _settlement_currency(candidate, legs),
+            "cost_model_id": candidate["cost_model_id"],
+            "cost_config_hash": candidate["cost_config_hash"],
+            "cost_breakdown": costs,
             "fees_included": bool(candidate.get("fees_included", True)),
             "minimum_net_credit": round(float(min_net_credit), 6),
             "price_basis": PRICE_BASIS,
@@ -409,7 +422,10 @@ def _prepare_candidate(
         "history": history_projection,
         "kill_conditions": kill_conditions,
         "legs": _project_legs(legs),
-        "primary_reason_codes": _primary_reason_codes(history_projection, forecast_projection),
+        "primary_reason_codes": _unique_codes([
+            "COST_BUDGET_NOT_ABSOLUTE_LOSS_BOUND",
+            *_primary_reason_codes(history_projection, forecast_projection),
+        ]),
         "rank": None,
         "recommendation_status": recommendation_status,
         "risk": {
@@ -417,6 +433,8 @@ def _prepare_candidate(
             "currency": _settlement_currency(candidate, legs),
             "cvar_95": round(float(normalized_path_risk_cvar_95 or 0.0), 6),
             "max_loss_per_unit": round(float(structure["max_loss_per_unit"]), 6),
+            "max_loss_basis": LOSS_BUDGET_BASIS,
+            "delivery_fee_upper_bound_verified": False,
             "path_risk_status": "VALIDATED",
         },
         "structure_type": structure_type,
@@ -609,6 +627,12 @@ def _validate_strategy(strategy: Mapping[str, Any], *, index: int) -> list[str]:
         errors.append("strategy.entry.minimum_net_credit must be positive")
     if entry.get("fees_included") is not True or entry.get("slippage_included") is not True:
         errors.append("strategy.entry must include frozen fees and slippage")
+    costs = _cost_breakdown(entry)
+    if costs is None or any(
+        not isinstance(entry.get(field), str) or not str(entry[field]).strip()
+        for field in ("cost_model_id", "cost_config_hash")
+    ):
+        errors.append("strategy.entry requires explicit frozen cost amounts and model identity")
     if not isinstance(entry.get("currency"), str) or not entry.get("currency"):
         errors.append("strategy.entry.currency is required")
 
@@ -618,8 +642,16 @@ def _validate_strategy(strategy: Mapping[str, Any], *, index: int) -> list[str]:
         errors.append("strategy.risk.cvar_95 must be finite and positive")
     if risk.get("path_risk_status") != "VALIDATED":
         errors.append("strategy.risk.path_risk_status must be VALIDATED")
+    if risk.get("max_loss_basis") != LOSS_BUDGET_BASIS:
+        errors.append("strategy.risk.max_loss_basis must identify the frozen cost budget")
+    if risk.get("delivery_fee_upper_bound_verified") is not False:
+        errors.append("strategy.risk.delivery_fee_upper_bound_verified must be false")
+    if strategy.get("recommendation_status") != "WATCH":
+        errors.append("strategy without a verified delivery fee upper bound must remain WATCH")
     if risk.get("currency") != entry.get("currency"):
         errors.append("strategy risk and entry currency must match")
+    if entry.get("currency") not in {"USD", "USDC"}:
+        errors.append("strategy entry currency must use the supported USD or USDC strike basis")
     breakevens = risk.get("breakevens")
     if not isinstance(breakevens, list) or not breakevens or any(
         _number(value) is None for value in breakevens
@@ -632,6 +664,10 @@ def _validate_strategy(strategy: Mapping[str, Any], *, index: int) -> list[str]:
         errors.append("strategy.economics.ev_after_cost must be positive")
     if not _is_positive_number(economics.get("net_r")):
         errors.append("strategy.economics.net_r must be positive")
+    elif _is_positive_number(risk.get("max_loss_per_unit")) and _is_positive_number(economics.get("ev_after_cost")):
+        expected_net_r = round(float(economics["ev_after_cost"]) / float(risk["max_loss_per_unit"]), 6)
+        if abs(float(economics["net_r"]) - expected_net_r) > 1e-6:
+            errors.append("strategy.economics.net_r must use the stated model loss budget")
     if not isinstance(economics.get("relative_value_status"), str) or not economics.get(
         "relative_value_status"
     ):
@@ -678,15 +714,22 @@ def _validate_strategy(strategy: Mapping[str, Any], *, index: int) -> list[str]:
             if not _strategy_grammar_matches(str(structure_type), normalized_legs):
                 errors.append("strategy legs do not form the declared defined-risk structure")
             else:
-                derived = _strategy_structure(str(structure_type), normalized_legs)
+                entry_credit = _number(entry.get("minimum_net_credit"))
+                model_credit = (
+                    entry_credit - costs["settlement_reserve"]
+                    if costs is not None and entry_credit is not None else None
+                )
+                derived = _strategy_structure(
+                    str(structure_type), normalized_legs, net_credit=model_credit
+                )
                 if derived is None:
                     errors.append("strategy structure must have bounded positive max loss")
                 else:
-                    if abs(
+                    if costs is not None and abs(
                         float(entry.get("minimum_net_credit") or 0.0)
-                        - _entry_credit(normalized_legs)
+                        - (_entry_credit(normalized_legs) - sum(costs[field] for field in COST_COMPONENTS[:3]))
                     ) > 1e-6:
-                        errors.append("strategy entry credit must equal short bid minus long ask")
+                        errors.append("strategy net entry credit must deduct frozen entry costs from exact quotes")
                     if abs(
                         float(risk.get("max_loss_per_unit") or 0.0)
                         - float(derived["max_loss_per_unit"])
@@ -694,6 +737,8 @@ def _validate_strategy(strategy: Mapping[str, Any], *, index: int) -> list[str]:
                         errors.append("strategy max loss must match exact legs and entry")
                     if expiry_date != derived["expiry_date"]:
                         errors.append("strategy expiry_date must match every leg")
+                    if breakevens != derived["breakevens"]:
+                        errors.append("strategy breakevens must match exact legs and frozen costs")
 
     expected_scope = None
     if as_of is not None and expiry is not None and structure_type in STRUCTURE_LABELS:
@@ -761,7 +806,9 @@ def _validate_strategy(strategy: Mapping[str, Any], *, index: int) -> list[str]:
         marker not in copy_recipe
         for marker in (
             "MIN NET CREDIT:",
-            "MAX LOSS PER UNIT:",
+            "MODELLED LOSS BUDGET PER UNIT:",
+            "FROZEN COSTS:",
+            "DELIVERY FEE UPPER BOUND: UNVERIFIED",
             "VALID UNTIL:",
             "CANCEL IF:",
             "RESEARCH_ONLY / MANUAL REVIEW REQUIRED",
@@ -813,7 +860,7 @@ def _build_evidence_summary(
     if recommended_count:
         summary_zh = f"当前有 {recommended_count} 个有限风险策略通过推荐门槛。"
     elif watch_count:
-        summary_zh = f"当前有 {watch_count} 个有限风险策略值得观察，历史或预测证据仍在积累。"
+        summary_zh = f"当前有 {watch_count} 个策略可供观察；模型损失预算不保证实际交割费用上界。"
     else:
         summary_zh = "当前没有通过全部硬门禁的有限风险策略。"
     primary_reason_codes = (
@@ -883,6 +930,7 @@ def _copy_recipe(
     valid_until: datetime,
     kill_conditions: Sequence[str],
     currency: str,
+    costs: Mapping[str, float],
 ) -> str:
     label = STRUCTURE_LABELS[structure_type]
     lines = [f"STRATEGY: {label}"]
@@ -890,9 +938,17 @@ def _copy_recipe(
         prefix = "SELL" if leg["side"] == "SELL" else "BUY "
         lines.append(f"{prefix} 1 {leg['instrument_name']}")
     lines.append(f"MIN NET CREDIT: {_format_amount(minimum_net_credit)} {currency}")
-    lines.append(f"MAX LOSS PER UNIT: {_format_amount(max_loss)} {currency}")
+    lines.append(f"MODELLED LOSS BUDGET PER UNIT: {_format_amount(max_loss)} {currency}")
+    lines.append(
+        "FROZEN COSTS: "
+        + " / ".join(
+            f"{label} {_format_amount(costs[field])} {currency}"
+            for field, label in zip(COST_COMPONENTS, ("ENTRY FEES", "SLIPPAGE", "LEGGING", "SETTLEMENT RESERVE"), strict=True)
+        )
+    )
+    lines.append("DELIVERY FEE UPPER BOUND: UNVERIFIED; ACTUAL LOSS MAY EXCEED BUDGET")
     lines.append(f"VALID UNTIL: {_format_timestamp(valid_until)}")
-    lines.append(f"CANCEL IF: {'; '.join(kill_conditions)}")
+    lines.append(f"CANCEL IF: {'; '.join(kill_conditions)}; frozen costs or quoted prices change")
     lines.append("RESEARCH_ONLY / MANUAL REVIEW REQUIRED")
     return "\n".join(lines)
 
@@ -954,6 +1010,13 @@ def _normalize_legs(
             return [], "UNSUPPORTED_STRUCTURE"
         if abs(quantity) != 1.0:
             return [], "ONE_UNIT_ONLY"
+        # The v1 brief publishes a one-underlying-unit payoff and does not
+        # carry a contract multiplier. Never silently flatten a larger or
+        # fractional contract into that unit when projecting its exact legs.
+        for source in (candidate, raw_leg):
+            for field in ("contract_size", "contract_scale"):
+                if field in source and _number(source[field]) != 1.0:
+                    return [], "UNIT_MISMATCH"
         premium_unit = str(raw_leg.get("premium_unit") or candidate.get("premium_unit") or "").strip().lower()
         if premium_unit != QUOTE_PREMIUM_UNIT:
             return [], "UNIT_MISMATCH"
@@ -1039,18 +1102,21 @@ def _strategy_grammar_matches(structure_type: str, legs: Sequence[Mapping[str, A
             and calls[1]["side"] == "BUY"
             and puts[0]["strike"] > puts[1]["strike"]
             and calls[0]["strike"] < calls[1]["strike"]
+            and puts[0]["strike"] < calls[0]["strike"]
         )
     return False
 
 
-def _strategy_structure(structure_type: str, legs: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+def _strategy_structure(
+    structure_type: str, legs: Sequence[Mapping[str, Any]], *, net_credit: float | None = None
+) -> dict[str, Any] | None:
     if structure_type in {"BEAR_CALL_CREDIT_SPREAD", "BULL_PUT_CREDIT_SPREAD"}:
         short_leg = next((leg for leg in legs if leg["side"] == "SELL"), None)
         long_leg = next((leg for leg in legs if leg["side"] == "BUY"), None)
         if short_leg is None or long_leg is None:
             return None
         width = abs(long_leg["strike"] - short_leg["strike"])
-        credit = _entry_credit(legs)
+        credit = _entry_credit(legs) if net_credit is None else net_credit
         if width <= 0 or credit <= 0:
             return None
         if structure_type == "BEAR_CALL_CREDIT_SPREAD" and not short_leg["strike"] < long_leg["strike"]:
@@ -1073,12 +1139,17 @@ def _strategy_structure(structure_type: str, legs: Sequence[Mapping[str, Any]]) 
         long_call = next((leg for leg in calls if leg["side"] == "BUY"), None)
         if any(item is None for item in (short_put, long_put, short_call, long_call)):
             return None
-        if not (short_put["strike"] > long_put["strike"] and short_call["strike"] < long_call["strike"]):
+        if not (
+            long_put["strike"] < short_put["strike"]
+            < short_call["strike"] < long_call["strike"]
+        ):
             return None
         put_width = short_put["strike"] - long_put["strike"]
         call_width = long_call["strike"] - short_call["strike"]
         width = max(put_width, call_width)
-        credit = _entry_credit(legs)
+        credit = _entry_credit(legs) if net_credit is None else net_credit
+        if credit <= 0:
+            return None
         max_loss = round(width - credit, 6)
         if max_loss <= 0:
             return None
@@ -1149,9 +1220,60 @@ def _cost_evidence_failures(candidate: Mapping[str, Any]) -> list[str]:
     )
     if any(candidate.get(field) is not True for field in required_flags):
         return ["MISSING_COST_COMPONENTS"]
-    if not candidate.get("cost_model_id") or not candidate.get("cost_config_hash"):
+    if any(
+        not isinstance(candidate.get(field), str) or not str(candidate[field]).strip()
+        for field in ("cost_model_id", "cost_config_hash")
+    ):
+        return ["MISSING_COST_COMPONENTS"]
+    if _cost_breakdown(candidate) is None:
         return ["MISSING_COST_COMPONENTS"]
     return []
+
+
+def _cost_breakdown(source: Mapping[str, Any]) -> dict[str, float] | None:
+    raw = source.get("cost_breakdown")
+    if not isinstance(raw, Mapping):
+        return None
+    values = {field: _number(raw.get(field)) for field in COST_COMPONENTS}
+    if any(value is None or value < 0 for value in values.values()):
+        return None
+    return {field: float(values[field]) for field in COST_COMPONENTS}
+
+
+def candidate_entry_cost_identity(
+    candidate: Mapping[str, Any], legs: Sequence[Mapping[str, Any]]
+) -> dict[str, Any] | None:
+    """Bind one exact quoted selection to its frozen entry-cost economics."""
+    costs = _cost_breakdown(candidate)
+    if costs is None:
+        return None
+    for field in ("cost_model_id", "cost_config_hash", "settlement_currency"):
+        if not isinstance(candidate.get(field), str) or not str(candidate[field]).strip():
+            return None
+    gross_credit = 0.0
+    for leg in legs:
+        quantity = _number(leg.get("signed_quantity", leg.get("quantity")))
+        if quantity is None or abs(quantity) != 1.0:
+            return None
+        if leg.get("side") == "SELL":
+            quantity = -abs(quantity)
+        side_field = "bid" if quantity < 0 else "ask"
+        price = _number(leg.get(f"market_{side_field}", leg.get(side_field)))
+        if price is None or price <= 0:
+            return None
+        gross_credit -= quantity * price
+    minimum_net_credit = round(
+        round(gross_credit, 6) - sum(costs[field] for field in COST_COMPONENTS[:3]), 6
+    )
+    if minimum_net_credit <= 0:
+        return None
+    return {
+        "cost_model_id": candidate["cost_model_id"],
+        "cost_config_hash": candidate["cost_config_hash"],
+        "minimum_net_credit": round(minimum_net_credit, 6),
+        "currency": str(candidate["settlement_currency"]).strip().upper(),
+        "cost_breakdown": dict(costs),
+    }
 
 
 def _unit_evidence_failures(
@@ -1178,6 +1300,11 @@ def _unit_evidence_failures(
     if any(not candidate.get(field) for field in required_currency_fields):
         return ["UNIT_MISMATCH"]
     if len(currencies) != 1:
+        return ["UNIT_MISMATCH"]
+    # This BTC brief expresses strikes in USD and supports only its USD
+    # research quotes / USDC linear settlement. A coin premium cannot be
+    # subtracted from a dollar strike width merely by relabelling its unit.
+    if not currencies.issubset({"USD", "USDC"}):
         return ["UNIT_MISMATCH"]
     return []
 
@@ -1439,7 +1566,10 @@ def _expected_selection_binding_key(
     direction: str,
     expiry_date: str,
     legs: Sequence[Mapping[str, Any]],
+    entry_costs: Mapping[str, Any] | None,
 ) -> str | None:
+    if entry_costs is None:
+        return None
     scope = {
         "underlying": "BTC",
         "structure": structure_type,
@@ -1449,6 +1579,7 @@ def _expected_selection_binding_key(
         "exit_basis": "hold_to_expiry_cash_settlement",
         "selection": {
             "expiry_date": expiry_date,
+            "entry_costs": dict(entry_costs),
             "legs": [
                 {
                     "instrument_name": leg.get("instrument_name"),
@@ -1518,7 +1649,10 @@ def _unique_codes(values: Sequence[str]) -> list[str]:
 def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
     if number != number or number in {float("inf"), float("-inf")}:
         return None
     return number

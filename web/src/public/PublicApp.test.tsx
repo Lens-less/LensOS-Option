@@ -6,6 +6,7 @@ import { safeResearchReport } from "../report/testFixtures";
 import publicStyles from "../styles.css?raw";
 import { PublicApp } from "./PublicApp";
 import { loadPublicReport } from "./loadPublicReport";
+import { ReportLoadError } from "../transport/requestJson";
 
 vi.mock("./loadPublicReport", () => ({
   loadPublicReport: vi.fn(),
@@ -49,6 +50,33 @@ describe("PublicApp static paths and lifecycle refresh", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "RESEARCH_ONLY · NO_TRADE",
     );
+  });
+
+  it.each([
+    ["network", "无法连接研究服务"],
+    ["timeout", "读取研究数据超时"],
+    ["invalid", "报告校验失败"],
+  ] as const)("explains a %s failure and recovers after retry", async (kind, title) => {
+    vi.mocked(loadPublicReport).mockRejectedValueOnce(new ReportLoadError(kind));
+    render(<PublicApp />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(title);
+    fireEvent.click(screen.getByRole("button", { name: "重新读取静态快照" }));
+    expect(await screen.findByRole("link", { name: "原始 JSON" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("restores a failed public evidence region after reloading a valid snapshot", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(loadPublicReport).mockResolvedValueOnce({
+      ...loadedPublicReport(),
+      report: { ...safeResearchReport, vrp_status: { series: {} } } as unknown as typeof safeResearchReport,
+    });
+    render(<PublicApp />);
+    expect(await screen.findByRole("alert", { name: "公开证据视图" })).toHaveTextContent("研究数据不可用");
+    fireEvent.click(screen.getByRole("button", { name: "重试此区域" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByRole("link", { name: "原始 JSON" })).toBeInTheDocument();
+    expect(loadPublicReport).toHaveBeenCalledTimes(2);
   });
 
   it("resolves the raw JSON beside both the root page and an immutable edition", async () => {

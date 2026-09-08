@@ -15,7 +15,7 @@ from pathlib import Path
 from .api import ResearchHTTPServer, ResearchReportHandler, RuntimeConfig
 
 DEMO_HOST = "127.0.0.1"
-DEMO_URL_PATH = "/index.html?view=workbench"
+DEMO_URL_PATH = "/index.html?view=demo"
 DEMO_SNAPSHOT_RESOURCE = "demo-snapshot.json"
 DEMO_UNDERLYING_RESOURCE = "demo-underlying-history.json"
 DEMO_SIGNAL_RESOURCE = "demo-signal-preflight.json"

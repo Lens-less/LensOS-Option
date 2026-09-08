@@ -110,8 +110,11 @@ export function MarketBrief({
     displayState === "available" && facts.underlyingPrice !== null;
   const candidateTotal =
     (facts.nakedCandidates ?? 0) + (facts.spreadCandidates ?? 0);
+  const isPublished = report.runtime_context?.mode === "published";
   const narrative = displayState === "stale"
-    ? "这版公开稿已超过发布时效上限；所有当前市场数字视图已统一收起，等待下一版发布。"
+    ? isPublished
+      ? "这版公开稿已超过发布时效上限；所有当前市场数字视图已统一收起，等待下一版发布。"
+      : "市场快照已超过时效上限；当前行情与候选数字已收起，请刷新报告取得新快照。"
     : !hasMarketEvidence
       ? "当前没有可验证的市场快照；价格、DVOL、曲面与候选不会被估算或补齐。"
     : `${facts.validQuotes ?? "—"} 条报价通过质量门；${
@@ -146,7 +149,7 @@ export function MarketBrief({
             <strong className="market-state-title">市场数据当前不可发布</strong>
           ) : null}
           {displayState === "stale" ? (
-            <strong className="market-state-title">发布已停摆</strong>
+            <strong className="market-state-title">{isPublished ? "发布已停摆" : "市场证据已失效"}</strong>
           ) : null}
           <div className="underlying-price" data-available={hasMarketEvidence}>
             {hasMarketEvidence ? formatUsd(facts.underlyingPrice) : "—"}

@@ -20,7 +20,7 @@ from .empirical_rank import vrp_band_for_percentile
 from .full_surface import build_release_gates, validate_full_system_surface_report
 from .market_data import load_snapshot_fixture, load_underlying_history_fixture
 from .og_card import render_og_card, validate_og_card_png
-from .public_api_contract import build_public_openapi
+from .public_api_contract import build_public_openapi, validate_public_projection
 from .public_bundle_policy import forbidden_bundle_tokens
 from .public_origin import validate_public_site_origin
 from .public_status_page import render_public_status_html
@@ -193,6 +193,19 @@ _SIGNAL_MEASUREMENT_FIELDS = {
     "raw_information_coefficient",
     "reason_code",
     "status",
+}
+_SIGNAL_COLLINEARITY_FIELDS = {
+    "method",
+    "equivalence_threshold",
+    "pairs",
+    "rank_equivalent_pairs",
+    "distinct_signal_estimate",
+    "note",
+}
+_SIGNAL_COLLINEARITY_PAIR_FIELDS = {
+    "signals",
+    "mean_rank_correlation",
+    "measured_date_count",
 }
 _SIGNAL_BAND_FIELDS = {
     "cohorts_required",
@@ -425,6 +438,10 @@ def _load_manifest_verification(out_path: Path, manifest: dict[str, Any]) -> dic
 
 
 def _infer_numeric_unit(field_name: str) -> str | None:
+    if field_name in {
+        "percentile", "coverage", "coverage_ratio", "win_rate", "expired_itm_rate", "positive_share",
+    }:
+        return "fraction_0_1"
     if field_name.endswith("_percent") or field_name.endswith("_rate"):
         return "percent"
     if field_name.endswith("_days"):
@@ -433,8 +450,6 @@ def _infer_numeric_unit(field_name: str) -> str | None:
         return "count"
     if field_name.endswith("_usdc") or field_name.endswith("_usd"):
         return "currency"
-    if field_name in {"percentile", "coverage", "coverage_ratio", "win_rate", "positive_share"}:
-        return "fraction_0_1"
     if field_name == "threshold":
         return "scalar"
     return None
@@ -486,6 +501,44 @@ def _project_expiry_exclusions(value: Any, *, field: str) -> list[dict[str, Any]
     return projected
 
 
+def _project_signal_collinearity(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("publication blocked: collinearity must be an object")
+    unexpected = sorted(set(value) - _SIGNAL_COLLINEARITY_FIELDS)
+    if unexpected:
+        raise ValueError(
+            f"publication blocked: unapproved public field collinearity.{unexpected[0]}"
+        )
+    projected = {
+        field: value[field]
+        for field in sorted(value)
+        if field not in {"pairs", "rank_equivalent_pairs"}
+    }
+    for field in ("pairs", "rank_equivalent_pairs"):
+        if field not in value:
+            continue
+        rows = value[field]
+        if not isinstance(rows, list):
+            raise ValueError(f"publication blocked: collinearity.{field} must be an array")
+        pairs = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"publication blocked: collinearity.{field} entries must be objects"
+                )
+            unexpected_pair = sorted(set(row) - _SIGNAL_COLLINEARITY_PAIR_FIELDS)
+            if unexpected_pair:
+                raise ValueError(
+                    "publication blocked: unapproved public field "
+                    f"collinearity.{field}.{unexpected_pair[0]}"
+                )
+            pairs.append({key: row[key] for key in sorted(row)})
+        projected[field] = pairs
+    return _annotate_numeric_field_evidence(
+        projected, evidence_class="research_signal_artifact",
+    )
+
+
 def _project_signal_artifact(value: dict[str, Any]) -> dict[str, Any]:
     projected: dict[str, Any] = {}
     for field in (
@@ -504,6 +557,10 @@ def _project_signal_artifact(value: dict[str, Any]) -> dict[str, Any]:
             projected[field] = value.get(field)
     if "reason_codes" in value:
         projected["reason_codes"] = list(value.get("reason_codes") or [])
+    if "cannot_tell" in value:
+        projected["cannot_tell"] = value["cannot_tell"]
+    if "collinearity" in value:
+        projected["collinearity"] = _project_signal_collinearity(value["collinearity"])
     if "config" in value:
         config = dict(value.get("config") or {})
         unexpected = sorted(set(config) - _SIGNAL_CONFIG_FIELDS)
@@ -716,6 +773,8 @@ def _project_signal_artifact(value: dict[str, Any]) -> dict[str, Any]:
             "bands",
             "cohorts",
             "reason_codes",
+            "cannot_tell",
+            "collinearity",
             "config",
             "sample",
             "signals",
@@ -1238,6 +1297,21 @@ def _write_publication_outputs(
             "status": status_payload,
         }
     )
+    recent_thermo, yearly_thermo = _split_thermo_series(thermo)
+    # Validate the complete batch before copying the bundle or writing any
+    # public data. The contract is fixed; empty shards do not require samples.
+    openapi = build_public_openapi(
+        summary=summary,
+        thermo=thermo,
+        thermo_recent=recent_thermo,
+        thermo_years=list(yearly_thermo.values()),
+        candidates=candidates,
+        signal=signal,
+        health=health,
+        research_report=public_report,
+        research_signal=public_signal_artifact,
+        research_series=public_series_artifact,
+    )
     if copy_bundle:
         _copy_web_bundle(
             build_root,
@@ -1245,41 +1319,18 @@ def _write_publication_outputs(
             summary=summary,
             site_origin=site_origin,
         )
-    _write_json(out_path / "research" / "report", public_report)
-    _write_json(out_path / "research" / "signal", public_signal_artifact)
-    _write_json(out_path / "research" / "series", public_series_artifact)
-    _write_json(out_path / "api" / "v1" / "summary.json", summary)
-    _write_json(out_path / "api" / "v1" / "thermo.json", thermo)
-    recent_thermo, yearly_thermo = _split_thermo_series(thermo)
-    _write_json(out_path / "api" / "v1" / "thermo" / "recent.json", recent_thermo)
+    _write_public_json("ResearchReport", out_path / "research" / "report", public_report)
+    _write_public_json("ResearchSignal", out_path / "research" / "signal", public_signal_artifact)
+    _write_public_json("ResearchSeries", out_path / "research" / "series", public_series_artifact)
+    _write_public_json("Summary", out_path / "api" / "v1" / "summary.json", summary)
+    _write_public_json("Thermo", out_path / "api" / "v1" / "thermo.json", thermo)
+    _write_public_json("ThermoRecent", out_path / "api" / "v1" / "thermo" / "recent.json", recent_thermo)
     for year, payload in yearly_thermo.items():
-        _write_json(out_path / "api" / "v1" / "thermo" / "by-year" / f"{year}.json", payload)
-    _write_json(out_path / "api" / "v1" / "candidates.json", candidates)
-    _write_json(out_path / "api" / "v1" / "signal.json", signal)
-    _write_json(out_path / "api" / "v1" / "health.json", health)
-    _write_json(
-        out_path / "api" / "openapi.json",
-        build_public_openapi(
-            summary=summary,
-            thermo=thermo,
-            thermo_recent=recent_thermo,
-            thermo_years=list(yearly_thermo.values())
-            or [
-                {
-                    **thermo,
-                    "series": [],
-                    "series_window": "calendar_year",
-                    "series_year": edition_slug[:4],
-                }
-            ],
-            candidates=candidates,
-            signal=signal,
-            health=health,
-            research_report=public_report,
-            research_signal=public_signal_artifact,
-            research_series=public_series_artifact,
-        ),
-    )
+        _write_public_json("ThermoYear", out_path / "api" / "v1" / "thermo" / "by-year" / f"{year}.json", payload)
+    _write_public_json("Candidates", out_path / "api" / "v1" / "candidates.json", candidates)
+    _write_public_json("Signal", out_path / "api" / "v1" / "signal.json", signal)
+    _write_public_json("Health", out_path / "api" / "v1" / "health.json", health)
+    _write_json(out_path / "api" / "openapi.json", openapi)
     _write_text(out_path / "_headers", _headers_text())
     _write_text(out_path / "robots.txt", _build_robots_txt(site_origin=site_origin))
     _write_text(
@@ -1540,8 +1591,8 @@ def publish_site(
         publication_inputs=publication_inputs,
         build_root=build_root,
     )
-    _write_json(out_path / ".well-known" / "publish-manifest.json", manifest)
-    _write_json(out_path / "api" / "v1" / "manifest.json", manifest)
+    _write_public_json("Manifest", out_path / ".well-known" / "publish-manifest.json", manifest)
+    _write_public_json("Manifest", out_path / "api" / "v1" / "manifest.json", manifest)
     _ensure_publication_privacy(out_path)
     manifest_verification = _load_manifest_verification(out_path, manifest)
 
@@ -1592,8 +1643,8 @@ def publish_site(
         publication_inputs=publication_inputs,
         build_root=build_root,
     )
-    _write_json(out_path / ".well-known" / "publish-manifest.json", manifest)
-    _write_json(out_path / "api" / "v1" / "manifest.json", manifest)
+    _write_public_json("Manifest", out_path / ".well-known" / "publish-manifest.json", manifest)
+    _write_public_json("Manifest", out_path / "api" / "v1" / "manifest.json", manifest)
     _ensure_publication_privacy(out_path)
     manifest_verification = _load_manifest_verification(out_path, manifest)
     if manifest_verification["status"] != "verified":
@@ -1607,7 +1658,7 @@ def publish_site(
         publication_history=public_publication_history,
     )
     status_payload = _build_status(report=public_report, health=health)
-    _write_json(out_path / "api" / "v1" / "health.json", health)
+    _write_public_json("Health", out_path / "api" / "v1" / "health.json", health)
     _write_status_pages(out_path, status_payload)
     manifest = _build_manifest(
         out_path=out_path,
@@ -1616,8 +1667,8 @@ def publish_site(
         publication_inputs=publication_inputs,
         build_root=build_root,
     )
-    _write_json(out_path / ".well-known" / "publish-manifest.json", manifest)
-    _write_json(out_path / "api" / "v1" / "manifest.json", manifest)
+    _write_public_json("Manifest", out_path / ".well-known" / "publish-manifest.json", manifest)
+    _write_public_json("Manifest", out_path / "api" / "v1" / "manifest.json", manifest)
     _ensure_publication_privacy(out_path)
     _write_edition_archive(
         out_path,
@@ -1632,8 +1683,8 @@ def publish_site(
         publication_inputs=publication_inputs,
         build_root=build_root,
     )
-    _write_json(out_path / ".well-known" / "publish-manifest.json", manifest)
-    _write_json(out_path / "api" / "v1" / "manifest.json", manifest)
+    _write_public_json("Manifest", out_path / ".well-known" / "publish-manifest.json", manifest)
+    _write_public_json("Manifest", out_path / "api" / "v1" / "manifest.json", manifest)
     _ensure_publication_privacy(out_path)
     manifest_verification = _load_manifest_verification(out_path, manifest)
     if manifest_verification["status"] != "verified":
@@ -3189,6 +3240,12 @@ def _require_file(path: str, *, label: str) -> str:
     if not resolved.is_file():
         raise ValueError(f"{label} not found")
     return str(resolved)
+
+
+def _write_public_json(component: str, path: Path, payload: dict[str, Any]) -> None:
+    """Keep every revision, including final health and manifests, contractual."""
+    validate_public_projection(component, payload)
+    _write_json(path, payload)
 
 
 def _write_json(path: Path, payload: Any) -> None:

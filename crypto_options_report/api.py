@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import hmac
 import http.client
 import ipaddress
@@ -57,12 +58,15 @@ from .market_data import (
 )
 from .public_status_page import render_public_status_html
 from .sidecar_auth import (
+    ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV,
+    MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV,
+    SIDECAR_AUTH_KEY_BYTES,
     authenticate_sidecar_payload,
     authenticated_projection,
     is_authenticated_sidecar_payload,
     sidecar_auth_state_path,
 )
-from .storage import read_json_object_from_regular_file
+from .storage import read_json_object_from_regular_file, read_regular_file_bytes
 
 REPORT_PATH = "/research/report"
 STRATEGY_BRIEF_PATH = "/strategy/brief"
@@ -436,7 +440,13 @@ class ResearchHTTPServer(ThreadingHTTPServer):
         finally:
             super().server_close()
 
-    def process_request(self, request: socket.socket, client_address: Any) -> None:
+    def process_request(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: Any,
+    ) -> None:
+        if not isinstance(request, socket.socket):
+            raise TypeError("research HTTP server requires a TCP connection")
         if not self._worker_slots.acquire(blocking=False):
             self._reject_overloaded(request, client_address)
             self.shutdown_request(request)
@@ -447,7 +457,11 @@ class ResearchHTTPServer(ThreadingHTTPServer):
             self._worker_slots.release()
             raise
 
-    def process_request_thread(self, request: socket.socket, client_address: Any) -> None:
+    def process_request_thread(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: Any,
+    ) -> None:
         try:
             super().process_request_thread(request, client_address)
         finally:
@@ -657,6 +671,7 @@ def build_api_report(
 
 
 class ResearchReportHandler(BaseHTTPRequestHandler):
+    server: ResearchHTTPServer
     server_version = "CryptoOptionsResearch"
     sys_version = ""
 
@@ -1166,7 +1181,7 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         self._request_body_consumed = True
         try:
             value = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise _RequestContractError(
                 HTTPStatus.BAD_REQUEST,
                 "request body must be valid UTF-8 JSON",
@@ -1254,15 +1269,18 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         expected = getattr(self.server, "expected_bearer_authorization", None)
         if expected is None:
             return True
-        provided = authorization_values[0] if authorization_values else None
-        return isinstance(provided, str) and hmac.compare_digest(provided, expected)
+        return self._request_has_valid_bearer(authorization_values)
 
     def _request_has_valid_bearer(self, authorization_values: list[str]) -> bool:
         expected = getattr(self.server, "expected_bearer_authorization", None)
         if expected is None:
             return False
         provided = authorization_values[0] if authorization_values else None
-        return isinstance(provided, str) and hmac.compare_digest(provided, expected)
+        return (
+            isinstance(provided, str)
+            and provided.isascii()
+            and hmac.compare_digest(provided, expected)
+        )
 
     def _log_access(self, status: HTTPStatus) -> None:
         if not self._runtime().access_logging:
@@ -1368,7 +1386,7 @@ def public_license_asset(name: str) -> bytes:
     for package_file in package_files:
         if package_file.name != name:
             continue
-        return distribution.locate_file(package_file).read_bytes()
+        return package_file.read_binary()
     return Path(__file__).resolve().parent.parent.joinpath(name).read_bytes()
 
 
@@ -1842,23 +1860,28 @@ def _payload_for_path(
         )
     if path == STRATEGY_BRIEF_PATH:
         return record.project_strategy_brief_v1()
-    if path == "/market/chain":
-        return report["data_status"]
-    if path == "/surface":
-        return report["vol_surface_status"]
-    if path == "/regime":
-        return report["permission_state"]
-    if path == "/account/risk":
-        return report["account_status"]
-    if path == "/portfolio/risk":
-        return report["portfolio_risk"]
-    if path == "/candidates":
-        return report["ev_candidate_scanner"]
+    projection_field = {
+        "/market/chain": "data_status",
+        "/surface": "vol_surface_status",
+        "/regime": "permission_state",
+        "/account/risk": "account_status",
+        "/portfolio/risk": "portfolio_risk",
+        "/candidates": "ev_candidate_scanner",
+    }.get(path)
+    if projection_field is not None:
+        return _require_json_object(report.get(projection_field), description=projection_field)
     if path == "/recommendation":
         return build_recommendation_projection(report)
     if path == "/dashboard":
-        return report["full_system_surface"]["dashboard"]
+        surface = _require_json_object(report.get("full_system_surface"), description="full_system_surface")
+        return _require_json_object(surface.get("dashboard"), description="dashboard")
     raise ValueError(f"unsupported path: {path}")
+
+
+def _require_json_object(value: object, *, description: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{description} must be a JSON object")
+    return value
 
 
 def _served_artifact(
@@ -1886,13 +1909,63 @@ def _served_artifact(
             ),
         }
     try:
-        return read_json_object_from_regular_file(
+        payload = read_json_object_from_regular_file(
             path,
             max_bytes=MAX_MARKET_SNAPSHOT_BYTES,
             description=f"{name} artifact",
         )
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise ValueError(f"{name} artifact could not be read: {exc}") from exc
+    return _validated_research_artifact(payload, name=name)
+
+
+def _validated_research_artifact(payload: dict[str, Any], *, name: str) -> dict[str, Any]:
+    """Use the existing allowlisted contracts before serving operator evidence."""
+    from .public_api_contract import validate_public_projection
+    from .publication import _project_series_artifact, _project_signal_artifact
+
+    if payload.get("research_only") is not True:
+        raise ValueError(f"{name} artifact must declare research_only=true")
+    try:
+        pending: list[object] = [payload]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                if {"execution_allowed", "manual_execution_allowed", "order_instruction", "order_instructions", "recommended_size"}.intersection(value):
+                    raise ValueError("execution fields are not research artifacts")
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+        if name == "signal":
+            projected = _project_signal_artifact(payload)
+            component = "ResearchSignal"
+        elif name == "series":
+            projected = _project_series_artifact(payload)
+            component = "ResearchSeries"
+        else:
+            raise ValueError("unsupported research artifact")
+        # Projection supplies nullable fields omitted by valid blocked producers.
+        # Overlay the exact source values before validation so coercions cannot
+        # hide malformed input, and retain source-only exclusion evidence.
+        validate_public_projection(component, _artifact_validation_input(payload, projected))
+    except (AttributeError, TypeError, ValueError, RecursionError) as exc:
+        # Do not echo malformed values from an operator file into the response.
+        raise ValueError(f"{name} artifact failed research contract validation") from exc
+    return payload
+
+
+def _artifact_validation_input(source: object, projected: object) -> object:
+    if isinstance(source, dict) and isinstance(projected, dict):
+        result = dict(projected)
+        for key, value in source.items():
+            result[key] = _artifact_validation_input(value, projected.get(key))
+        return result
+    if isinstance(source, list) and isinstance(projected, list):
+        return [
+            _artifact_validation_input(value, projected[index] if index < len(projected) else None)
+            for index, value in enumerate(source)
+        ]
+    return source
 
 
 def _report_from_query(
@@ -2031,7 +2104,46 @@ def _analysis_cache_identity(options: dict[str, Any]) -> dict[str, Any]:
     return {
         "options": options,
         "local_artifacts": [_path_version(path) for path in paths],
+        # This identity only keys the server's private in-memory cache. Key
+        # fingerprints must never enter the build options, manifest or output.
+        # Both domains matter because aliasing either key invalidates trust.
+        "trust_dependencies": (
+            [
+                _sidecar_key_cache_identity(ACCOUNT_SIDECAR_AUTH_KEY_FILE_ENV),
+                _sidecar_key_cache_identity(MARKET_SNAPSHOT_HMAC_KEY_FILE_ENV),
+            ]
+            if snapshot_fixture or account_fixture
+            else []
+        ),
     }
+
+
+def _sidecar_key_cache_identity(environment: str) -> dict[str, Any]:
+    """Detect revocation and same-size key rotation without retaining key bytes."""
+    configured = os.environ.get(environment)
+    if not configured:
+        return {"environment": environment, "configured": False}
+    identity: dict[str, Any] = {"environment": environment, "configured": configured}
+    try:
+        path = Path(configured).expanduser().resolve()
+        identity["path"] = str(path)
+        key = read_regular_file_bytes(
+            path,
+            max_bytes=SIDECAR_AUTH_KEY_BYTES,
+            description="sidecar HMAC key file",
+        )
+        if len(key) != SIDECAR_AUTH_KEY_BYTES:
+            raise ValueError("invalid sidecar HMAC key length")
+        metadata = path.stat()
+        identity.update(
+            available=True,
+            fingerprint=hashlib.sha256(key).hexdigest(),
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+        )
+    except (OSError, ValueError, RuntimeError):
+        identity["available"] = False
+    return identity
 
 
 def _analysis_record_build_options(options: dict[str, Any]) -> dict[str, Any]:
@@ -2849,7 +2961,7 @@ def _request_json(port: int, path: str, *, timeout: float) -> dict[str, Any]:
         payload = response.read().decode("utf-8")
         if response.status != HTTPStatus.OK:
             raise RuntimeError(f"unexpected HTTP status {response.status}")
-        return json.loads(payload)
+        return _require_json_object(json.loads(payload), description="HTTP response")
     finally:
         connection.close()
 

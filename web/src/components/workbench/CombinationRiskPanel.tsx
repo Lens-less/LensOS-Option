@@ -22,6 +22,44 @@ function number(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function expiryDate(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== ""
+    ? value.trim()
+    : null;
+}
+
+function completeLegs(
+  raw: unknown,
+  expiry: string | null,
+): ReturnType<typeof parseLegs> {
+  if (expiry === null || !Array.isArray(raw) || raw.length === 0) {
+    return [];
+  }
+  // Every supplied leg must be usable. A parser that drops one bad leg must
+  // never turn a partially parsed structure into a complete combination.
+  const complete = raw.every((value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const leg = value as Record<string, unknown>;
+    const strike = number(leg.strike);
+    const quantity = number(leg.quantity);
+    return (
+      (leg.option_type === "call" || leg.option_type === "put") &&
+      strike !== null &&
+      strike > 0 &&
+      quantity !== null &&
+      quantity !== 0 &&
+      expiryDate(leg.expiry_date) === expiry
+    );
+  });
+  if (!complete) {
+    return [];
+  }
+  const legs = parseLegs(raw);
+  return legs.length === raw.length ? legs : [];
+}
+
 /**
  * What the leading candidates do when held together.
  *
@@ -56,25 +94,22 @@ export function CombinationRiskPanel({
     const byId = new Map(
       ranked.map((row) => [String(row.candidate_id ?? ""), row]),
     );
-    const single = new Set(
-      members.map((member) => String(member.expiry_date ?? "")),
-    );
-    // A combined curve is only defined when every leg settles on one date. With
-    // more than one expiry the members are drawn on their own and no combined
-    // line is claimed.
-    const jointlyEvaluable = single.size === 1;
-
     const series: PayoffSeries[] = [];
     const allLegs: ReturnType<typeof parseLegs> = [];
+    const expiries = new Set<string>();
     let totalCredit = 0;
+    let incompleteMembers = 0;
 
     for (const member of members) {
       const raw = byId.get(String(member.candidate_id ?? ""));
-      const legs = parseLegs(raw?.structure_legs);
-      const credit = number(member.credit_usdc) ?? 0;
-      if (legs.length === 0) {
+      const expiry = expiryDate(member.expiry_date);
+      const legs = completeLegs(raw?.structure_legs, expiry);
+      const credit = number(member.credit_usdc);
+      if (legs.length === 0 || credit === null || expiry === null) {
+        incompleteMembers += 1;
         continue;
       }
+      expiries.add(expiry);
       allLegs.push(...legs);
       totalCredit += credit;
       series.push({
@@ -85,7 +120,14 @@ export function CombinationRiskPanel({
       });
     }
 
-    if (jointlyEvaluable && allLegs.length > 0) {
+    // The joint curve requires every member, its actual entry cash, and one
+    // shared nonempty expiry. Cross-expiry members can only be drawn separately.
+    const jointlyEvaluable =
+      members.length > 0 &&
+      incompleteMembers === 0 &&
+      expiries.size === 1 &&
+      Number.isFinite(totalCredit);
+    if (jointlyEvaluable) {
       series.push({
         key: "__book__",
         label: "组合",
@@ -96,7 +138,7 @@ export function CombinationRiskPanel({
         }),
       });
     }
-    return { jointlyEvaluable, series, allLegs, totalCredit };
+    return { jointlyEvaluable, series, incompleteMembers };
   }, [members, scanner, spotUsdc]);
 
   if (!combination || combination.status !== "evaluated") {
@@ -128,6 +170,15 @@ export function CombinationRiskPanel({
   const joint = (book.joint_terminal_risk as Record<string, unknown>) ?? {};
   const jointMaxLoss = number(joint.max_loss_usdc);
   const upperBound = number(book.max_loss_upper_bound_usdc);
+  const jointMaxLossUnavailable =
+    joint.status === "evaluated" && joint.loss_is_bounded === false
+      ? "无上限"
+      : joint.status === "not_jointly_evaluable"
+        ? "跨到期日不可计算"
+        : "证据不可用";
+  const hasUnboundedMembers =
+    book.loss_is_bounded === false ||
+    (Array.isArray(book.unbounded_members) && book.unbounded_members.length > 0);
   const curvePoints =
     payoff.series.find((item) => item.emphasis === "subject")?.points ?? [];
 
@@ -152,7 +203,7 @@ export function CombinationRiskPanel({
           <dt>联合最大亏损</dt>
           <dd>
             {jointMaxLoss === null ? (
-              <span className="stat-tile-unavailable">跨到期日不可计算</span>
+              <span className="stat-tile-unavailable">{jointMaxLossUnavailable}</span>
             ) : (
               money(jointMaxLoss)
             )}
@@ -162,7 +213,9 @@ export function CombinationRiskPanel({
           <dt>上界（各成员最坏情况之和）</dt>
           <dd>
             {upperBound === null ? (
-              <span className="stat-tile-unavailable">含无界成员</span>
+              <span className="stat-tile-unavailable">
+                {hasUnboundedMembers ? "含无界成员" : "证据不可用"}
+              </span>
             ) : (
               money(upperBound)
             )}
@@ -181,16 +234,20 @@ export function CombinationRiskPanel({
         </p>
       ) : null}
 
-      {payoff.series.length > 0 ? (
-        <div className="combination-block">
-          <h3>到期盈亏</h3>
-          {payoff.jointlyEvaluable ? null : (
-            <p className="combination-note">
-              成员分属不同到期日，没有单一的联合到期曲线；下面画的是各成员自己的曲线。
-            </p>
-          )}
+      <div className="combination-block">
+        <h3>到期盈亏</h3>
+        {payoff.jointlyEvaluable ? null : (
+          <p className="combination-note" role="note">
+            {members.length === 0
+              ? "组合没有可验证成员，无法绘制到期盈亏曲线。"
+              : payoff.incompleteMembers > 0
+                ? `${payoff.incompleteMembers} 个成员的合约腿、实得信用或到期信息不完整或不一致，无法绘制联合曲线；仅展示证据完整成员的曲线。`
+                : "成员分属不同到期日，没有单一的联合到期曲线；下面画的是各成员自己的曲线。"}
+          </p>
+        )}
+        {payoff.series.length > 0 ? (
           <PayoffChart
-            ariaLabel="组合与各成员的到期盈亏曲线"
+            ariaLabel={payoff.jointlyEvaluable ? "组合与各成员的到期盈亏曲线" : "各成员的到期盈亏曲线"}
             currentSpot={spotUsdc}
             formatMoney={(value) => money(value, { digits: 0 })}
             markers={breakevens(curvePoints).map((spot) => ({
@@ -199,8 +256,8 @@ export function CombinationRiskPanel({
             }))}
             series={payoff.series}
           />
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
       {vegaRows.length > 0 ? (
         <div className="combination-block">

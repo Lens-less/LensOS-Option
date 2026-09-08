@@ -23,8 +23,8 @@ export interface EngineConfig {
 }
 
 export type ExtensionMessage =
-  | { type: "REPORT_GET"; force?: boolean }
-  | { type: "REPORT_GET_CACHED_ONLY" }
+  | { type: "REPORT_GET"; force?: boolean; expectedOrigin?: string }
+  | { type: "REPORT_GET_CACHED_ONLY"; expectedOrigin?: string }
   | { type: "DERIBIT_CONTEXT_UPDATE"; context: DeribitContext }
   | { type: "CONTEXT_GET" }
   | { type: "ENGINE_CONFIG_GET" }

@@ -3,6 +3,50 @@
 The canonical detailed changelog is maintained in Chinese in
 [CHANGELOG.md](CHANGELOG.md). This file provides the public release summary.
 
+## [0.5.0] - 2026-09-08
+
+This version connects first use, options decision research, evidence inspection,
+and reproducible open-source delivery. Publication and verification status are
+recorded in the [v0.5.0 delivery record](docs/product/2026-09-08-open-source-decision-platform.md).
+
+- Added an offline learning tour independent of the research API, with fictional
+  finite-risk payoff examples and an entry into the real bundled snapshot.
+- Added complete-case reproduction with packaged inputs, an explicit clock,
+  saved-case comparison, and actual evidence-blocking output.
+- Separated typed `AnalysisInputs`, five admission-condition groups, and lazy
+  compatibility projection; included build and input identities.
+- Added fixed public OpenAPI/schema validation and version consistency across
+  Python, Web, extension, tags, and built artifacts.
+- Unified verification of source, builds, public boundaries, a clean installed
+  wheel, and browser journeys through `tools/verify.py`.
+- Required numeric cost budgets and model/configuration identities instead of
+  boolean-only fee claims. Net credit deducts entry costs; cards remain `WATCH`
+  because a modeled loss budget is not a verified absolute delivery-fee bound.
+- Bound forecasts to costs and net credit. Upgrade engine, frontends, and
+  extension together and regenerate old reports; v0.4.0 cards and unbound
+  calibration artifacts cannot be reused unchanged.
+- Removed historical weighting based on a path's own future returns. Missing
+  pre-path features now select explicit unconditional uniform sampling.
+- Made adverse underlying moves follow actual leg directions, separated short
+  strike crossings from price-threshold proxies, and labeled dynamic delta
+  unavailable. Bidirectional authored stress weights are not probabilities.
+- Included per-leg delivery fees in exact-strategy replay and documented their
+  exclusion from the risk denominator, allowing net `R` below `-1`.
+- Validated signal/series research markers, schema, timestamps, and recursively
+  prohibited execution fields while preserving blocked and exclusion evidence;
+  old hand-authored artifacts must be regenerated with the current CLI.
+- Unified current freshness and historical evaluation states, prevented stale
+  eligibility, and added recovery for invalid data, timeout, and render errors.
+- Distinguished missing signal/series artifacts from insufficient samples,
+  improved narrow-screen and keyboard navigation, and documented the full
+  research workflow in Chinese and English.
+- Corrected preflight output, exit-code interpretation, cache expiry, and daily
+  close settlement-proxy documentation. Kept private archive ancestry isolated
+  from public development.
+
+Research evidence gates remain fail-closed and execution remains disabled.
+See the [v0.5.0 release notes](docs/releases/v0.5.0.md).
+
 ## [0.4.0] - 2026-08-30
 
 This release integrates the v0.2 one-screen market and strategy brief, v0.3
@@ -93,5 +137,6 @@ presenting that progress as a validated trading signal.
   events are represented as `null` / `not_collected`, and selection fallback is
   visible as a non-blocking advisory reason code.
 
+[0.5.0]: https://github.com/Lens-less/LensOS-Option/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Lens-less/LensOS-Option/releases/tag/v0.4.0
 [0.1.0]: https://github.com/Lens-less/LensOS-Option/releases/tag/v0.1.0

@@ -3519,6 +3519,105 @@ p {
   gap: clamp(8px, 1.4vw, 20px);
 }
 
+.research-app-shell .spine-navigation {
+  display: contents;
+}
+
+.research-app-shell .spine-navigation[hidden],
+.research-app-shell .spine-menu-toggle[hidden],
+.research-app-shell .spine-context-summary[hidden] {
+  display: none;
+}
+
+.spine-learning-boundary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 0;
+  padding: 8px var(--page-gutter);
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.spine-learning-boundary strong {
+  color: #765500;
+}
+
+.learning-masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px var(--page-gutter);
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+
+.state-learning-link {
+  display: inline-block;
+  padding: 12px 0;
+  color: var(--blue);
+  font-size: 14px;
+  text-underline-offset: 4px;
+}
+
+.state-recovery-help {
+  margin-top: 20px;
+}
+
+.strategy-brief-copy-status {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.strategy-brief-cost-boundary {
+  border-left: 3px solid var(--warning);
+  padding: 8px 12px;
+  background: #fff5df;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.strategy-brief-risk-details {
+  margin: 16px 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.strategy-brief-risk-details summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+
+.strategy-brief-risk-details dl {
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.strategy-brief-copy-status:empty {
+  margin: 0;
+}
+
+.strategy-brief-copy-fallback label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 13px;
+}
+
+.strategy-brief-copy-fallback textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--rule-strong);
+  background: var(--panel-soft);
+  color: var(--ink);
+  font: 12px/1.7 var(--mono);
+  resize: vertical;
+}
+
 /* The replay banner is not dismissible on purpose: a pinned clock makes
    every freshness figure on the page read as current, and nothing else
    on screen can contradict that. */
@@ -4345,6 +4444,251 @@ p {
   color: var(--muted);
 }
 
+.research-progress {
+  margin: 16px 0 24px;
+  padding: clamp(18px, 2.5vw, 28px);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--warning);
+  overflow-wrap: anywhere;
+}
+
+.research-progress h2 {
+  margin: 8px 0 14px;
+  font-size: clamp(19px, 2vw, 26px);
+  line-height: 1.4;
+}
+
+.research-progress-state {
+  margin: 0;
+  color: #77551a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.research-next-step {
+  margin: 0 0 18px;
+  max-width: 78ch;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.research-next-step strong {
+  margin-right: 10px;
+  color: var(--blue);
+}
+
+.research-evidence-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  font-size: 13px;
+}
+
+.research-evidence-counts p {
+  margin: 0 0 12px;
+}
+
+.research-evidence-counts strong {
+  margin-left: 8px;
+  font-family: var(--mono);
+  font-size: 20px;
+}
+
+.research-progress-meter {
+  max-width: 600px;
+  margin: 18px 0;
+}
+
+.research-progress-meter p {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.research-progress-meter progress {
+  display: block;
+  width: 100%;
+  height: 8px;
+  accent-color: var(--blue);
+}
+
+.research-progress-meter small,
+.research-artifact-time {
+  display: block;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.research-missing h3,
+.research-capture-dates h3 {
+  font-size: 13px;
+  margin: 18px 0 8px;
+}
+
+.research-missing ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+}
+
+.research-capture-dates ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.research-capture-dates li {
+  padding: 4px 7px;
+  background: var(--panel-soft);
+  font: 12px var(--mono);
+}
+
+.research-reason-details {
+  margin: 18px 0 12px;
+  font-size: 12px;
+}
+
+.research-reason-details summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-weight: 600;
+}
+
+.research-reason-details li {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 699px) {
+  .research-app-shell .spine-masthead {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "brand toggle" "navigation navigation";
+    gap: 0 8px;
+    min-height: 58px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  .research-app-shell .brand {
+    gap: 8px;
+  }
+
+  .research-app-shell .brand small {
+    display: none;
+  }
+
+  .research-app-shell .brand strong {
+    font-size: 14px;
+  }
+
+  .research-app-shell .spine-menu-toggle {
+    grid-area: toggle;
+    min-height: 44px;
+    padding: 6px 9px;
+    border: 1px solid var(--rule);
+    background: var(--panel-soft);
+    color: var(--ink);
+    font: inherit;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .research-app-shell .spine-navigation:not([hidden]) {
+    grid-area: navigation;
+    display: grid;
+    gap: 10px;
+    max-height: 65dvh;
+    overflow-y: auto;
+    padding-top: 10px;
+  }
+
+  .research-app-shell .spine-views {
+    grid-area: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .research-app-shell .spine-views a {
+    min-height: 44px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .research-app-shell .spine-actions {
+    grid-area: auto;
+    padding: 0 0 6px;
+  }
+
+  .research-app-shell .section-navigation {
+    position: static;
+    margin: 0;
+    padding: 0;
+  }
+
+  .spine-context-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    min-height: 40px;
+    padding: 6px var(--page-gutter);
+    background: #fff8e1;
+    border-bottom: 1px solid #e0b400;
+    color: #5b4300;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .spine-context-summary::after {
+    content: "+";
+    font-size: 16px;
+  }
+
+  .spine-context[open] > .spine-context-summary::after {
+    content: "−";
+  }
+
+  .spine-context-action {
+    margin-left: auto;
+  }
+
+  .spine-context-freshness {
+    margin: 0;
+    padding: 10px var(--page-gutter) 0;
+    font-size: 12px;
+  }
+
+  .research-app-shell .signal-view,
+  .research-app-shell .series-view {
+    padding-top: 16px;
+  }
+
+  .research-progress {
+    padding: 16px;
+  }
+
+  .research-app-shell .signal-view > .research-section-heading,
+  .research-app-shell .series-view > .research-section-heading {
+    padding: 8px 0 14px;
+    gap: 10px;
+  }
+
+  .signal-tiles,
+  .series-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .signal-table-scroll {
   overflow-x: auto;
 }
@@ -4471,6 +4815,28 @@ p {
   font-size: 12px;
   color: var(--muted);
   max-width: 80ch;
+}
+
+.series-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 16px 0;
+}
+
+.series-selection .signal-select {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.series-selection select {
+  max-width: 100%;
+  min-height: 36px;
+}
+
+#series-instrument-detail {
+  scroll-margin-top: 96px;
 }
 
 .series-tiles {

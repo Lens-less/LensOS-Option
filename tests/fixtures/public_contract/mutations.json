@@ -1,0 +1,141 @@
+[
+  {
+    "name": "report_reasons_are_array",
+    "component": "ResearchReport",
+    "scope": "common",
+    "path": [
+      "reason_codes"
+    ],
+    "op": "set",
+    "value": {}
+  },
+  {
+    "name": "report_timestamp_has_timezone",
+    "component": "ResearchReport",
+    "scope": "common",
+    "path": [
+      "generated_at"
+    ],
+    "op": "set",
+    "value": "2026-07-07T00:01:00"
+  },
+  {
+    "name": "report_action_enum",
+    "component": "ResearchReport",
+    "scope": "common",
+    "path": [
+      "action"
+    ],
+    "op": "set",
+    "value": "BUY_NOW"
+  },
+  {
+    "name": "quality_gate_is_boolean",
+    "component": "ResearchReport",
+    "scope": "common",
+    "path": [
+      "data_status",
+      "quality_gate",
+      "passed"
+    ],
+    "op": "set",
+    "value": "true"
+  },
+  {
+    "name": "market_age_is_number",
+    "component": "ResearchReport",
+    "scope": "common",
+    "path": [
+      "data_status",
+      "market_data_age_sec"
+    ],
+    "op": "set",
+    "value": "1"
+  },
+  {
+    "name": "public_generated_at_required",
+    "component": "ResearchReport",
+    "scope": "public-only",
+    "path": [
+      "generated_at"
+    ],
+    "op": "delete"
+  },
+  {
+    "name": "public_rejects_unknown_field",
+    "component": "ResearchReport",
+    "scope": "public-only",
+    "path": [
+      "private_payload"
+    ],
+    "op": "set",
+    "value": {}
+  },
+  {
+    "name": "brief_execution_disabled",
+    "component": "StrategyBrief",
+    "scope": "common",
+    "path": [
+      "execution_allowed"
+    ],
+    "op": "set",
+    "value": true
+  },
+  {
+    "name": "brief_credit_is_number",
+    "component": "StrategyBrief",
+    "scope": "common",
+    "path": [
+      "strategies",
+      0,
+      "entry",
+      "minimum_net_credit"
+    ],
+    "op": "set",
+    "value": "400"
+  },
+  {
+    "name": "brief_unit_is_one",
+    "component": "StrategyBrief",
+    "scope": "common",
+    "path": [
+      "strategies",
+      0,
+      "legs",
+      0,
+      "quantity"
+    ],
+    "op": "set",
+    "value": 2
+  },
+  {
+    "name": "brief_never_has_private_root",
+    "component": "StrategyBrief",
+    "scope": "public-only",
+    "path": [
+      "private_payload"
+    ],
+    "op": "set",
+    "value": {}
+  },
+  {
+    "name": "summary_nullable_number_still_typed",
+    "component": "Summary",
+    "scope": "public-only",
+    "path": [
+      "vrp",
+      "percentile"
+    ],
+    "op": "set",
+    "value": "0.5"
+  },
+  {
+    "name": "health_required_history",
+    "component": "Health",
+    "scope": "public-only",
+    "path": [
+      "publication_history"
+    ],
+    "op": "delete"
+  }
+]

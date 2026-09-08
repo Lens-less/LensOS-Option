@@ -19,7 +19,7 @@ const COLUMNS: Array<{ key: SortKey; label: string }> = [
   { key: "action", label: "研究分层" },
   { key: "dteDays", label: "DTE" },
   { key: "executableCreditUsdc", label: "可成交信用" },
-  { key: "evAfterCostUsdc", label: "税后 EV" },
+  { key: "evAfterCostUsdc", label: "成本后 EV" },
   { key: "rankingScore", label: RESEARCH_RANKING_VALUE_LABEL },
 ];
 
@@ -50,32 +50,28 @@ export function CandidateScreenerTable({
   selectedId,
   sort,
 }: {
-  onSelect: (id: string) => void;
+  onSelect: (id: string, source: HTMLTableRowElement) => void;
   onSortChange: (key: SortKey) => void;
   rows: CandidateViewRow[];
   selectedId: string | null;
   sort: SortState | null;
 }): React.JSX.Element {
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [cap, setCap] = useState(INITIAL_ROW_CAP);
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
 
   const visibleRows = rows.slice(0, cap);
   const hiddenCount = rows.length - visibleRows.length;
+  const activeIndex = Math.max(0, visibleRows.findIndex((row) => row.id === activeId));
+  const rowOrder = JSON.stringify(rows.map((row) => row.id));
 
   useEffect(() => {
     setCap(INITIAL_ROW_CAP);
-  }, [rows]);
-
-  useEffect(() => {
-    if (activeIndex >= visibleRows.length) {
-      setActiveIndex(Math.max(0, visibleRows.length - 1));
-    }
-  }, [activeIndex, visibleRows.length]);
+  }, [rowOrder]);
 
   const focusRow = (index: number) => {
     const clamped = Math.max(0, Math.min(visibleRows.length - 1, index));
-    setActiveIndex(clamped);
+    setActiveId(visibleRows[clamped]?.id ?? null);
     rowRefs.current[clamped]?.focus();
   };
 
@@ -103,7 +99,7 @@ export function CandidateScreenerTable({
       case "Enter":
       case " ":
         event.preventDefault();
-        onSelect(rows[index].id);
+        onSelect(rows[index].id, event.currentTarget);
         break;
       default:
         break;
@@ -158,10 +154,11 @@ export function CandidateScreenerTable({
               aria-selected={row.id === selectedId}
               data-tier={row.action}
               key={row.id}
-              onClick={() => {
-                setActiveIndex(index);
-                onSelect(row.id);
+              onClick={(event) => {
+                setActiveId(row.id);
+                onSelect(row.id, event.currentTarget);
               }}
+              onFocus={() => setActiveId(row.id)}
               onKeyDown={(event) => handleRowKeyDown(event, index)}
               ref={(element) => {
                 rowRefs.current[index] = element;

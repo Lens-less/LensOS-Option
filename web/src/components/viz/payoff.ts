@@ -31,15 +31,20 @@ export function parseLegs(legs: unknown): ParsedLeg[] {
   }
   const parsed: ParsedLeg[] = [];
   for (const raw of legs) {
-    if (!raw || typeof raw !== "object") {
-      continue;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return [];
     }
     const leg = raw as PayoffLeg;
-    const optionType = leg.option_type === "put" ? "put" : "call";
+    // A missing protection leg or guessed option direction changes the risk
+    // itself. Reject the complete structure instead of drawing its remainder.
+    if (leg.option_type !== "call" && leg.option_type !== "put") {
+      return [];
+    }
+    const optionType = leg.option_type;
     const strike = typeof leg.strike === "number" ? leg.strike : NaN;
     const quantity = typeof leg.quantity === "number" ? leg.quantity : NaN;
-    if (!Number.isFinite(strike) || !Number.isFinite(quantity) || quantity === 0) {
-      continue;
+    if (!Number.isFinite(strike) || strike <= 0 || !Number.isFinite(quantity) || quantity === 0) {
+      return [];
     }
     parsed.push({
       optionType,
@@ -116,7 +121,7 @@ export function payoffPoints(
     samples = 120,
   }: { entryCash: number; spot: number | null; samples?: number },
 ): Array<{ spot: number; pnl: number }> {
-  if (legs.length === 0) {
+  if (legs.length === 0 || !Number.isFinite(entryCash) || !Number.isSafeInteger(samples) || samples < 1) {
     return [];
   }
   const [low, high] = payoffDomain(legs, spot);
@@ -160,5 +165,8 @@ export function breakevens(
     }
     crossings.push(left.spot + (-left.pnl / span) * (right.spot - left.spot));
   }
-  return Array.from(new Set(crossings.map((value) => Math.round(value))));
+  const last = points.at(-1);
+  if (last?.pnl === 0) crossings.push(last.spot);
+  // Preserve fractional strikes/credits while removing floating-point noise.
+  return Array.from(new Set(crossings.map((value) => Math.round(value * 1e8) / 1e8)));
 }

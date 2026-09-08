@@ -513,7 +513,7 @@ class StrategyBriefHardGateTests(unittest.TestCase):
         )
 
         self.assertEqual(1, len(brief["strategies"]))
-        self.assertEqual("STRATEGIES_AVAILABLE", brief["action"])
+        self.assertEqual("WATCH", brief["action"])
         self.assertFalse(brief["no_trade"]["active"])
         self.assertIsNone(brief["no_trade"].get("headline_zh"))
         self.assertIsNone(brief["no_trade"].get("summary_zh"))
@@ -564,7 +564,7 @@ class StrategyBriefHardGateTests(unittest.TestCase):
             ["BEAR_CALL_CREDIT_SPREAD", "BULL_PUT_CREDIT_SPREAD"],
             [item["structure_type"] for item in brief["strategies"]],
         )
-        self.assertEqual(400.0, brief["strategies"][0]["entry"]["minimum_net_credit"])
+        self.assertEqual(298.0, brief["strategies"][0]["entry"]["minimum_net_credit"])
 
     def test_missing_bid_ask_rejects_candidate_and_counts_reason(self) -> None:
         brief = _build_brief(
@@ -725,7 +725,7 @@ class StrategyBriefHardGateTests(unittest.TestCase):
             candidates=[_bear_call("tamper-brief")],
             history_by_candidate={"tamper-brief": _history("VALIDATED")},
         )
-        brief["action"] = "WATCH"
+        brief["action"] = "STRATEGIES_AVAILABLE"
 
         errors = validate_strategy_brief(brief)
 

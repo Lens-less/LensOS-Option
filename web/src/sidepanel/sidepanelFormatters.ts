@@ -150,7 +150,7 @@ export function contextEntryPointNotice(
 }
 
 export function isOfflineError(message: string | null): boolean {
-  return /failed to fetch|network(?: request)?(?: error)?|connection (?:refused|reset|timed out)|err_(?:connection|name_not_resolved)|fetch failed/i.test(
+  return /\[report:(?:network|timeout)\]|failed to fetch|network(?: request)?(?: error)?|connection (?:refused|reset|timed out)|err_(?:connection|name_not_resolved)|fetch failed|timed out|timeout/i.test(
     message ?? "",
   );
 }

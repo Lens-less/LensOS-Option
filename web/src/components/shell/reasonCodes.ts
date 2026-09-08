@@ -1,5 +1,6 @@
 import type { ExchangeLockState, ResearchReport } from "../../contracts";
 import {
+  isInformationalReason,
   SHELL_REASON_CODE_READINGS as REASON_CODE_READINGS,
 } from "../../reasonCodes/catalog";
 import type { ShellReasonCodeReading } from "../../reasonCodes/catalog";
@@ -14,18 +15,26 @@ export type ReasonCodeReading = ShellReasonCodeReading;
  * now that state's entire explanation was the raw code, so the most-viewed
  * screen in the product was also its least legible one.
  *
- * A code with a `remedy` is one the reader can act on, and the command is the
- * exact one that clears it. A code without a remedy is a property of the
- * product's own maturity, not something the reader did wrong, and says so.
+ * A remedy is a possible input-preparation or diagnostic step, not a promise
+ * that the next report will validate. Missing remedies do not imply that a
+ * reason is harmless or that it will resolve automatically.
  */
 export function readReasonCode(code: string): ReasonCodeReading {
-  return (
-    REASON_CODE_READINGS[code] ?? {
-      title: "未收录的阻断原因",
-      detail:
-        "这是一个尚未收录人话解释的机器码。机器码仍会原样展示，页面不会静默忽略或自行猜测。",
-    }
-  );
+  const reading = REASON_CODE_READINGS[code];
+  if (reading) {
+    return reading;
+  }
+  if (isInformationalReason(code)) {
+    return {
+      title: "状态信息",
+      detail: "这是报告提供的状态记录，不表示需修复的故障；原始机器码保留以便核对。",
+    };
+  }
+  return {
+    title: "未收录的阻断原因",
+    detail:
+      "这是一个尚未收录人话解释的机器码。机器码仍会原样展示，页面不会静默忽略或自行猜测。",
+  };
 }
 
 export interface ExchangeEventEvidenceReading {

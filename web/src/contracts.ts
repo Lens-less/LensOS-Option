@@ -30,10 +30,10 @@ export interface EvidenceDataStatus {
     };
   };
   collection_scope?: {
-    selected_instrument_count?: number;
-    upstream_instrument_count?: number;
-    coverage_ratio?: number;
-    scope?: string;
+    selected_instrument_count?: number | null;
+    upstream_instrument_count?: number | null;
+    coverage_ratio?: number | null;
+    scope?: string | null;
   };
   public_response_contract?: {
     endpoints?: {
@@ -48,19 +48,19 @@ export interface EvidenceDataStatus {
     };
   };
   quality_gate?: {
-    passed?: boolean;
+    passed?: boolean | null;
     reason_codes?: string[];
     advisory_reason_codes?: string[];
     summary?: {
-      expiries_evaluated?: number;
-      fetch_errors?: number;
-      invalid_quotes?: number;
+      expiries_evaluated?: number | null;
+      fetch_errors?: number | null;
+      invalid_quotes?: number | null;
       market_data_age_sec?: number | null;
-      total_quotes?: number;
-      valid_quotes?: number;
+      total_quotes?: number | null;
+      valid_quotes?: number | null;
     };
     thresholds?: {
-      market_data_max_age_sec?: number;
+      market_data_max_age_sec?: number | null;
     };
   };
 }
@@ -169,10 +169,10 @@ export interface StrategyCondition {
   id: string;
   label: string;
   observed?: unknown;
-  requirement?: string;
+  requirement?: string | null;
   status: "pass" | "block" | "unknown";
   blocking?: boolean;
-  reason?: string;
+  reason?: string | null;
 }
 
 export interface StrategyResearch {
@@ -243,20 +243,20 @@ export interface StrategyResearch {
       expected_move_percent?: number | null;
       call_wing_richness_iv_points?: number | null;
       front_expiry?: {
-        expiry_date?: string;
+        expiry_date?: string | null;
         dte_days?: number | null;
         atm_fitted_iv_percent?: number | null;
         fit_quality_score?: number | null;
-        no_arbitrage_pass?: boolean;
-        candidate_eligible?: boolean;
+        no_arbitrage_pass?: boolean | null;
+        candidate_eligible?: boolean | null;
       } | null;
       next_expiry?: {
-        expiry_date?: string;
+        expiry_date?: string | null;
         dte_days?: number | null;
         atm_fitted_iv_percent?: number | null;
         fit_quality_score?: number | null;
-        no_arbitrage_pass?: boolean;
-        candidate_eligible?: boolean;
+        no_arbitrage_pass?: boolean | null;
+        candidate_eligible?: boolean | null;
       } | null;
     };
     interpretation_limits?: string[];
@@ -330,12 +330,12 @@ export interface StrategyResearch {
         response?: string;
       }>;
       time_management?: {
-        review_below_dte_days?: number;
+        review_below_dte_days?: number | null;
         roll_allowed_states?: string[];
         roll_delta_band?: number[];
         roll_must_improve?: string[];
-        defensive_roll_minimum_stress_reduction?: number;
-        loss_deferral_alone_is_forbidden?: boolean;
+        defensive_roll_minimum_stress_reduction?: number | null;
+        loss_deferral_alone_is_forbidden?: boolean | null;
       };
       kill_switches?: string[];
     };
@@ -486,10 +486,10 @@ export interface RankedCandidate {
 }
 
 export interface RankingBasis {
-  method?: string;
+  method?: string | null;
   tie_break_order?: string[];
-  dominance_scope?: string;
-  absolute_ev_available?: boolean;
+  dominance_scope?: string | null;
+  absolute_ev_available?: boolean | null;
 }
 
 export interface EvCandidateScanner {
@@ -508,13 +508,13 @@ export interface EvCandidateScanner {
  * rather than leaving the surfaces to infer it.
  */
 export interface RuntimeContext {
-  profile?: string;
-  mode?: "live" | "replay" | "published";
-  replay?: boolean;
-  demo_mode?: boolean;
+  profile?: string | null;
+  mode?: "live" | "replay" | "published" | null;
+  replay?: boolean | null;
+  demo_mode?: boolean | null;
   evaluation_clock?: string | null;
   snapshot_fixture?: string | null;
-  live_fetch_allowed?: boolean;
+  live_fetch_allowed?: boolean | null;
   notice?: string | null;
 }
 
@@ -537,14 +537,15 @@ export interface VrpStatusPoint {
 }
 
 export interface VrpStatus {
-  schema_version?: string;
+  schema_version?: string | null;
   status?:
     | "available"
     | "validated"
     | "unavailable"
     | "blocked"
     | "insufficient_history"
-    | string;
+    | string
+    | null;
   current_vrp_percent_points?: number | null;
   current_dvol_percent?: number | null;
   current_rv30_percent?: number | null;

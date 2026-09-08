@@ -7,11 +7,12 @@ import {
 import { money, ratio, signed } from "../candidate/format";
 import {
   artifactFailureDetail,
-  readArtifactJson,
+  loadArtifactJson,
 } from "../../transport/artifactJson";
 import { DivergingBars } from "../viz/DivergingBars";
 import type { DivergingRow } from "../viz/DivergingBars";
 import { VIZ } from "../viz/tokens";
+import { countLabel, evidenceCount, ResearchProgress } from "../research/ResearchProgress";
 
 interface SignalArtifact {
   schema_version?: string;
@@ -29,12 +30,15 @@ interface SignalArtifact {
   collinearity?: Record<string, unknown>;
   summary?: Record<string, unknown>;
   pre_registration?: Record<string, unknown>;
+  config?: { min_observations?: number; min_independent_cohorts?: number };
+  usable_capture_dates?: string[];
 }
 
 interface LoadedSignalArtifact {
   artifact: SignalArtifact;
   expectedCapturedAt?: string;
   url: string;
+  retryKey?: unknown;
 }
 
 function num(value: unknown): number | null {
@@ -73,7 +77,7 @@ export function SignalValidationView({
     );
   }
 
-  if (artifact.status === "not_configured") {
+  if (!["projected", "measured", "blocked"].includes(artifact.status ?? "")) {
     return (
       <Root className={rootClassName} id={rootId}>
         <header className="research-section-heading">
@@ -82,9 +86,12 @@ export function SignalValidationView({
             <Heading>排序信号有没有预测力</Heading>
           </div>
         </header>
-        <p className="signal-empty">
-          {artifact.detail || "验证产物尚未接入；这不改变研究边界，只是当前无法展示统计结论。"}
-        </p>
+        <ResearchProgress label="信号验证进度" conclusion="信号验证产物尚不可用"
+          evidenceState="证据状态：不可用"
+          nextStep="重新读取当前报告；若仍不可用，核对验证产物是否已生成并接入。"
+          missing={["需要能通过校验的验证产物，才能确认已有样本、独立到期组和统计结论。"]}>
+          <p>{artifact.detail || "验证产物尚未接入；当前无法展示统计结论。"}</p>
+        </ResearchProgress>
       </Root>
     );
   }
@@ -121,23 +128,29 @@ function BlockedSection({
   artifact: SignalArtifact;
 }): React.JSX.Element {
   const sample = artifact.sample ?? {};
+  const settled = evidenceCount(sample.independent_expiry_cohorts);
+  const required = evidenceCount(artifact.config?.min_independent_cohorts);
+  const observations = evidenceCount(sample.observation_count);
+  const requiredObservations = evidenceCount(artifact.config?.min_observations);
   return (
-    <section className="signal-block">
-      <h2>样本尚不足以发布统计量</h2>
-      <p className="signal-note">
-        已采集 {String(num(sample.observation_count) ?? 0)} 条观测、
-        {String(num(sample.independent_expiry_cohorts) ?? 0)} 个已结算到期日
-        cohort。样本量按 cohort 计，不按观测数——相邻两天的快照是同一批合约、
-        同一个结算价。
-      </p>
-      <ul className="signal-reasons">
-        {(artifact.reason_codes ?? []).map((code) => (
-          <li key={code}>
-            <code>{code}</code>
-          </li>
-        ))}
-      </ul>
-    </section>
+    <ResearchProgress label="信号验证进度" conclusion="样本尚不足以发布统计量"
+      evidenceState="证据状态：未通过样本检查"
+      nextStep="补齐有效观测和独立到期组后重新验证；重复采集同一到期日不会增加独立样本。"
+      missing={[
+        settled !== null && required !== null && settled < required
+          ? `还需 ${required - settled} 个已结算到期组。`
+          : "需核对独立到期组的覆盖；组数达标不代表统计检验通过。",
+        observations !== null && requiredObservations !== null
+          ? `有效观测 ${observations} / ${requiredObservations}；只有通过数据质量检查的观测才计入。`
+          : "有效观测数量或所需门槛未提供，暂不能计算剩余样本。",
+      ]}
+      progress={{ label: "已结算到期组", current: settled, required }}
+      dates={artifact.usable_capture_dates}
+      generatedAt={artifact.generated_at}
+      reasonCodes={artifact.reason_codes}
+    >
+      <p>已有有效观测 <strong>{countLabel(observations)}</strong> 条；独立到期组 <strong>{countLabel(settled)}</strong> 个。</p>
+    </ResearchProgress>
   );
 }
 
@@ -149,30 +162,38 @@ function PreflightSections({
   const bands = artifact.bands ?? {};
   const research = bands.research_window ?? {};
   const cohorts = artifact.cohorts ?? [];
+  const settled = evidenceCount(research.settled_cohorts);
+  const required = evidenceCount(research.cohorts_required);
+  const settledObservations = evidenceCount(research.settled_observation_count);
+  const requiredObservations = evidenceCount(artifact.config?.min_observations);
+  const missing = [
+    settled !== null && required !== null && settled < required
+      ? `还需 ${required - settled} 个已结算到期组；同一到期日的多次快照只计为一个组。`
+      : "到期组数量不能单独证明预测力，还需有效观测和独立的统计检验。",
+    settledObservations !== null && requiredObservations !== null
+      ? `已结算观测 ${settledObservations} / ${requiredObservations}；待结算观测不计入已完成验证。`
+      : "有效观测的数量门槛未提供，不能推算验证完成时间。",
+  ];
 
   return (
     <>
-      <div className="signal-tiles">
-        <div className="stat-tile">
-          <dt>已结算 cohort</dt>
-          <dd>
-            {num(research.settled_cohorts) ?? 0}
-            <small> / {num(research.cohorts_required) ?? 8}</small>
-          </dd>
+      <ResearchProgress
+        label="信号验证进度"
+        conclusion="采集正在积累，尚不能判断排序是否有效"
+        evidenceState="证据状态：预检，未产生预测力结论"
+        nextStep="继续前向采集，待到期日结算数据齐全后再运行统计验证；样本数量达标也不等于信号有效。"
+        missing={missing}
+        progress={{ label: "已结算到期组", current: settled, required }}
+        dates={artifact.usable_capture_dates}
+        generatedAt={artifact.generated_at}
+        reasonCodes={artifact.reason_codes}
+      >
+        <div className="research-evidence-counts">
+          <p>待结算到期组 <strong>{countLabel(research.pending_cohorts)}</strong></p>
+          <p>待结算观测 <strong>{countLabel(research.pending_observation_count)}</strong></p>
         </div>
-        <div className="stat-tile">
-          <dt>待结算 cohort</dt>
-          <dd>{num(research.pending_cohorts) ?? 0}</dd>
-        </div>
-        <div className="stat-tile">
-          <dt>待结算观测</dt>
-          <dd>
-            {(num(research.pending_observation_count) ?? 0).toLocaleString(
-              "zh-CN",
-            )}
-          </dd>
-        </div>
-      </div>
+        {typeof research.next_pending_expiry === "string" ? <p className="signal-note">产物记录的下一待结算到期日：<time dateTime={research.next_pending_expiry}>{research.next_pending_expiry}</time>。需要取得该日结算依据后重新核验。</p> : null}
+      </ResearchProgress>
 
       <p className="signal-note">
         采集<strong>不可回补</strong>：Deribit 不发布历史期权链，样本只能向前累积。
@@ -181,8 +202,8 @@ function PreflightSections({
       </p>
 
       <section className="signal-block">
-        <h2>各到期日 cohort</h2>
-        <div className="signal-table-scroll">
+        <h2>各到期日的采集明细</h2>
+        <div className="signal-table-scroll" role="region" aria-label="到期日采集明细" tabIndex={0}>
           <table className="signal-table">
             <thead>
               <tr>
@@ -208,15 +229,13 @@ function PreflightSections({
                       {cohort.band === "research_window" ? "研究窗口" : "短期"}
                     </td>
                     <td className="numeric-cell">
-                      {num(cohort.capture_date_count) ?? 0}
+                      {countLabel(cohort.capture_date_count)}
                     </td>
                     <td className="numeric-cell">
                       {ratio(num(cohort.dte_days_min), { digits: 1 })}
                     </td>
                     <td className="numeric-cell">
-                      {(
-                        num(cohort.prospective_observation_count) ?? 0
-                      ).toLocaleString("zh-CN")}
+                      {countLabel(cohort.prospective_observation_count)}
                     </td>
                     <td>
                       <span
@@ -441,6 +460,7 @@ function MeasuredSections({
 export function useSignalArtifact(
   url: string | null,
   expectedCapturedAt?: string,
+  retryKey?: unknown,
 ): SignalArtifact | null {
   const [loaded, setLoaded] = useState<LoadedSignalArtifact | null>(null);
   useEffect(() => {
@@ -448,11 +468,8 @@ export function useSignalArtifact(
       return;
     }
     let cancelled = false;
-    void fetch(url, {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    })
-      .then(readArtifactJson)
+    const controller = new AbortController();
+    void loadArtifactJson(url, controller.signal)
       .then((payload) => {
         if (!cancelled) {
           const artifact =
@@ -465,7 +482,7 @@ export function useSignalArtifact(
                     ? "信号产物与当前公开版的数据截止时间不一致，已停止展示。"
                     : "",
                 };
-          setLoaded({ artifact, expectedCapturedAt, url });
+          setLoaded({ artifact, expectedCapturedAt, url, retryKey });
         }
       })
       .catch((error: unknown) => {
@@ -474,16 +491,18 @@ export function useSignalArtifact(
             artifact: { status: "not_configured", detail: artifactFailureDetail(error) },
             expectedCapturedAt,
             url,
+            retryKey,
           });
         }
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [expectedCapturedAt, url]);
+  }, [expectedCapturedAt, url, retryKey]);
   return url &&
     loaded?.url === url &&
-    loaded.expectedCapturedAt === expectedCapturedAt
+    loaded.expectedCapturedAt === expectedCapturedAt && loaded.retryKey === retryKey
     ? loaded.artifact
     : null;
 }

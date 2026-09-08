@@ -300,17 +300,17 @@ export function PayoffChart({
           到期价 {Math.round(hovered.spot).toLocaleString("en-US")} ·{" "}
           <strong>{formatMoney(hovered.pnl)}</strong>
         </p>
-      ) : (
+      ) : subject ? (
         <p className="viz-readout viz-readout-idle">
           在图上移动以读取任意到期价对应的盈亏
         </p>
-      )}
+      ) : null}
 
       {series.length > 1 ? (
         <ul className="viz-legend">
-          <li>
-            <span style={{ background: VIZ.subject }} /> 组合
-          </li>
+          {subject ? <li>
+            <span style={{ background: VIZ.subject }} /> {subject.label}
+          </li> : null}
           <li>
             <span style={{ background: VIZ.context }} /> 单个成员
           </li>

@@ -13,12 +13,12 @@
 
 请勾选实际运行过的检查（未运行的请留空，不要预先勾选）：
 
-- [ ] `python -m pytest -q`
-- [ ] `python -m crypto_options_report.api --smoke`
-- [ ] `cd web && npm test && npm run lint && npm run build`
+- [ ] `python tools/verify.py` 完整检查（含安装后 wheel 的浏览器流程）
+- [ ] 若仅运行 `python tools/verify.py --quick`，已明确说明跳过构建、产物与浏览器检查
 - [ ] 修改了 `web/` 且已提交重新构建的 `crypto_options_report/static/evidence/`
+- [ ] 产品入口、合同或模块边界有变更时，已同步 README / DESIGN / 架构文档
 
-<!-- 粘贴关键输出。 -->
+<!-- 粘贴关键输出；UI 变更附桌面/窄屏证据，说明失败恢复和过期状态验证。未运行的检查请写明。 -->
 
 ## 安全边界确认
 
@@ -27,5 +27,6 @@
 
 - [ ] 本 PR **没有**引入下单路径、订单模板、手数/仓位 sizing 输出或 paper/manual 下单控件
 - [ ] 本 PR **没有**放宽任何 fail-closed 门禁；若确有放宽，已在下方说明理由与新增证据
+- [ ] 教学示例未进入研究 JSON，也未被标为 VALIDATED / CALIBRATED
 
 <!-- 如果本 PR 改变了任何门禁或准入语义，请在此详细说明。 -->

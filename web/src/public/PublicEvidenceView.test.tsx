@@ -5,7 +5,7 @@ import type { ResearchReport, VrpStatusPoint } from "../contracts";
 import { PublicEvidenceView } from "./PublicEvidenceView";
 import { PublicShell } from "./PublicShell";
 import type { PublicReleaseSummary } from "./loadPublicReport";
-import type { PublicFreshness } from "./publicModel";
+import { selectPublicFreshness, type PublicFreshness } from "./publicModel";
 
 const freshness: PublicFreshness = {
   ageSec: 28_480,
@@ -43,12 +43,16 @@ function report(): ResearchReport {
     runtime_context: { mode: "published" },
     publish_edition: {
       captured_at: "2026-08-03T00:00:00Z",
+      published_at: "2026-08-03T00:05:00Z",
       stale_after: "2026-08-05T00:00:00Z",
     },
     data_status: {
       source: "deribit_published_snapshot",
       status: "validated",
       validated: true,
+    },
+    full_system_surface: {
+      release_gates: [{ name: "research_publication", status: "GO", satisfied: true }],
     },
     vrp_status: {
       band: "P30-P70",
@@ -77,6 +81,105 @@ function summary(
     },
   };
 }
+
+function reportWithCandidates(): ResearchReport {
+  return {
+    ...report(),
+    data_trust: { verdict: "trusted" },
+    vol_surface_status: {
+      status: "validated",
+      expiries: [{
+        candidate_eligible: true, expiry_date: "2026-08-10", dte_days: 7,
+        fit_quality_pass: true, no_arb_pass: true, fit_quality_score: 0.99,
+        surface_points: [
+          { strike_price: 70000, surface_fitted_iv: 40 },
+          { strike_price: 75000, surface_fitted_iv: 42 },
+        ],
+      }],
+    },
+    candidate_research: {
+      summary: { eligible_naked_short_calls: 1, eligible_call_credit_spreads: 0 },
+      naked_short_calls: { eligible: [{
+        candidate_id: "test-call", instrument_name: "BTC-10AUG26-75000-C",
+        expiry_date: "2026-08-10", model_delta: 0.1, market_mid: 0.002,
+        surface_quality: { fit_quality_score: 0.99, no_arb_pass: true },
+      }] },
+    },
+    strategy_research: {
+      schema_version: "strategy_research.v1",
+      generated_at: "2026-08-03T00:00:00Z",
+      advisory_only: true, execution_allowed: false,
+      decision: { primary_structure: "CALL_CREDIT_SPREAD" },
+      playbook: {
+        candidate: { sell_leg: "BTC-10AUG26-75000-C", buy_leg: "BTC-10AUG26-80000-C" },
+        economics: { credit_usd_shadow: 123, credit_coin: 0.002 },
+        entry_contract: { status: "ready", conditions: [
+          { id: "market_freshness", label: "Freshness", observed: 0, status: "pass" },
+          { id: "candidate_eligibility", label: "Candidate", observed: "eligible", status: "pass" },
+        ] },
+      },
+    },
+  };
+}
+
+describe("PublicEvidenceView uses published freshness and current market eligibility together", () => {
+  it.each(["constructor", "__proto__"])("renders unknown public label %s as text with its fallback explanation", (code) => {
+    const snapshot = report();
+    snapshot.reason_codes = [code];
+    snapshot.vrp_status = { ...snapshot.vrp_status, band: code };
+    render(<PublicEvidenceView
+      freshness={freshness}
+      report={snapshot}
+      summary={summary({ status: "available", band_changed: false, vrp_percent_points_delta: 1.2 })}
+    />);
+
+    expect(screen.getByText(`较上一观察日 +1.2 pt，仍为${code}`)).toBeInTheDocument();
+    expect(screen.getByText("这是尚未收录公开解释的阻断原因。机器码仍会原样展示，页面不静默忽略或自行猜测。")).toBeInTheDocument();
+  });
+
+  it.each(["expired", "quality_blocked", "unavailable"] as const)("withdraws current values and qualification when %s", (state) => {
+    const snapshot = reportWithCandidates();
+    const capturedAtMs = Date.parse("2026-08-03T00:00:00Z");
+    const nextDayMs = capturedAtMs + 24 * 60 * 60 * 1000;
+    const publicFreshness = selectPublicFreshness(snapshot, nextDayMs, nextDayMs);
+    expect(publicFreshness.maxAgeSec).toBe(48 * 60 * 60);
+    expect(publicFreshness.phase).toBe("current");
+    const { rerender } = render(<PublicEvidenceView report={snapshot} freshness={publicFreshness} summary={null} />);
+    expect(screen.getByRole("region", { name: "研究候选表格" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "BTC 波动率曲面" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "条件式进场规则" })).toHaveTextContent("条件满足");
+    expect(screen.getByText("$123")).toBeInTheDocument();
+
+    const blocked = {
+      ...snapshot,
+      data_status: { ...snapshot.data_status, validated: state !== "quality_blocked" },
+      publish_edition: state === "unavailable" ? { ...snapshot.publish_edition, captured_at: null } : snapshot.publish_edition,
+    };
+    const nowMs = state === "expired" ? capturedAtMs + 48 * 60 * 60 * 1000 : nextDayMs;
+    rerender(<PublicEvidenceView report={blocked} freshness={selectPublicFreshness(blocked, nowMs, nowMs)} summary={null} />);
+    expect(screen.queryByRole("region", { name: "研究候选表格" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "BTC 波动率曲面" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "VRP 730 日时序" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "条件式进场规则" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/个价差通过当前过滤/)).not.toBeInTheDocument();
+    expect(screen.queryByText("$123")).not.toBeInTheDocument();
+    expect(screen.queryByText("CALL 信用价差")).not.toBeInTheDocument();
+    expect(screen.queryByText("证据链可信")).not.toBeInTheDocument();
+    expect(screen.getByText(/快照审计.*计算时刻/)).toHaveTextContent("2026年8月3日");
+    const brief = screen.getByRole("region", { name: "策略简报" });
+    expect(within(brief).getByText(state === "expired" ? "STALE" : "UNAVAILABLE")).toBeInTheDocument();
+    if (state === "expired") {
+      expect(screen.getAllByText("发布已停摆").length).toBeGreaterThan(0);
+      expect(screen.getByText("48 小时")).toBeInTheDocument();
+    } else {
+      expect(screen.queryByText("发布已停摆")).not.toBeInTheDocument();
+    }
+
+    rerender(<PublicEvidenceView report={snapshot} freshness={publicFreshness} summary={null} />);
+    expect(screen.getByRole("region", { name: "研究候选表格" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "条件式进场规则" })).toBeInTheDocument();
+  });
+});
 
 describe("PublicEvidenceView public truth labels", () => {
   it("shows sanitized exchange-lock evidence and its narrow source", () => {

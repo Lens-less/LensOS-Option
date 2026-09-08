@@ -165,6 +165,21 @@ function publishedWorkbenchReport(): ResearchReport {
     runtime_context: {
       mode: "published",
       replay: false,
+      evaluation_clock: "2026-07-26T10:00:00Z",
+    },
+    publish_edition: {
+      cadence: "daily",
+      captured_at: "2026-07-26T10:00:00Z",
+      published_at: "2026-07-26T10:00:02Z",
+      next_expected_at: "2026-07-27T10:00:00Z",
+      stale_after: "2026-07-28T10:00:00Z",
+    },
+    full_system_surface: {
+      ...report.full_system_surface,
+      release_gates: [
+        { name: "research_publication", status: "GO", satisfied: true },
+        { name: "execution_authorization", status: "NO-GO", satisfied: false },
+      ],
     },
   } as unknown as ResearchReport;
 }
@@ -202,6 +217,156 @@ function renderWorkbench(report: ResearchReport) {
 }
 
 describe("ResearchWorkbench / scanner status", () => {
+  it.each([
+    {
+      name: "failed market quality",
+      dataStatus: {
+        ...baseReport.data_status,
+        validated: false,
+        status: "blocked",
+        reason_code: "MARKET_DATA_QUALITY_FAIL",
+      },
+      reasonCode: "MARKET_DATA_QUALITY_FAIL",
+      explanation: "市场快照未通过质量门禁",
+    },
+    {
+      name: "missing market age",
+      dataStatus: { ...baseReport.data_status, market_data_age_sec: undefined },
+      reasonCode: "MISSING_VALIDATED_MARKET_DATA",
+      explanation: "无法核验行情时效",
+    },
+  ])("withdraws candidates, open detail, and combination risk for $name", ({
+    dataStatus, reasonCode, explanation,
+  }) => {
+    const receivedAtMs = Date.parse("2026-07-26T10:00:04Z");
+    const report: ResearchReport = {
+      ...validatedReport(),
+      combination_risk: { status: "evaluated", members: [], book: {} },
+    };
+    const { rerender } = render(
+      <ResearchWorkbench nowMs={receivedAtMs} receivedAtMs={receivedAtMs} report={report} />,
+    );
+    selectRowByCreditText("$400");
+    expect(screen.getByRole("heading", { name: frontierCandidate.candidate_id })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "这几个一起做会怎样" })).toBeInTheDocument();
+
+    rerender(
+      <ResearchWorkbench
+        nowMs={receivedAtMs}
+        receivedAtMs={receivedAtMs}
+        report={{ ...report, data_status: dataStatus }}
+      />,
+    );
+
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: frontierCandidate.candidate_id })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "这几个一起做会怎样" })).not.toBeInTheDocument();
+    expect(document.querySelector("fieldset.screener-controls")).toHaveAttribute("disabled");
+    expect(screen.getByRole("status")).toHaveTextContent(reasonCode);
+    expect(screen.getByRole("main")).toHaveTextContent(explanation);
+    expect(screen.queryByText(/MARKET_DATA_AGE_EXCEEDED|PUBLISHED_EDITION_STALE|快照超过新鲜度上限/)).not.toBeInTheDocument();
+  });
+
+  it.each(["live", "replay", "demo", "published"] as const)(
+    "expires %s candidates with the matching freshness explanation",
+    (mode) => {
+      const receivedAtMs = Date.parse("2026-07-26T10:00:04Z");
+      const report: ResearchReport = {
+        ...validatedReport(),
+        runtime_context: {
+          mode: mode === "demo" ? "replay" : mode,
+          replay: mode === "replay" || mode === "demo",
+          demo_mode: mode === "demo",
+          ...(mode === "published" ? { evaluation_clock: "2026-07-26T10:00:00Z" } : {}),
+        },
+        ...(mode === "published" ? {
+          publish_edition: {
+            cadence: "daily",
+            captured_at: "2026-07-26T10:00:00Z",
+            published_at: "2026-07-26T10:00:02Z",
+            next_expected_at: "2026-07-26T10:00:30Z",
+            stale_after: "2026-07-26T10:01:00Z",
+          },
+          full_system_surface: {
+            ...baseReport.full_system_surface,
+            release_gates: [
+              { name: "research_publication", status: "GO", satisfied: true },
+              { name: "execution_authorization", status: "NO-GO", satisfied: false },
+            ],
+          },
+        } : {}),
+      };
+      const { rerender } = render(
+        <ResearchWorkbench nowMs={receivedAtMs} receivedAtMs={receivedAtMs} report={report} />,
+      );
+      expect(screen.getByText("$400")).toBeInTheDocument();
+
+      rerender(
+        <ResearchWorkbench
+          nowMs={Date.parse("2026-07-26T10:01:00Z")}
+          receivedAtMs={receivedAtMs}
+          report={report}
+        />,
+      );
+
+      expect(screen.queryByText("$400")).not.toBeInTheDocument();
+      expect(document.querySelector("fieldset.screener-controls")).toHaveAttribute("disabled");
+      const needed = screen.getByRole("region", { name: "需要补齐什么" });
+      if (mode === "published") {
+        expect(needed).toHaveTextContent("PUBLISHED_EDITION_STALE");
+        expect(needed).toHaveTextContent("公开版已超过发布时效上限");
+      } else {
+        expect(needed).toHaveTextContent("MARKET_DATA_AGE_EXCEEDED");
+        expect(needed).toHaveTextContent("快照超过新鲜度上限");
+        expect(screen.queryByText(/PUBLISHED_EDITION_STALE/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/公开版已超过/)).not.toBeInTheDocument();
+      }
+    },
+  );
+
+  it("separates normal demo states from evidence to collect and retains raw codes", () => {
+    renderWorkbench({
+      ...blockedReport(),
+      reason_codes: [
+        "REGIME_ROLLING_HISTORY_INSUFFICIENT",
+        "REGIME_TRUST_EVIDENCE_NOT_PROMOTED",
+        "NO_OPEN_POSITIONS",
+        "SIMULATION_NOT_REQUESTED",
+        "PRIMARY_REGIME_RANGE",
+        "UNKNOWN_DEMO_BLOCKER",
+      ],
+    });
+
+    const needed = screen.getByRole("region", { name: "需要补齐什么" });
+    expect(needed).toHaveTextContent("REGIME_ROLLING_HISTORY_INSUFFICIENT");
+    expect(needed).toHaveTextContent("REGIME_TRUST_EVIDENCE_NOT_PROMOTED");
+    expect(needed).toHaveTextContent("系统持续观察");
+    expect(needed).toHaveTextContent("UNKNOWN_DEMO_BLOCKER");
+    expect(needed).not.toHaveTextContent("NO_OPEN_POSITIONS");
+    expect(needed).not.toHaveTextContent("SIMULATION_NOT_REQUESTED");
+    expect(needed).not.toHaveTextContent("PRIMARY_REGIME_RANGE");
+
+    const normal = screen.getByRole("region", { name: "正常状态说明", hidden: true });
+    expect(normal).toHaveTextContent("NO_OPEN_POSITIONS");
+    expect(normal).toHaveTextContent("SIMULATION_NOT_REQUESTED");
+    expect(normal).toHaveTextContent("PRIMARY_REGIME_RANGE");
+    expect(normal).not.toHaveTextContent("未收录的阻断原因");
+    expect(screen.getByText("正常状态（3 项）")).toBeInTheDocument();
+  });
+
+  it("presents repair commands as conditional steps without promising validation", () => {
+    renderWorkbench({
+      ...blockedReport(),
+      reason_codes: ["MARKET_DATA_QUALITY_FAIL", "MISSING_VALIDATED_PATH_RISK"],
+    });
+
+    const needed = screen.getByRole("region", { name: "需要补齐什么" });
+    expect(needed).toHaveTextContent("可尝试的操作");
+    expect(needed).toHaveTextContent("不能保证消除所有阻断");
+    expect(needed).toHaveTextContent("无法修复报价缺失、倒挂或单位错误");
+    expect(needed).toHaveTextContent("完成后仍须重新生成报告并通过校验");
+  });
+
   it("shows a blocked state, keeps controls disabled, and offers no reset CTA", () => {
     renderWorkbench(blockedReport());
 
@@ -242,6 +407,79 @@ describe("ResearchWorkbench / scanner status", () => {
 });
 
 describe("ResearchWorkbench / candidate detail", () => {
+  it("does not draw a naked put as a short call when signed structure legs are missing", () => {
+    const report = validatedReport();
+    const putId = "BTC-7AUG26-61000-P:naked";
+    report.ev_candidate_scanner = {
+      status: "validated",
+      ranked_candidates: [{ ...frontierCandidate, candidate_id: putId, structure_type: "naked_short_put" }],
+    };
+    renderWorkbench(report);
+    selectRowByCreditText("$400");
+
+    const detail = screen.getByRole("region", { name: "候选详情" });
+    expect(within(detail).queryByRole("img", { name: /到期盈亏/ })).not.toBeInTheDocument();
+    expect(detail).not.toHaveTextContent("亏损无上限（标的继续上涨）");
+    expect(detail).toHaveTextContent("暂时无法绘制到期盈亏图");
+  });
+
+  it.each([
+    {
+      name: "missing entry credit",
+      change: {
+        executable_credit_usdc: null,
+        premium_usdc: null,
+        structure_legs: [{ option_type: "call", strike: 73000, quantity: -1 }],
+      },
+    },
+    {
+      name: "a malformed explicit leg",
+      change: {
+        structure_legs: [{ option_type: "unknown", strike: 73000, quantity: -1 }],
+      },
+    },
+    {
+      name: "legs with different expiries",
+      change: {
+        structure_legs: [
+          { option_type: "call", strike: 73000, quantity: -1, expiry_date: "2026-08-07" },
+          { option_type: "call", strike: 77000, quantity: 1, expiry_date: "2026-08-14" },
+        ],
+      },
+    },
+  ])("withholds the payoff for $name without substituting a legacy curve", ({ change }) => {
+    const report = validatedReport();
+    report.ev_candidate_scanner = {
+      status: "validated",
+      ranked_candidates: [{ ...frontierCandidate, ...change }],
+    };
+    window.history.replaceState(null, "", `/?candidate=${encodeURIComponent(frontierCandidate.candidate_id)}`);
+    renderWorkbench(report);
+
+    const detail = screen.getByRole("region", { name: "候选详情" });
+    expect(within(detail).queryByRole("img", { name: /到期盈亏/ })).not.toBeInTheDocument();
+    expect(detail).toHaveTextContent("暂时无法绘制到期盈亏图");
+  });
+
+  it("still draws a naked put when its signed leg and credit are provided", () => {
+    const report = validatedReport();
+    report.ev_candidate_scanner = {
+      status: "validated",
+      ranked_candidates: [{
+        ...frontierCandidate,
+        candidate_id: "BTC-7AUG26-61000-P:naked",
+        structure_type: "naked_short_put",
+        structure_legs: [{ option_type: "put", strike: 61000, quantity: -1, expiry_date: "2026-08-07" }],
+      }],
+    };
+    renderWorkbench(report);
+    selectRowByCreditText("$400");
+
+    const detail = screen.getByRole("region", { name: "候选详情" });
+    expect(within(detail).getByRole("img", { name: /到期盈亏/ })).toBeInTheDocument();
+    expect(detail).not.toHaveTextContent("亏损无上限");
+  });
+
   it("renders a dominance explanation naming the winner and the losing axes", () => {
     renderWorkbench(validatedReport());
     selectRowByCreditText("$360");
@@ -357,6 +595,92 @@ describe("ResearchWorkbench / no trading semantics", () => {
 });
 
 describe("ResearchWorkbench / keyboard and sparse data", () => {
+  it("keeps detail controls focused while the clock or report refreshes", () => {
+    const now = Date.parse("2026-07-26T10:00:04Z");
+    const { rerender } = renderWorkbench(validatedReport());
+    selectRowByCreditText("$400");
+    const close = screen.getByRole("button", { name: "关闭候选详情" });
+    close.focus();
+
+    rerender(
+      <ResearchWorkbench nowMs={now + 1000} receivedAtMs={now} report={validatedReport()} />,
+    );
+
+    expect(close).toHaveFocus();
+  });
+
+  it("closes details with Escape and returns keyboard focus to the selected row", () => {
+    renderWorkbench(validatedReport());
+    const row = screen.getByText("$400").closest("tr") as HTMLTableRowElement;
+    fireEvent.click(row);
+    fireEvent.keyDown(screen.getByRole("heading", { name: frontierCandidate.candidate_id }), {
+      key: "Escape",
+    });
+
+    expect(screen.queryByRole("region", { name: "候选详情" })).not.toBeInTheDocument();
+    expect(row).toHaveFocus();
+    expect(new URLSearchParams(window.location.search).has("candidate")).toBe(false);
+  });
+
+  it("withdraws a selected candidate excluded by filters without stealing filter focus", () => {
+    renderWorkbench(validatedReport());
+    selectRowByCreditText("$400");
+    const input = screen.getByLabelText("最低可成交信用（USDC）");
+    input.focus();
+    fireEvent.change(input, { target: { value: "500" } });
+
+    expect(screen.queryByRole("region", { name: "候选详情" })).not.toBeInTheDocument();
+    expect(input).toHaveFocus();
+    expect(new URLSearchParams(window.location.search).has("candidate")).toBe(false);
+  });
+
+  it("restores a usable focus target when refresh removes the selected candidate", () => {
+    const now = Date.parse("2026-07-26T10:00:04Z");
+    const { rerender } = renderWorkbench(validatedReport());
+    selectRowByCreditText("$400");
+    const next = validatedReport();
+    next.ev_candidate_scanner = { status: "validated", ranked_candidates: [dominatedCandidate] };
+
+    rerender(<ResearchWorkbench nowMs={now} receivedAtMs={now} report={next} />);
+
+    expect(screen.queryByRole("region", { name: "候选详情" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "候选筛选" })).toHaveFocus();
+    expect(new URLSearchParams(window.location.search).has("candidate")).toBe(false);
+  });
+
+  it("restores filters and selection on browser history navigation", () => {
+    renderWorkbench(validatedReport());
+    window.history.pushState(null, "", `/?view=workbench&minCredit=380&candidate=${encodeURIComponent(frontierCandidate.candidate_id)}&source=shared#results`);
+    fireEvent.popState(window);
+
+    expect(screen.getByLabelText("最低可成交信用（USDC）")).toHaveValue(380);
+    expect(screen.queryByText("$360")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: frontierCandidate.candidate_id })).toHaveFocus();
+
+    window.history.pushState(null, "", "/?view=workbench&source=shared#results");
+    fireEvent.popState(window);
+    expect(screen.getByLabelText("最低可成交信用（USDC）")).toHaveValue(null);
+    expect(screen.getByText("$360")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "候选详情" })).not.toBeInTheDocument();
+    expect(window.location.hash).toBe("#results");
+    expect(new URLSearchParams(window.location.search).get("source")).toBe("shared");
+  });
+
+  it("clears selected URLs and candidate-derived controls when the scanner is blocked", () => {
+    window.history.replaceState(null, "", `/?candidate=${encodeURIComponent(frontierCandidate.candidate_id)}`);
+    const report = validatedReport();
+    report.ev_candidate_scanner = {
+      status: "blocked",
+      reason_code: "SUSPECT_PRICE_DIVERGENCE",
+      ranked_candidates: [frontierCandidate],
+    };
+    renderWorkbench(report);
+
+    expect(screen.queryByRole("region", { name: "候选详情" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "naked_short_call" })).not.toBeInTheDocument();
+    expect(new URLSearchParams(window.location.search).has("candidate")).toBe(false);
+  });
+
   it("supports keyboard row navigation and enter-to-open on the screener table", () => {
     renderWorkbench(validatedReport());
 

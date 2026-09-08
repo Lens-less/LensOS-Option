@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 from crypto_options_report.contract import (
     generate_research_report,
@@ -40,6 +41,48 @@ class PaperProposalLedgerTests(unittest.TestCase):
 
         self.assertEqual(CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID, evidence["path"])
         self.assertFalse(_looks_like_absolute_path(evidence["path"]))
+        self.assertEqual("verified_local", evidence["status"])
+        self.assertEqual("1.0", evidence["version"])
+        self.assertRegex(evidence["sha256"], r"^[0-9a-f]{64}$")
+        self.assertFalse(evidence["external_approval_recorded"])
+
+    def test_invalid_runbook_path_is_missing_on_every_platform(self):
+        evidence = manual_approval_runbook_evidence("\0")
+
+        self.assertEqual("missing", evidence["status"])
+        self.assertEqual(CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID, evidence["path"])
+        self.assertEqual(["MISSING_MANUAL_APPROVAL_RUNBOOK"], evidence["reason_codes"])
+        self.assertIsNone(evidence["sha256"])
+        self.assertFalse(evidence["external_approval_recorded"])
+
+    def test_runbook_path_errors_fail_closed_without_reading(self):
+        for operation in ("expanduser", "resolve", "is_file"):
+            for error in (OSError("unavailable"), ValueError("invalid path")):
+                with self.subTest(operation=operation, error=type(error).__name__):
+                    with (
+                        patch.object(Path, operation, side_effect=error),
+                        patch.object(Path, "read_bytes") as read,
+                    ):
+                        evidence = manual_approval_runbook_evidence("configured-runbook.md")
+                    read.assert_not_called()
+                    self.assertEqual("missing", evidence["status"])
+                    self.assertEqual(CONFIGURED_MANUAL_APPROVAL_RUNBOOK_PUBLIC_ID, evidence["path"])
+                    self.assertEqual(["MISSING_MANUAL_APPROVAL_RUNBOOK"], evidence["reason_codes"])
+                    self.assertIsNone(evidence["sha256"])
+                    self.assertFalse(evidence["external_approval_recorded"])
+
+    def test_runbook_read_errors_preserve_invalid_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runbook = Path(tmp) / "manual.md"
+            runbook.write_text("Version: 1.0\nresearch_only manual approval", encoding="utf-8")
+            for error in (OSError("unavailable"), ValueError("invalid path")):
+                with self.subTest(error=type(error).__name__):
+                    with patch.object(Path, "read_bytes", side_effect=error):
+                        evidence = manual_approval_runbook_evidence(runbook)
+                    self.assertEqual("invalid", evidence["status"])
+                    self.assertEqual(["INVALID_MANUAL_APPROVAL_RUNBOOK"], evidence["reason_codes"])
+                    self.assertIsNone(evidence["sha256"])
+                    self.assertFalse(evidence["external_approval_recorded"])
 
     def test_custom_manual_runbook_path_hides_windows_absolute_location(self):
         evidence = manual_approval_runbook_evidence(r"C:\ops\manual-approval-runbook.md")

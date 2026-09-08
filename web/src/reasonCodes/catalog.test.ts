@@ -30,6 +30,15 @@ function expectedCodes(surface: CatalogSurface): string[] {
 }
 
 describe("reason code catalog", () => {
+  it("treats object-prototype property names as unknown report reason codes", () => {
+    for (const code of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      expect(REASON_CODE_CATALOG[code]).toBeUndefined();
+      expect(SHELL_REASON_CODE_READINGS[code]).toBeUndefined();
+      expect(PUBLIC_REASON_CODE_READINGS[code]).toBeUndefined();
+      expect(REPORT_REASON_COPY[code]).toBeUndefined();
+    }
+  });
+
   it("keeps the canonical catalog keyed and projected for every surface", () => {
     expect(Object.keys(REASON_CODE_CATALOG)).toEqual(CATALOG_CODES);
     for (const code of CATALOG_CODES) {

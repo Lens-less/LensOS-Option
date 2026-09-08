@@ -60,6 +60,14 @@ def _candidate(
         "settlement_included": True,
         "cost_model_id": "cost-model:v1",
         "cost_config_hash": "cost-config:abc123",
+        # Explicit one-contract budgets: 0.03% of a 120,000 reference spot
+        # per leg, one adverse 10-unit tick, 5 legging and 20 settlement reserve.
+        "cost_breakdown": {
+            "entry_fees": 36.0 * (4 if structure_type == "iron_condor" else 2),
+            "slippage_reserve": 10.0 * (4 if structure_type == "iron_condor" else 2),
+            "legging_reserve": 5.0 * (4 if structure_type == "iron_condor" else 2),
+            "settlement_reserve": 20.0 * (4 if structure_type == "iron_condor" else 2),
+        },
         "margin_known": True,
         "relative_value_status": relative_value_status,
         "ev_after_cost": ev_after_cost,
@@ -92,6 +100,21 @@ def _leg(
         "observed_at": observed_at,
         "expiry_date": expiry_date,
         "premium_unit": premium_unit,
+    }
+
+
+def _entry_cost_identity(candidate: dict) -> dict:
+    costs = candidate["cost_breakdown"]
+    gross = sum(
+        -leg["quantity"] * leg["market_bid" if leg["quantity"] < 0 else "market_ask"]
+        for leg in candidate["structure_legs"]
+    )
+    return {
+        "cost_model_id": candidate["cost_model_id"],
+        "cost_config_hash": candidate["cost_config_hash"],
+        "currency": candidate["settlement_currency"],
+        "minimum_net_credit": gross - costs["entry_fees"] - costs["slippage_reserve"] - costs["legging_reserve"],
+        "cost_breakdown": dict(costs),
     }
 
 

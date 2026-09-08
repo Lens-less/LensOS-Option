@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
-from itertools import pairwise
 from typing import Any
 
 from ._canonical import canonical_sha256
@@ -26,6 +25,7 @@ from .structures import Structure, build_structure
 STRATEGY_REPLAY_OBSERVATION_SCHEMA_VERSION = "strategy_replay_observation.v1"
 STRATEGY_REPLAY_LEDGER_SCHEMA_VERSION = "strategy_replay_ledger.v1"
 ENTRY_COST_BASIS = "SHORT_BID_LONG_ASK_WITH_ADVERSE_TICK"
+MAX_LOSS_BASIS = "PAYOFF_BOUND_PLUS_ENTRY_FEES"
 SETTLEMENT_BASIS = "official_expiry_settlement"
 SYNC_TOLERANCE_SECONDS = 2.0
 LINEAR_PREMIUM_UNIT = "quote_currency"
@@ -112,7 +112,7 @@ def build_strategy_replay_observation(
         entry_credit - entry_fee - terminal_payoff - delivery_fee,
         8,
     )
-    max_loss = _max_loss_with_fees(
+    max_loss = _max_loss_with_entry_fees(
         structure=structure,
         entry_credit=entry_credit,
         entry_fee=entry_fee,
@@ -149,6 +149,8 @@ def build_strategy_replay_observation(
             "entry_cost_basis": ENTRY_COST_BASIS,
             "exit_basis": "hold_to_expiry",
             "settlement_basis": SETTLEMENT_BASIS,
+            "max_loss_basis": MAX_LOSS_BASIS,
+            "delivery_fee_in_risk_denominator": False,
         },
         "cohort_id": cohort_id,
         "expiry_date": structure.expiry_date,
@@ -165,9 +167,14 @@ def build_strategy_replay_observation(
         "total_costs": round(entry_fee + delivery_fee, 8),
         "net_pnl": net_pnl,
         "max_loss": max_loss,
+        "max_loss_basis": MAX_LOSS_BASIS,
+        "delivery_fee_in_risk_denominator": False,
         "net_r": net_r,
         "won": net_pnl > 0.0,
         "defined_loss": True,
+        "fee_inclusive_loss_is_bounded": not any(
+            leg["option_type"] == "call" for leg in normalized_legs
+        ),
         "unit_known": True,
         "legs": [_leg_output(leg) for leg in normalized_legs],
         "settlement": {
@@ -550,51 +557,23 @@ def _normalize_settlement(
     }
 
 
-def _max_loss_with_fees(
+def _max_loss_with_entry_fees(
     *,
     structure: Structure,
     entry_credit: float,
     entry_fee: float,
 ) -> float | None:
-    strikes = structure.strikes
-    if not strikes:
-        return None
-    max_payoff = max(
-        structure.amount_owed_at(point) for point in (0.0, *strikes, strikes[-1] * 2.0)
-    )
-    upper_cap_spot = max(
-        strikes[-1] * 2.0,
-        (0.125 * max_payoff / 0.00015) if max_payoff > 0 else strikes[-1] * 2.0,
-    )
-    boundaries = sorted({0.0, *strikes, upper_cap_spot})
-    candidate_spots: set[float] = set(boundaries)
-    for left, right in pairwise(boundaries):
-        if right <= left:
-            continue
-        left_payoff = structure.amount_owed_at(left)
-        right_payoff = structure.amount_owed_at(right)
-        candidate_spots.add(left)
-        candidate_spots.add(right)
-        slope = (right_payoff - left_payoff) / (right - left)
-        intercept = left_payoff - slope * left
-        denominator = 0.00015 - 0.125 * slope
-        if denominator != 0:
-            switch = (0.125 * intercept) / denominator
-            if left <= switch <= right and (slope * switch + intercept) > 0:
-                candidate_spots.add(switch)
+    """Return the entry-time payoff risk budget used as the net-R denominator.
 
-    worst_pnl = None
-    for spot in sorted(candidate_spots):
-        payoff = structure.amount_owed_at(spot)
-        delivery_fee = sum(
-            _delivery_fee_for_leg(leg=leg.to_dict(), settlement_price=spot)
-            for leg in structure.legs
-        )
-        pnl = entry_credit - entry_fee - payoff - delivery_fee
-        worst_pnl = pnl if worst_pnl is None else min(worst_pnl, pnl)
-    if worst_pnl is None:
-        return None
-    return round(max(-worst_pnl, 0.0), 8)
+    The structure evaluates all payoff breakpoints and its upside slope, with
+    contract_size included. Entry fees are known at selection time. Delivery
+    fees depend on expiry spot and remain fully included in realized net PnL,
+    but are excluded from this denominator. In particular, per-leg call
+    delivery fees can grow without bound even for a bounded-payoff spread;
+    neither a finite spot scan nor a cap on the *net* payoff bounds those fees.
+    Net R may therefore be below -1 without contradicting this risk budget.
+    """
+    return structure.risk_profile(entry_cash=entry_credit - entry_fee).max_loss
 
 
 def _normalize_regimes(regimes: dict[str, Any] | None) -> dict[str, str]:
@@ -621,13 +600,12 @@ def _delivery_fee_for_leg(*, leg: dict[str, Any], settlement_price: float) -> fl
         intrinsic = max(settlement_price - strike, 0.0)
     else:
         intrinsic = max(strike - settlement_price, 0.0)
-    positive_value = intrinsic * abs(quantity)
     return delivery_fee_linear(
-        positive_value / max(float(leg.get("contract_size", 1.0)), 1e-12),
-        max(settlement_price, 1e-12),
-        1.0,
+        intrinsic,
+        settlement_price,
+        abs(quantity),
         float(leg.get("contract_size", 1.0)),
-        delivery_fee_applies=positive_value > 0.0,
+        delivery_fee_applies=intrinsic > 0.0,
     )
 
 
@@ -640,6 +618,22 @@ def _validate_record_integrity(record: dict[str, Any]) -> None:
     expected_input_hash = canonical_sha256(_record_input_from_record(record))
     if str(record.get("input_hash") or "") != expected_input_hash:
         raise ValueError("caller-mutated replay input hash mismatch")
+    scope = record.get("scope") or {}
+    if (
+        record.get("max_loss_basis") != MAX_LOSS_BASIS
+        or scope.get("max_loss_basis") != MAX_LOSS_BASIS
+        or record.get("delivery_fee_in_risk_denominator") is not False
+        or scope.get("delivery_fee_in_risk_denominator") is not False
+    ):
+        raise ValueError("replay risk denominator basis is missing or unsupported; regenerate the observation")
+    fee_inclusive_bounded = not any(
+        leg["option_type"] == "call" for leg in record["legs"]
+    )
+    if (
+        record.get("defined_loss") is not True
+        or record.get("fee_inclusive_loss_is_bounded") is not fee_inclusive_bounded
+    ):
+        raise ValueError("replay loss boundary must distinguish payoff risk from delivery fees")
 
 
 def _record_input_from_record(record: dict[str, Any]) -> dict[str, Any]:

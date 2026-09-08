@@ -7,11 +7,12 @@ import {
 import { money, ratio, signed } from "../candidate/format";
 import {
   artifactFailureDetail,
-  readArtifactJson,
+  loadArtifactJson,
 } from "../../transport/artifactJson";
 import { ResidualHeatmap } from "../viz/ResidualHeatmap";
 import type { HeatmapRow } from "../viz/ResidualHeatmap";
 import { VIZ } from "../viz/tokens";
+import { evidenceCount, ResearchProgress } from "../research/ResearchProgress";
 
 interface SeriesPoint {
   date: string;
@@ -48,12 +49,15 @@ interface SeriesArtifact {
   instruments?: SeriesInstrument[];
   truncated_instruments?: number;
   cannot_tell?: string[];
+  usable_capture_dates?: string[];
+  config?: { min_capture_dates?: number };
 }
 
 interface LoadedSeriesArtifact {
   artifact: SeriesArtifact;
   expectedCapturedAt?: string;
   url: string;
+  retryKey?: unknown;
 }
 
 function num(value: unknown): number | null {
@@ -105,25 +109,34 @@ export function SeriesHistoryView({
   }
 
   if (artifact.status !== "measured") {
+    const unavailable = artifact.status !== "blocked";
+    const availableDates = artifact.usable_capture_dates;
+    const count = availableDates ? new Set(availableDates).size : null;
+    const required = evidenceCount(artifact.config?.min_capture_dates);
+    const missing = count !== null && required !== null && count < required
+      ? [`还需 ${required - count} 个有效采集日，并保证同一合约在所需日期里都有有效读数。`]
+      : ["同一合约需要覆盖足够的有效采集日；总日期数达标不保证每个合约已有可比较的序列。"];
     return (
       <main className="series-view" id="surface-main">
         <header className="research-section-heading">
           <div>
             <p className="section-kicker">Series history / 序列历史</p>
-            <h1>序列还不够长</h1>
+            <h1>{unavailable ? "序列产物尚不可用" : "序列还不够长"}</h1>
           </div>
         </header>
-        <p className="signal-empty">
-          {artifact.detail ??
-            "采集序列里还没有足够多的日期。每天采集一次，几天之后这里就会有内容。"}
-        </p>
-        <ul className="signal-reasons">
-          {(artifact.reason_codes ?? []).map((code) => (
-            <li key={code}>
-              <code>{code}</code>
-            </li>
-          ))}
-        </ul>
+        <ResearchProgress
+          label="序列验证进度"
+          conclusion={unavailable ? "尚未读取到可核对的序列证据" : count !== null && count > 0 ? "已有采集，尚不能比较跨日变化" : "还没有足够的有效采集"}
+          evidenceState={unavailable ? "证据状态：不可用" : "证据状态：序列未通过验证"}
+          nextStep={unavailable ? "重新读取当前报告；若仍不可用，核对序列产物是否已生成并接入。" : "继续采集同一合约的有效报价，再重新生成序列；缺失日期保留为空，不补插值。"}
+          missing={unavailable ? ["需要能通过校验的序列产物，才能确认已有日期和缺失条件。"] : missing}
+          progress={unavailable ? undefined : { label: "有效采集日", current: count, required }}
+          dates={unavailable ? undefined : availableDates}
+          generatedAt={artifact.generated_at}
+          reasonCodes={artifact.reason_codes}
+        >
+          {artifact.detail ? <p>{artifact.detail}</p> : null}
+        </ResearchProgress>
       </main>
     );
   }
@@ -155,6 +168,16 @@ export function SeriesHistoryView({
           都会因此移动，与错价无关。排序用按观测数向零收缩的均值——否则只出现三天的
           合约会靠三个读数排到最前面。
         </p>
+        <div className="series-selection">
+          <label className="signal-select">
+            选择合约查看逐日读数
+            <select value={current?.instrument_name ?? ""} onChange={(event) => setSelected(event.target.value)}>
+              <option value="" disabled>请选择合约</option>
+              {instruments.map((instrument) => <option key={instrument.instrument_name} value={instrument.instrument_name}>{instrument.instrument_name}</option>)}
+            </select>
+          </label>
+          {current ? <a className="text-link" href="#series-instrument-detail">跳到该合约的逐日读数</a> : null}
+        </div>
         <ResidualHeatmap
           ariaLabel="各合约标准化残差随采集日的变化"
           dates={dates}
@@ -197,7 +220,7 @@ function InstrumentDetail({
   );
 
   return (
-    <section className="series-block">
+    <section className="series-block" id="series-instrument-detail" tabIndex={-1} aria-label={instrument.instrument_name}>
       <h2>{instrument.instrument_name}</h2>
       <div className="series-tiles">
         <div className="stat-tile">
@@ -228,7 +251,7 @@ function InstrumentDetail({
         </div>
       </div>
 
-      <div className="series-table-scroll">
+      <div className="series-table-scroll" role="region" aria-label="合约逐日读数" tabIndex={0}>
         <table className="signal-table">
           <thead>
             <tr>
@@ -281,6 +304,7 @@ function InstrumentDetail({
 export function useSeriesArtifact(
   url: string | null,
   expectedCapturedAt?: string,
+  retryKey?: unknown,
 ): SeriesArtifact | null {
   const [loaded, setLoaded] = useState<LoadedSeriesArtifact | null>(null);
   useEffect(() => {
@@ -288,11 +312,8 @@ export function useSeriesArtifact(
       return;
     }
     let cancelled = false;
-    void fetch(url, {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    })
-      .then(readArtifactJson)
+    const controller = new AbortController();
+    void loadArtifactJson(url, controller.signal)
       .then((payload) => {
         if (!cancelled) {
           const artifact =
@@ -305,7 +326,7 @@ export function useSeriesArtifact(
                     ? "序列产物与当前公开版的数据截止时间不一致，已停止展示。"
                     : undefined,
                 };
-          setLoaded({ artifact, expectedCapturedAt, url });
+          setLoaded({ artifact, expectedCapturedAt, url, retryKey });
         }
       })
       .catch((error: unknown) => {
@@ -317,16 +338,18 @@ export function useSeriesArtifact(
             },
             expectedCapturedAt,
             url,
+            retryKey,
           });
         }
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [expectedCapturedAt, url]);
+  }, [expectedCapturedAt, url, retryKey]);
   return url &&
     loaded?.url === url &&
-    loaded.expectedCapturedAt === expectedCapturedAt
+    loaded.expectedCapturedAt === expectedCapturedAt && loaded.retryKey === retryKey
     ? loaded.artifact
     : null;
 }

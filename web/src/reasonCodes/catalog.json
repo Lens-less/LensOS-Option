@@ -318,9 +318,9 @@
   "MARKET_DATA_AGE_EXCEEDED": {
     "shell": {
       "title": "快照超过新鲜度上限",
-      "detail": "录制快照相对当前时钟已经过期。要在浏览器里读取录制数据，需要把评估时钟固定到采集时刻。",
+      "detail": "快照已超过报告声明的新鲜度上限。查看当前市场需要重新采集并校验；如果只研究录制数据，可在回放模式下按采集时刻评估，但这不会使旧报价成为当前行情。",
       "remedy": {
-        "label": "以回放模式启动本地引擎（固定评估时钟）",
+        "label": "仅研究录制数据时：替换快照路径后启动回放",
         "command": "python -m crypto_options_report.api --replay --snapshot-fixture <快照文件> --underlying-history-fixture artifacts/history/btc-daily.json"
       }
     },
@@ -332,9 +332,9 @@
   "MARKET_DATA_QUALITY_FAIL": {
     "shell": {
       "title": "市场快照未通过质量门禁",
-      "detail": "快照被读到了，但报价质量不达标——常见原因是快照过旧（超过 60 秒）、报价陈旧或买卖价异常。",
+      "detail": "快照已读取，但未通过报告声明的质量门禁。请核对具体原因并重新采集有问题的报价；回放只适用于研究录制快照，无法修复报价缺失、倒挂或单位错误。",
       "remedy": {
-        "label": "以回放模式启动本地引擎（固定评估时钟）",
+        "label": "仅研究录制数据时：替换快照路径后启动回放",
         "command": "python -m crypto_options_report.api --replay --snapshot-fixture <快照文件> --underlying-history-fixture artifacts/history/btc-daily.json"
       }
     },
@@ -622,6 +622,10 @@
     }
   },
   "NO_OPEN_POSITIONS": {
+    "shell": {
+      "title": "当前没有可评估的持仓",
+      "detail": "本次报告没有开放持仓可供评估，这是正常空状态，不需要为消除提示而建立持仓。"
+    },
     "public": {
       "title": "没有可评估的持仓",
       "detail": "公开研究不接入私人持仓；本项只是明确的空状态。"
@@ -642,7 +646,7 @@
   "NO_VALIDATED_PATH_RISK": {
     "shell": {
       "title": "该候选没有路径风险证据",
-      "detail": "这一条的预期价值未被计算：要么标的历史不足以覆盖它的持有期，要么它排在计算配额之外。",
+      "detail": "这一条的预期价值未被计算：可能是标的历史不足以覆盖持有期，也可能未进入计算配额。补齐历史后仍须核对计算范围和验证结果。",
       "remedy": {
         "label": "抓取标的历史（公开数据，无需凭证）",
         "command": "crypto-options-underlying-history --currency BTC --days 1200 --output artifacts/history/btc-daily.json"
@@ -704,6 +708,10 @@
     }
   },
   "REGIME_MIN_OBSERVATIONS_NOT_MET": {
+    "shell": {
+      "title": "市场状态观测数不足",
+      "detail": "有效观测尚未达到报告声明的最低数量，市场状态结论保持不可用。重复打开同一快照不会增加独立观测。"
+    },
     "public": {
       "title": "市场状态观测数不足",
       "detail": "有效观测未达到预设下限，结论保持不可用。"
@@ -716,6 +724,10 @@
     }
   },
   "REGIME_ROLLING_FIELDS_INCOMPLETE": {
+    "shell": {
+      "title": "市场状态滚动字段不完整",
+      "detail": "滚动状态所需的字段或时间窗口存在缺口，系统需补全并重新校验；页面不会用默认值补齐。"
+    },
     "public": {
       "title": "市场状态字段不完整",
       "detail": "滚动状态所需字段存在缺口；页面不会用默认值补齐。"
@@ -728,6 +740,10 @@
     }
   },
   "REGIME_ROLLING_HISTORY_INSUFFICIENT": {
+    "shell": {
+      "title": "市场状态历史不足",
+      "detail": "实时滚动历史还不足以验证市场状态，需要持续采集有效观察。离线演示或重复回放不会自动补齐这类证据。"
+    },
     "public": {
       "title": "市场状态历史不足",
       "detail": "滚动历史不足以验证市场状态，权限保持为零。"
@@ -740,6 +756,10 @@
     }
   },
   "REGIME_TRUST_EVIDENCE_NOT_PROMOTED": {
+    "shell": {
+      "title": "市场状态证据尚未通过可信复核",
+      "detail": "现有证据尚未达到可信度条件，仍需持续观察与复核。等待时间本身不保证通过，执行权限继续保持关闭。"
+    },
     "public": {
       "title": "市场状态证据尚未提升",
       "detail": "状态证据仍是研究级，不能用于放开任何执行权限。"

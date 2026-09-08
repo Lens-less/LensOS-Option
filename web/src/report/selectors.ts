@@ -113,20 +113,28 @@ export function selectReportFreshness(
   receivedAtMs: number,
   nowMs: number,
 ): ReportFreshness {
-  if (
-    report.runtime_context?.mode === "published" &&
-    report.publish_edition?.captured_at
-  ) {
-    const capturedAtMs = Date.parse(report.publish_edition.captured_at);
-    const staleAfterMs = report.publish_edition.stale_after
-      ? Date.parse(report.publish_edition.stale_after)
-      : Number.NaN;
-    if (Number.isFinite(capturedAtMs)) {
-      const ageSec = Math.max(0, Math.floor((nowMs - capturedAtMs) / 1_000));
-      const maxAgeSec =
-        Number.isFinite(staleAfterMs) && staleAfterMs > capturedAtMs
-          ? Math.max(1, Math.floor((staleAfterMs - capturedAtMs) / 1_000))
-          : 48 * 60 * 60;
+  // Receipt and display clocks share this device. A rollback or corrupt cache
+  // must withdraw evidence, not reset its elapsed age to zero.
+  const validLocalClock = Number.isFinite(receivedAtMs) && Number.isFinite(nowMs)
+    && receivedAtMs >= 0 && nowMs >= receivedAtMs;
+  if (report.runtime_context?.mode === "published") {
+    const edition = report.publish_edition;
+    const capturedAtMs = Date.parse(edition?.captured_at ?? "");
+    const publishedAtMs = Date.parse(edition?.published_at ?? "");
+    const staleAfterMs = Date.parse(edition?.stale_after ?? "");
+    const maxAgeSec = Number.isFinite(staleAfterMs) && staleAfterMs > capturedAtMs
+      ? Math.max(1, Math.floor((staleAfterMs - capturedAtMs) / 1_000))
+      : 48 * 60 * 60;
+    const provenance = {
+      mode: "published" as const,
+      capturedAt: edition?.captured_at ?? null,
+      publishedAt: edition?.published_at ?? null,
+      staleAfter: edition?.stale_after ?? null,
+    };
+    if (validLocalClock && [capturedAtMs, publishedAtMs, staleAfterMs].every(Number.isFinite)
+      && capturedAtMs >= 0 && publishedAtMs >= capturedAtMs && publishedAtMs <= nowMs
+      && staleAfterMs > capturedAtMs) {
+      const ageSec = Math.floor((nowMs - capturedAtMs) / 1_000);
       const warningAgeSec = Math.max(1, Math.floor(maxAgeSec * 0.75));
       return {
         ageSec,
@@ -137,12 +145,10 @@ export function selectReportFreshness(
             : ageSec >= warningAgeSec
               ? "warning"
               : "current",
-        mode: "published",
-        capturedAt: report.publish_edition.captured_at,
-        publishedAt: report.publish_edition.published_at ?? null,
-        staleAfter: report.publish_edition.stale_after ?? null,
+        ...provenance,
       };
     }
+    return { ageSec: null, maxAgeSec, phase: "unavailable", ...provenance };
   }
 
   const reportedAge = report.data_status?.market_data_age_sec;
@@ -156,7 +162,7 @@ export function selectReportFreshness(
       : 60;
 
   if (
-    typeof reportedAge !== "number" ||
+    !validLocalClock || typeof reportedAge !== "number" ||
     !Number.isFinite(reportedAge) ||
     reportedAge < 0
   ) {
@@ -168,7 +174,7 @@ export function selectReportFreshness(
     };
   }
 
-  const elapsedSec = Math.max(0, nowMs - receivedAtMs) / 1_000;
+  const elapsedSec = (nowMs - receivedAtMs) / 1_000;
   const ageSec = Math.floor(reportedAge + elapsedSec);
   const warningAgeSec = Math.min(45, maxAgeSec);
   const phase: FreshnessPhase =

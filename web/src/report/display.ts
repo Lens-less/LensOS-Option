@@ -48,18 +48,23 @@ export function marketDisplayState(
   report: ResearchReport,
   freshness: ReportFreshness,
 ): MarketDisplayState {
-  if (
-    freshness.mode === "published" &&
-    freshness.phase === "expired"
-  ) {
+  if (freshness.phase === "expired") {
     return "stale";
   }
   if (
     report.data_status?.validated !== true ||
-    freshness.phase === "expired" ||
+    report.data_status.quality_gate?.passed === false ||
     freshness.phase === "unavailable"
   ) {
     return "quality_blocked";
+  }
+  if (report.runtime_context?.mode === "published") {
+    const publication = report.full_system_surface?.release_gates?.find(
+      (gate) => gate.name === "research_publication",
+    );
+    if (publication?.status !== "GO" || publication.satisfied !== true) {
+      return "quality_blocked";
+    }
   }
   return "available";
 }

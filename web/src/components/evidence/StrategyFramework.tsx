@@ -9,10 +9,7 @@ import {
   marketDisplayState,
 } from "./reportModel";
 import type { Freshness } from "./reportModel";
-import {
-  readReasonCode,
-  resolveExchangeEventEvidence,
-} from "../shell/reasonCodes";
+import { resolveExchangeEventEvidence } from "../shell/reasonCodes";
 import {
   formatDecimal,
   formatExpiry,
@@ -188,14 +185,23 @@ function formatPublishedLimitHours(maxAgeSec: number | null | undefined): string
 
 function ExchangeEventEvidence({
   report,
-  stale,
+  unavailable = false,
 }: {
   report: ResearchReport;
-  stale: boolean;
+  unavailable?: boolean;
 }): React.JSX.Element {
+  if (unavailable) {
+    return (
+      <section aria-label="事件源与交易所锁定" className="entry-contract" role="region">
+        <header className="workflow-subheading compact">
+          <h3>事件源与交易所锁定</h3>
+          <strong data-status="block">当前证据不可用（按阻断处理）</strong>
+        </header>
+        <p>当前市场证据不可用，事件分与锁定结论已收起；取得新快照后重新验证。</p>
+      </section>
+    );
+  }
   const reading = resolveExchangeEventEvidence(report);
-  const staleReading = readReasonCode("PUBLISHED_EDITION_STALE");
-  const reasonCode = stale ? "PUBLISHED_EDITION_STALE" : reading.reasonCode;
 
   return (
     <section
@@ -208,25 +214,25 @@ function ExchangeEventEvidence({
           <span>Event evidence / 事件证据</span>
           <h3>事件源与交易所锁定</h3>
         </div>
-        <strong data-status={stale || reading.blocked ? "block" : "pass"}>
-          {stale ? "已过期（按阻断处理）" : reading.stateLabel}
+        <strong data-status={reading.blocked ? "block" : "pass"}>
+          {reading.stateLabel}
         </strong>
       </header>
       <div className="condition-grid">
-        <article data-status={stale || reading.blocked ? "block" : "pass"}>
+        <article data-status={reading.blocked ? "block" : "pass"}>
           <div>
             <span>事件分</span>
-            <strong>{stale ? "已收起" : reading.scoreLabel}</strong>
+            <strong>{reading.scoreLabel}</strong>
           </div>
           <p>{reading.sourceLabel}</p>
           <small>只覆盖交易所原生锁定状态，不替代宏观事件日历。</small>
         </article>
-        <article data-status={stale || reading.blocked ? "block" : "pass"}>
+        <article data-status={reading.blocked ? "block" : "pass"}>
           <div>
             <span>判定原因</span>
-            <code>{reasonCode}</code>
+            <code>{reading.reasonCode}</code>
           </div>
-          <p>{stale ? staleReading.detail : reading.detail}</p>
+          <p>{reading.detail}</p>
           <small>缺失、异常或非契约分值一律按阻断处理。</small>
         </article>
       </div>
@@ -244,6 +250,27 @@ export function StrategyFrameworkSection({
   const strategy = report.strategy_research;
   const displayState = freshness ? marketDisplayState(report, freshness) : "available";
   const isPublished = report.runtime_context?.mode === "published";
+  if (displayState !== "available") {
+    return (
+      <section id="framework" className="research-section strategy-workflow" aria-label="完整策略工作流">
+        <header className="strategy-verdict">
+          <div className="strategy-verdict-copy">
+            <p className="section-kicker">Decision workflow / 研究闭环</p>
+            <h2>今日策略结论</h2>
+            <strong className="primary-structure">当前策略已收起</strong>
+            <p>策略样本、经济值、候选比较与进场条件依赖有效市场证据；取得新快照后重新评估。</p>
+          </div>
+        </header>
+        <div className="strategy-empty published-stop-state" role="status">
+          <strong>{displayState === "stale"
+            ? isPublished ? "发布已停摆" : "市场证据已失效"
+            : "市场证据不可用"}</strong>
+          <p>只读 · 不生成仓位 · 不生成订单</p>
+        </div>
+        <ExchangeEventEvidence report={report} unavailable />
+      </section>
+    );
+  }
   const collection = strategy?.collection;
   const market = strategy?.analysis?.market;
   const volatility = strategy?.analysis?.volatility;
@@ -352,19 +379,9 @@ export function StrategyFrameworkSection({
         ))}
       </ol>
 
-      <ExchangeEventEvidence
-        report={report}
-        stale={displayState === "stale"}
-      />
+      <ExchangeEventEvidence report={report} />
 
-      {displayState === "stale" ? (
-        <div className="strategy-empty published-stop-state" role="status">
-          <strong>发布已停摆</strong>
-          <p>
-            当前公开版已超过时效上限；策略样本、经济值与候选比较全部暂停展示，直到下一版发布。
-          </p>
-        </div>
-      ) : playbook ? (
+      {playbook ? (
         <>
           <div className="strategy-analysis-grid">
             <article className="strategy-panel">
@@ -585,9 +602,11 @@ export function StrategyFrameworkSection({
                   <p>
                     {isPublished && condition.id === "market_freshness"
                       ? publishedFreshnessObserved
-                      : `${isPublished ? "当次评估" : "当前"}：${formatConditionObserved(
+                      : `${condition.id === "market_freshness" ? "当前" : "当次评估"}：${formatConditionObserved(
                           condition.id,
-                          condition.observed,
+                          condition.id === "market_freshness" && freshness
+                            ? freshness.ageSec
+                            : condition.observed,
                         )}`}
                   </p>
                   <small>
@@ -599,6 +618,7 @@ export function StrategyFrameworkSection({
               ))}
             </div>
             <p className="strategy-note entry-note">
+              计算时刻：{formatCutoffTime(strategy?.generated_at ?? report.runtime_context?.evaluation_clock ?? report.generated_at)}。{" "}
               定价口径：卖出腿 bid − 买入腿 ask；每次刷新必须重新满足全部硬条件。
             </p>
           </section>
