@@ -1,19 +1,36 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ResearchReport } from "../../contracts";
 import { APP_INDEX_HREF, RAW_REPORT_HREF, VIEW_LINKS } from "../../publicPaths";
 import { SectionNavigation } from "../evidence/Shell";
 import type { Freshness } from "../evidence/reportModel";
-import { formatCutoffTime } from "../evidence/reportModel";
+import { FRESHNESS_LABELS, formatCutoffTime } from "../evidence/reportModel";
 import { formatDurationHours } from "../../report/display";
 import { PublishedEditionBar } from "./PublishedEditionBar";
 import { ReplayBanner } from "./ReplayBanner";
 import { SiteFooter } from "./SiteFooter";
 
-export type AppView = "evidence" | "workbench" | "series" | "signal";
+export type AppView = "evidence" | "workbench" | "series" | "signal" | "demo";
 
 function currentViewId(view: AppView): AppView {
   return view;
+}
+
+const VIEW_LABELS: Record<AppView, string> = {
+  demo: "学习导览", evidence: "研究简报", series: "波动时序", workbench: "候选工作台", signal: "排序验证",
+};
+
+function useCompactShell(): boolean {
+  const [compact, setCompact] = useState(() => window.matchMedia?.("(max-width: 699px)").matches ?? false);
+  useEffect(() => {
+    const media = window.matchMedia?.("(max-width: 699px)");
+    if (!media) return;
+    const sync = () => setCompact(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+  return compact;
 }
 
 export function AppShell({
@@ -34,10 +51,15 @@ export function AppShell({
   view: AppView;
 }): React.JSX.Element {
   const [activeView, setActiveView] = useState<AppView>(() => currentViewId(view));
+  const compact = useCompactShell();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const sync = () => {
       setActiveView(currentViewId(view));
+      setMenuOpen(false);
     };
     sync();
     window.addEventListener("popstate", sync);
@@ -63,15 +85,17 @@ export function AppShell({
     : null;
   const refreshLabel =
     report.runtime_context?.mode === "published" ? "重新载入本版" : "刷新";
+  const isDemo = report.runtime_context?.demo_mode === true;
+  const isLearning = isDemo && view === "demo";
 
   return (
-    <div className="app-shell app-shell-spine">
+    <div className="app-shell app-shell-spine research-app-shell" data-compact={compact} data-freshness={freshness?.phase ?? "unavailable"}>
       <a className="skip-link" href="#surface-main">
         跳到主要内容
       </a>
 
       <header className="spine-masthead">
-        <a className="brand" href={APP_INDEX_HREF} aria-label="LensOS 期权研究台首页">
+        <a className="brand" href={isDemo ? `${APP_INDEX_HREF}?view=demo` : APP_INDEX_HREF} aria-label="LensOS 期权研究台首页">
           <span className="brand-mark" aria-hidden="true">
             LO
           </span>
@@ -81,7 +105,23 @@ export function AppShell({
           </span>
         </a>
 
+        <button className="spine-menu-toggle" hidden={!compact} ref={menuButton}
+          type="button" aria-expanded={menuOpen} aria-controls="research-navigation"
+          data-testid="mobile-navigation-toggle" onClick={() => setMenuOpen((open) => !open)}>
+          {VIEW_LABELS[activeView]} · 导航
+        </button>
+        <div id="research-navigation" className="spine-navigation" hidden={compact && !menuOpen}
+          onKeyDown={(event) => {
+            if (compact && event.key === "Escape") {
+              event.preventDefault();
+              setMenuOpen(false);
+              menuButton.current?.focus();
+            }
+          }}>
         <nav aria-label="全视图导航" className="spine-views">
+          <a aria-current={activeView === "demo" ? "page" : undefined} href={`${APP_INDEX_HREF}?view=demo`}>
+            学习导览
+          </a>
           {VIEW_LINKS.map((item) => (
             <a
               aria-current={activeView === item.id ? "page" : undefined}
@@ -94,7 +134,7 @@ export function AppShell({
         </nav>
 
         <div className="spine-actions">
-          {freshness ? (
+          {freshness && !isLearning ? (
             <span
               className="source-indicator"
               data-state={freshness.phase}
@@ -105,15 +145,15 @@ export function AppShell({
               {age ? ` · ${age}` : ""}
             </span>
           ) : null}
-          <a
+          {!isLearning ? <a
             className="text-link"
             href={RAW_REPORT_HREF}
             rel="noreferrer"
             target="_blank"
           >
             原始 JSON
-          </a>
-          {onRefresh ? (
+          </a> : <span className="source-indicator">离线教学</span>}
+          {onRefresh && !isLearning ? (
             <button
               aria-busy={refreshing}
               className="refresh-button"
@@ -125,12 +165,23 @@ export function AppShell({
             </button>
           ) : null}
         </div>
+        {compact && view === "evidence" ? <SectionNavigation /> : null}
+        </div>
       </header>
 
-      {freshness ? <PublishedEditionBar freshness={freshness} report={report} /> : null}
-      <ReplayBanner report={report} />
+      {isLearning ? <p className="spine-learning-boundary" role="note"><strong>离线教学</strong><span>仅研究 · NO_TRADE</span></p> : (
+      <details className="spine-context" open={!compact || contextOpen}
+        onToggle={(event) => { if (compact) setContextOpen(event.currentTarget.open); }}>
+        <summary className="spine-context-summary" hidden={!compact}>
+          <strong>{isDemo ? "演示快照" : report.runtime_context?.replay ? "历史回放" : report.runtime_context?.mode === "published" ? "公开快照" : "市场研究"}</strong>
+          <span>仅研究 · NO_TRADE</span>
+          <span className="spine-context-action">数据详情</span>
+        </summary>
+        {compact && freshness ? <p className="spine-context-freshness">数据时效：{FRESHNESS_LABELS[freshness.phase]}{age ? ` · ${age}` : ""}</p> : null}
+      {freshness && !isLearning ? <PublishedEditionBar freshness={freshness} report={report} /> : null}
+      {!isLearning ? <ReplayBanner report={report} /> : null}
 
-      <div className="spine-boundary" role="note">
+      {!isLearning ? <div className="spine-boundary" role="note">
         <dl>
           <div data-tone="danger">
             <dt>执行边界</dt>
@@ -141,8 +192,10 @@ export function AppShell({
             <dd>{formatCutoffTime(cutoff)}</dd>
           </div>
         </dl>
-      </div>
-      {view === "evidence" ? <SectionNavigation /> : null}
+      </div> : null}
+      </details>
+      )}
+      {!compact && view === "evidence" ? <SectionNavigation /> : null}
 
       {publishedStale ? (
         <main className="published-stop-main" id="surface-main">

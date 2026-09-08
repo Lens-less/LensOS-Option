@@ -1,0 +1,2263 @@
+{
+  "Summary": {
+    "alert": {
+      "code": "NO_CHANGE_ALERT",
+      "level": "info",
+      "message": "No exceptional public alert condition is active."
+    },
+    "cadence": "daily",
+    "captured_at": "2026-07-07T00:01:00Z",
+    "change": {
+      "band_changed": false,
+      "current_observed_at": "2026-07-06T00:00:00Z",
+      "dvol_percent_delta": 0.45,
+      "percentile_delta": 0.051188,
+      "prior_observed_at": "2026-07-05T00:00:00Z",
+      "rv30_percent_delta": -0.000211,
+      "status": "available",
+      "vrp_percent_points_delta": 0.450211
+    },
+    "data_status": {
+      "evidence_class": "untrusted",
+      "status": "validated"
+    },
+    "disclaimer_url": "/disclaimer.html",
+    "methodology_url": "/methodology.html",
+    "publication_history": {
+      "history": [
+        {
+          "capture_row_count": 96,
+          "captured_at": "2026-07-05T23:01:00Z",
+          "date": "2026-07-06",
+          "excluded_snapshot_count": 1,
+          "published_at": "2026-07-06T00:01:00Z",
+          "quality_gate_blocked_count": 0,
+          "reason_code": null,
+          "research_publication_status": "GO",
+          "status": "success"
+        }
+      ],
+      "reason": null,
+      "status": "available",
+      "window_days": 30
+    },
+    "published_at": "2026-07-07T00:01:00Z",
+    "release_gates": [
+      {
+        "evidence_class": "published_research_manifest",
+        "evidence_state": "verified",
+        "execution_allowed": false,
+        "missing_prerequisites": [],
+        "name": "research_publication",
+        "owner": "research_team",
+        "publication_evidence": {
+          "data_quality": "validated",
+          "disclaimer": "present",
+          "methodology": "present",
+          "publish_manifest": "verified"
+        },
+        "reason_codes": [],
+        "satisfied": true,
+        "status": "GO"
+      },
+      {
+        "configurable": false,
+        "evidence_class": "hard_coded_product_boundary",
+        "evidence_state": "product_boundary",
+        "execution_allowed": false,
+        "name": "execution_authorization",
+        "owner": "system",
+        "reason_codes": [
+          "EXECUTION_DISABLED_BY_PRODUCT_DEFINITION"
+        ],
+        "satisfied": false,
+        "status": "NO-GO"
+      }
+    ],
+    "schema_version": "public_summary.v1",
+    "stale_after": "2026-07-09T00:01:00Z",
+    "vrp": {
+      "band": "P30-P70",
+      "dvol_observed_at": "2026-07-06T00:00:00Z",
+      "dvol_percent": 44.7,
+      "evaluation_at": "2026-07-06T00:00:00Z",
+      "evidence_class": "validated_public_deribit_histories",
+      "field_evidence": {
+        "dvol_percent": {
+          "evidence_class": "validated_public_deribit_histories",
+          "unit": "percent"
+        },
+        "percentile": {
+          "evidence_class": "validated_public_deribit_histories",
+          "unit": "fraction_0_1"
+        },
+        "rv30_percent": {
+          "evidence_class": "validated_public_deribit_histories",
+          "unit": "percent"
+        },
+        "vrp_percent_points": {
+          "evidence_class": "validated_public_deribit_histories",
+          "unit": "percent_points"
+        }
+      },
+      "percentile": 0.585923,
+      "rv30_percent": 7.22143,
+      "underlying_observed_at": "2026-07-06T00:00:00Z",
+      "vrp_percent_points": 37.47857
+    }
+  },
+  "Health": {
+    "cadence": "daily",
+    "captured_at": "2026-07-07T00:01:00Z",
+    "data_status": "validated",
+    "disclaimer_url": "/disclaimer.html",
+    "execution_authorization_status": "NO-GO",
+    "is_stale_at_publish": false,
+    "last_published_at": "2026-07-07T00:01:00Z",
+    "manifest_verification": {
+      "artifact_count": 34,
+      "errors": [],
+      "status": "verified"
+    },
+    "next_expected_at": "2026-07-08T00:01:00Z",
+    "publication_history": {
+      "history": [
+        {
+          "capture_row_count": 96,
+          "captured_at": "2026-07-05T23:01:00Z",
+          "date": "2026-07-06",
+          "excluded_snapshot_count": 1,
+          "published_at": "2026-07-06T00:01:00Z",
+          "quality_gate_blocked_count": 0,
+          "reason_code": null,
+          "research_publication_status": "GO",
+          "status": "success"
+        }
+      ],
+      "reason": null,
+      "status": "available",
+      "window_days": 30
+    },
+    "publish_manifest_status": "verified",
+    "published_at": "2026-07-07T00:01:00Z",
+    "research_publication_status": "GO",
+    "runtime_mode": "published",
+    "schema_version": "public_health.v1",
+    "stale_after": "2026-07-09T00:01:00Z",
+    "status_url": "/status.html"
+  },
+  "ResearchSignal": {
+    "bands": {
+      "research_window": {
+        "cohorts_required": 8,
+        "cohorts_seen": 3,
+        "cohorts_short_by": 5,
+        "field_evidence": {
+          "cohorts_required": {
+            "evidence_class": "research_signal_artifact",
+            "unit": null
+          },
+          "cohorts_seen": {
+            "evidence_class": "research_signal_artifact",
+            "unit": null
+          },
+          "cohorts_short_by": {
+            "evidence_class": "research_signal_artifact",
+            "unit": null
+          },
+          "pending_cohorts": {
+            "evidence_class": "research_signal_artifact",
+            "unit": "count"
+          },
+          "settled_cohorts": {
+            "evidence_class": "research_signal_artifact",
+            "unit": "count"
+          }
+        },
+        "pending_cohorts": 1,
+        "settled_cohorts": 2
+      }
+    },
+    "captured_at": "2026-07-07T00:01:00Z",
+    "cohorts": [
+      {
+        "field_evidence": {
+          "observation_count": {
+            "evidence_class": "research_signal_artifact",
+            "unit": "count"
+          }
+        },
+        "name": "smile_residual_z",
+        "observation_count": 3,
+        "registered_at": "2026-07-27T00:00:00Z",
+        "status": "collecting"
+      }
+    ],
+    "generated_at": "2026-07-07T00:01:00Z",
+    "headline": "Published public research signal artifact",
+    "research_only": true,
+    "schema_version": "signal_preflight.v1",
+    "status": "projected",
+    "summary": {
+      "field_evidence": {
+        "signals_measured": {
+          "evidence_class": "research_signal_artifact",
+          "unit": null
+        },
+        "signals_with_detectable_ic": {
+          "evidence_class": "research_signal_artifact",
+          "unit": null
+        }
+      },
+      "signals_measured": 1,
+      "signals_with_detectable_ic": 0
+    }
+  },
+  "ResearchSeries": {
+    "captured_at": "2026-07-07T00:01:00Z",
+    "points": [
+      {
+        "field_evidence": {
+          "model_delta": {
+            "evidence_class": "research_series_artifact",
+            "unit": null
+          },
+          "smile_residual_z": {
+            "evidence_class": "research_series_artifact",
+            "unit": null
+          }
+        },
+        "model_delta": 0.09,
+        "observed_at": "2026-07-05T00:00:00Z",
+        "smile_residual_z": 0.18
+      },
+      {
+        "field_evidence": {
+          "model_delta": {
+            "evidence_class": "research_series_artifact",
+            "unit": null
+          },
+          "smile_residual_z": {
+            "evidence_class": "research_series_artifact",
+            "unit": null
+          }
+        },
+        "model_delta": 0.11,
+        "observed_at": "2026-07-06T00:00:00Z",
+        "smile_residual_z": -0.07
+      },
+      {
+        "field_evidence": {
+          "model_delta": {
+            "evidence_class": "research_series_artifact",
+            "unit": null
+          },
+          "smile_residual_z": {
+            "evidence_class": "research_series_artifact",
+            "unit": null
+          }
+        },
+        "model_delta": 0.08,
+        "observed_at": "2026-07-07T00:00:00Z",
+        "smile_residual_z": 0.04
+      }
+    ],
+    "schema_version": "series_history.v1"
+  },
+  "ResearchReport": {
+    "action": "RESEARCH_ONLY",
+    "backtest_status": {
+      "model_version": null,
+      "reason_code": "BACKTEST_NOT_RUN",
+      "status": "not_run"
+    },
+    "blocked_outputs": [
+      "trade_recommendation",
+      "recommended_size",
+      "order_instructions",
+      "paper_manual_trade_candidates"
+    ],
+    "calibration_status": {
+      "model_version": null,
+      "reason_code": "CALIBRATION_NOT_IMPLEMENTED",
+      "status": "unavailable"
+    },
+    "candidate_research": {
+      "call_credit_spreads": {
+        "eligible": [
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-125000-C",
+            "buy_leg_strike_price": 125000.0,
+            "candidate_id": "BTC-25JUL26-115000-C->BTC-25JUL26-125000-C:spread",
+            "decision": "eligible",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.104046,
+            "net_credit": 0.024,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-115000-C",
+            "sell_leg_strike_price": 115000.0,
+            "spread_width": 10000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          }
+        ],
+        "rejected": [
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-95000-C",
+            "buy_leg_strike_price": 95000.0,
+            "candidate_id": "BTC-25JUL26-90000-C->BTC-25JUL26-95000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.129517,
+            "net_credit": 0.013,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-90000-C",
+            "sell_leg_strike_price": 90000.0,
+            "spread_width": 5000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-100000-C",
+            "buy_leg_strike_price": 100000.0,
+            "candidate_id": "BTC-25JUL26-90000-C->BTC-25JUL26-100000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.282396,
+            "net_credit": 0.034,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-90000-C",
+            "sell_leg_strike_price": 90000.0,
+            "spread_width": 10000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-105000-C",
+            "buy_leg_strike_price": 105000.0,
+            "candidate_id": "BTC-25JUL26-90000-C->BTC-25JUL26-105000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.436962,
+            "net_credit": 0.055,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-90000-C",
+            "sell_leg_strike_price": 90000.0,
+            "spread_width": 15000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-110000-C",
+            "buy_leg_strike_price": 110000.0,
+            "candidate_id": "BTC-25JUL26-90000-C->BTC-25JUL26-110000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.571658,
+            "net_credit": 0.075,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-90000-C",
+            "sell_leg_strike_price": 90000.0,
+            "spread_width": 20000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-115000-C",
+            "buy_leg_strike_price": 115000.0,
+            "candidate_id": "BTC-25JUL26-90000-C->BTC-25JUL26-115000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.67323,
+            "net_credit": 0.094,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-90000-C",
+            "sell_leg_strike_price": 90000.0,
+            "spread_width": 25000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-120000-C",
+            "buy_leg_strike_price": 120000.0,
+            "candidate_id": "BTC-25JUL26-90000-C->BTC-25JUL26-120000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.739634,
+            "net_credit": 0.111,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-90000-C",
+            "sell_leg_strike_price": 90000.0,
+            "spread_width": 30000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-125000-C",
+            "buy_leg_strike_price": 125000.0,
+            "candidate_id": "BTC-25JUL26-90000-C->BTC-25JUL26-125000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.777276,
+            "net_credit": 0.126,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-90000-C",
+            "sell_leg_strike_price": 90000.0,
+            "spread_width": 35000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-100000-C",
+            "buy_leg_strike_price": 100000.0,
+            "candidate_id": "BTC-25JUL26-95000-C->BTC-25JUL26-100000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.152879,
+            "net_credit": 0.011,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-95000-C",
+            "sell_leg_strike_price": 95000.0,
+            "spread_width": 5000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-105000-C",
+            "buy_leg_strike_price": 105000.0,
+            "candidate_id": "BTC-25JUL26-95000-C->BTC-25JUL26-105000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.307445,
+            "net_credit": 0.032,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-95000-C",
+            "sell_leg_strike_price": 95000.0,
+            "spread_width": 10000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-110000-C",
+            "buy_leg_strike_price": 110000.0,
+            "candidate_id": "BTC-25JUL26-95000-C->BTC-25JUL26-110000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.442141,
+            "net_credit": 0.052,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-95000-C",
+            "sell_leg_strike_price": 95000.0,
+            "spread_width": 15000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-115000-C",
+            "buy_leg_strike_price": 115000.0,
+            "candidate_id": "BTC-25JUL26-95000-C->BTC-25JUL26-115000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.543713,
+            "net_credit": 0.071,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-95000-C",
+            "sell_leg_strike_price": 95000.0,
+            "spread_width": 20000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-120000-C",
+            "buy_leg_strike_price": 120000.0,
+            "candidate_id": "BTC-25JUL26-95000-C->BTC-25JUL26-120000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.610117,
+            "net_credit": 0.088,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-95000-C",
+            "sell_leg_strike_price": 95000.0,
+            "spread_width": 25000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-125000-C",
+            "buy_leg_strike_price": 125000.0,
+            "candidate_id": "BTC-25JUL26-95000-C->BTC-25JUL26-125000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.647759,
+            "net_credit": 0.103,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-95000-C",
+            "sell_leg_strike_price": 95000.0,
+            "spread_width": 30000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-105000-C",
+            "buy_leg_strike_price": 105000.0,
+            "candidate_id": "BTC-25JUL26-100000-C->BTC-25JUL26-105000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.154566,
+            "net_credit": 0.011,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-100000-C",
+            "sell_leg_strike_price": 100000.0,
+            "spread_width": 5000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-110000-C",
+            "buy_leg_strike_price": 110000.0,
+            "candidate_id": "BTC-25JUL26-100000-C->BTC-25JUL26-110000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.289262,
+            "net_credit": 0.031,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-100000-C",
+            "sell_leg_strike_price": 100000.0,
+            "spread_width": 10000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-115000-C",
+            "buy_leg_strike_price": 115000.0,
+            "candidate_id": "BTC-25JUL26-100000-C->BTC-25JUL26-115000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.390834,
+            "net_credit": 0.05,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-100000-C",
+            "sell_leg_strike_price": 100000.0,
+            "spread_width": 15000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-120000-C",
+            "buy_leg_strike_price": 120000.0,
+            "candidate_id": "BTC-25JUL26-100000-C->BTC-25JUL26-120000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.457238,
+            "net_credit": 0.067,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-100000-C",
+            "sell_leg_strike_price": 100000.0,
+            "spread_width": 20000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-125000-C",
+            "buy_leg_strike_price": 125000.0,
+            "candidate_id": "BTC-25JUL26-100000-C->BTC-25JUL26-125000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.49488,
+            "net_credit": 0.082,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-100000-C",
+            "sell_leg_strike_price": 100000.0,
+            "spread_width": 25000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-110000-C",
+            "buy_leg_strike_price": 110000.0,
+            "candidate_id": "BTC-25JUL26-105000-C->BTC-25JUL26-110000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.134696,
+            "net_credit": 0.011,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-105000-C",
+            "sell_leg_strike_price": 105000.0,
+            "spread_width": 5000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-115000-C",
+            "buy_leg_strike_price": 115000.0,
+            "candidate_id": "BTC-25JUL26-105000-C->BTC-25JUL26-115000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.236268,
+            "net_credit": 0.03,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-105000-C",
+            "sell_leg_strike_price": 105000.0,
+            "spread_width": 10000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-120000-C",
+            "buy_leg_strike_price": 120000.0,
+            "candidate_id": "BTC-25JUL26-105000-C->BTC-25JUL26-120000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.302672,
+            "net_credit": 0.047,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-105000-C",
+            "sell_leg_strike_price": 105000.0,
+            "spread_width": 15000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-125000-C",
+            "buy_leg_strike_price": 125000.0,
+            "candidate_id": "BTC-25JUL26-105000-C->BTC-25JUL26-125000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.340314,
+            "net_credit": 0.062,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-105000-C",
+            "sell_leg_strike_price": 105000.0,
+            "spread_width": 20000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-115000-C",
+            "buy_leg_strike_price": 115000.0,
+            "candidate_id": "BTC-25JUL26-110000-C->BTC-25JUL26-115000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.101572,
+            "net_credit": 0.01,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-110000-C",
+            "sell_leg_strike_price": 110000.0,
+            "spread_width": 5000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-120000-C",
+            "buy_leg_strike_price": 120000.0,
+            "candidate_id": "BTC-25JUL26-110000-C->BTC-25JUL26-120000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.167976,
+            "net_credit": 0.027,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-110000-C",
+            "sell_leg_strike_price": 110000.0,
+            "spread_width": 10000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-125000-C",
+            "buy_leg_strike_price": 125000.0,
+            "candidate_id": "BTC-25JUL26-110000-C->BTC-25JUL26-125000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.205618,
+            "net_credit": 0.042,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-110000-C",
+            "sell_leg_strike_price": 110000.0,
+            "spread_width": 15000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-120000-C",
+            "buy_leg_strike_price": 120000.0,
+            "candidate_id": "BTC-25JUL26-115000-C->BTC-25JUL26-120000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.066404,
+            "net_credit": 0.009,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-115000-C",
+            "sell_leg_strike_price": 115000.0,
+            "spread_width": 5000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "buy_leg_instrument_name": "BTC-25JUL26-125000-C",
+            "buy_leg_strike_price": 125000.0,
+            "candidate_id": "BTC-25JUL26-120000-C->BTC-25JUL26-125000-C:spread",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "model_delta": 0.037642,
+            "net_credit": 0.008,
+            "premium_currency": "USD",
+            "sell_leg_instrument_name": "BTC-25JUL26-120000-C",
+            "sell_leg_strike_price": 120000.0,
+            "spread_width": 5000.0,
+            "structure_type": "call_credit_spread",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          }
+        ],
+        "review": []
+      },
+      "iron_condors": {
+        "eligible": [],
+        "rejected": [],
+        "review": []
+      },
+      "naked_short_calls": {
+        "eligible": [
+          {
+            "candidate_id": "BTC-25JUL26-115000-C:naked",
+            "decision": "eligible",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "instrument_name": "BTC-25JUL26-115000-C",
+            "market_mid": 0.107,
+            "model_delta": 0.134409,
+            "premium_currency": "USD",
+            "structure_type": "naked_short_call",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "candidate_id": "BTC-25JUL26-120000-C:naked",
+            "decision": "eligible",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "instrument_name": "BTC-25JUL26-120000-C",
+            "market_mid": 0.0905,
+            "model_delta": 0.068005,
+            "premium_currency": "USD",
+            "structure_type": "naked_short_call",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "candidate_id": "BTC-25JUL26-125000-C:naked",
+            "decision": "eligible",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "instrument_name": "BTC-25JUL26-125000-C",
+            "market_mid": 0.076,
+            "model_delta": 0.030363,
+            "premium_currency": "USD",
+            "structure_type": "naked_short_call",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          }
+        ],
+        "rejected": [
+          {
+            "candidate_id": "BTC-25JUL26-90000-C:naked",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "instrument_name": "BTC-25JUL26-90000-C",
+            "market_mid": 0.21,
+            "model_delta": 0.807639,
+            "premium_currency": "USD",
+            "structure_type": "naked_short_call",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "candidate_id": "BTC-25JUL26-95000-C:naked",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "instrument_name": "BTC-25JUL26-95000-C",
+            "market_mid": 0.187,
+            "model_delta": 0.678122,
+            "premium_currency": "USD",
+            "structure_type": "naked_short_call",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "candidate_id": "BTC-25JUL26-100000-C:naked",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "instrument_name": "BTC-25JUL26-100000-C",
+            "market_mid": 0.166,
+            "model_delta": 0.525243,
+            "premium_currency": "USD",
+            "structure_type": "naked_short_call",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "candidate_id": "BTC-25JUL26-105000-C:naked",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "instrument_name": "BTC-25JUL26-105000-C",
+            "market_mid": 0.1455,
+            "model_delta": 0.370677,
+            "premium_currency": "USD",
+            "structure_type": "naked_short_call",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          },
+          {
+            "candidate_id": "BTC-25JUL26-110000-C:naked",
+            "decision": "reject",
+            "dte_days": 18.332639,
+            "expiry_date": "2026-07-25",
+            "instrument_name": "BTC-25JUL26-110000-C",
+            "market_mid": 0.1255,
+            "model_delta": 0.235981,
+            "premium_currency": "USD",
+            "structure_type": "naked_short_call",
+            "surface_quality": {
+              "fit_quality_score": 0.99955,
+              "no_arb_pass": true
+            },
+            "underlying_price": 100000.0
+          }
+        ],
+        "review": []
+      },
+      "put_credit_spreads": {
+        "eligible": [],
+        "rejected": [],
+        "review": []
+      },
+      "reason_code": null,
+      "status": "validated",
+      "summary": {
+        "eligible_call_credit_spreads": 1,
+        "eligible_expiries": 1,
+        "eligible_iron_condors": 0,
+        "eligible_naked_short_calls": 3,
+        "eligible_put_credit_spreads": 0,
+        "expiries_considered": 1,
+        "rejected_call_credit_spreads": 27,
+        "rejected_iron_condors": 0,
+        "rejected_naked_short_calls": 5,
+        "rejected_put_credit_spreads": 0,
+        "review_call_credit_spreads": 0,
+        "review_iron_condors": 0,
+        "review_naked_short_calls": 0,
+        "review_put_credit_spreads": 0
+      }
+    },
+    "data_status": {
+      "collection_scope": {
+        "coverage_ratio": 1.0,
+        "scope": "full_snapshot",
+        "selected_instrument_count": 8,
+        "upstream_instrument_count": 8
+      },
+      "market_data_age_sec": 0.0,
+      "quality_gate": {
+        "advisory_reason_codes": [],
+        "passed": true,
+        "reason_codes": [],
+        "summary": {
+          "expiries_evaluated": 1,
+          "fetch_errors": 0,
+          "invalid_quotes": 0,
+          "market_data_age_sec": 0.0,
+          "total_quotes": 8,
+          "valid_quotes": 8
+        },
+        "thresholds": {
+          "market_data_max_age_sec": 60
+        }
+      },
+      "reason_code": null,
+      "source": "deribit_published_snapshot",
+      "status": "validated",
+      "validated": true
+    },
+    "data_trust": {
+      "reason_codes": [
+        "DATA_TRUST_PROMOTION_PENDING"
+      ],
+      "source_class": "published_snapshot",
+      "verdict": "untrusted"
+    },
+    "effective_mode": "research_only",
+    "ev_candidate_scanner": {
+      "ranked_candidates": [
+        {
+          "action": "REVIEW",
+          "candidate_id": "BTC-25JUL26-115000-C->BTC-25JUL26-125000-C:spread",
+          "dominated_by": null,
+          "dte_days": 18.332639,
+          "ev_after_cost_usdc": null,
+          "executable_credit_usdc": 0.024,
+          "expiry_date": "2026-07-25",
+          "kill_conditions": [
+            "UNCALIBRATED_SCORE_MODEL",
+            "NO_VALIDATED_PATH_RISK",
+            "SUSPECT_PRICE_DIVERGENCE"
+          ],
+          "losing_axes": [],
+          "path_risk": {
+            "authoritative_sample_size": null,
+            "cvar_95_usdc": null,
+            "p_itm": null,
+            "p_touch": null,
+            "reason_code": "NO_VALIDATED_PATH_RISK",
+            "sample_size_basis": null,
+            "status": "unavailable"
+          },
+          "ranking_score": 1.967402,
+          "structure_type": "call_credit_spread"
+        },
+        {
+          "action": "REVIEW",
+          "candidate_id": "BTC-25JUL26-115000-C:naked",
+          "dominated_by": null,
+          "dte_days": 18.332639,
+          "ev_after_cost_usdc": null,
+          "executable_credit_usdc": 0.103,
+          "expiry_date": "2026-07-25",
+          "kill_conditions": [
+            "UNCALIBRATED_SCORE_MODEL",
+            "NO_VALIDATED_PATH_RISK",
+            "UNBOUNDED_LOSS_STRUCTURE",
+            "SUSPECT_PRICE_DIVERGENCE"
+          ],
+          "losing_axes": [],
+          "path_risk": {
+            "authoritative_sample_size": null,
+            "cvar_95_usdc": null,
+            "p_itm": null,
+            "p_touch": null,
+            "reason_code": "NO_VALIDATED_PATH_RISK",
+            "sample_size_basis": null,
+            "status": "unavailable"
+          },
+          "ranking_score": 0.966399,
+          "structure_type": "naked_short_call"
+        },
+        {
+          "action": "REVIEW",
+          "candidate_id": "BTC-25JUL26-120000-C:naked",
+          "dominated_by": null,
+          "dte_days": 18.332639,
+          "ev_after_cost_usdc": null,
+          "executable_credit_usdc": 0.087,
+          "expiry_date": "2026-07-25",
+          "kill_conditions": [
+            "UNCALIBRATED_SCORE_MODEL",
+            "NO_VALIDATED_PATH_RISK",
+            "UNBOUNDED_LOSS_STRUCTURE",
+            "SUSPECT_PRICE_DIVERGENCE"
+          ],
+          "losing_axes": [],
+          "path_risk": {
+            "authoritative_sample_size": null,
+            "cvar_95_usdc": null,
+            "p_itm": null,
+            "p_touch": null,
+            "reason_code": "NO_VALIDATED_PATH_RISK",
+            "sample_size_basis": null,
+            "status": "unavailable"
+          },
+          "ranking_score": 0.555165,
+          "structure_type": "naked_short_call"
+        },
+        {
+          "action": "REVIEW",
+          "candidate_id": "BTC-25JUL26-125000-C:naked",
+          "dominated_by": null,
+          "dte_days": 18.332639,
+          "ev_after_cost_usdc": null,
+          "executable_credit_usdc": 0.073,
+          "expiry_date": "2026-07-25",
+          "kill_conditions": [
+            "UNCALIBRATED_SCORE_MODEL",
+            "NO_VALIDATED_PATH_RISK",
+            "UNBOUNDED_LOSS_STRUCTURE",
+            "SUSPECT_PRICE_DIVERGENCE"
+          ],
+          "losing_axes": [],
+          "path_risk": {
+            "authoritative_sample_size": null,
+            "cvar_95_usdc": null,
+            "p_itm": null,
+            "p_touch": null,
+            "reason_code": "NO_VALIDATED_PATH_RISK",
+            "sample_size_basis": null,
+            "status": "unavailable"
+          },
+          "ranking_score": -1.001003,
+          "structure_type": "naked_short_call"
+        }
+      ],
+      "ranking_basis": {
+        "absolute_ev_available": false,
+        "method": "pareto_frontier_then_lexicographic",
+        "tie_break_order": [
+          "smile_residual_richness",
+          "return_on_risk",
+          "liquidity_cost_ratio",
+          "theta_efficiency",
+          "breakeven_cushion",
+          "assignment_cost"
+        ]
+      },
+      "reason_code": "NO_VALIDATED_PATH_RISK",
+      "rejected_count": 32,
+      "score_status": "UNCALIBRATED_RESEARCH_ONLY",
+      "status": "blocked",
+      "summary": {
+        "candidates_scanned": 4,
+        "kill_condition_candidates": 4,
+        "rejected_candidates": 0,
+        "review_candidates": 4,
+        "top_candidate_action": "REVIEW",
+        "top_candidate_id": "BTC-25JUL26-115000-C->BTC-25JUL26-125000-C:spread"
+      }
+    },
+    "event_status": {
+      "event_score": null,
+      "exchange_lock_state": "unknown",
+      "macro_calendar_covered": false,
+      "reason_code": "EVENTS_MISSING",
+      "scope": null,
+      "source": null,
+      "source_status": "missing"
+    },
+    "full_system_surface": {
+      "generated_at": "2026-07-07T00:01:00Z",
+      "release_gates": [
+        {
+          "evidence_class": "published_research_manifest",
+          "evidence_state": "verified",
+          "execution_allowed": false,
+          "missing_prerequisites": [],
+          "name": "research_publication",
+          "owner": "research_team",
+          "publication_evidence": {
+            "data_quality": "validated",
+            "disclaimer": "present",
+            "methodology": "present",
+            "publish_manifest": "verified"
+          },
+          "reason_codes": [],
+          "satisfied": true,
+          "status": "GO"
+        },
+        {
+          "configurable": false,
+          "evidence_class": "hard_coded_product_boundary",
+          "evidence_state": "product_boundary",
+          "execution_allowed": false,
+          "name": "execution_authorization",
+          "owner": "system",
+          "reason_codes": [
+            "EXECUTION_DISABLED_BY_PRODUCT_DEFINITION"
+          ],
+          "satisfied": false,
+          "status": "NO-GO"
+        }
+      ],
+      "release_readiness": {
+        "blocking_prerequisites": [
+          "external_release_authorization"
+        ],
+        "missing_prerequisites": [
+          "external_release_authorization"
+        ],
+        "prerequisites": [
+          {
+            "action": "Obtain separately authorized manual/external release evidence; this research runtime cannot grant it.",
+            "evidence_class": "manual_external_authorization",
+            "evidence_state": "not_configured",
+            "name": "external_release_authorization",
+            "owner": "external_operator",
+            "reason_codes": [
+              "EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED"
+            ],
+            "release_blocking": true,
+            "release_state": "awaiting_external",
+            "root_cause": "EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED",
+            "satisfied": false
+          }
+        ],
+        "status": "NO-GO"
+      },
+      "schema_version": "full_system_surface_report.v1",
+      "status": "declared_not_probed"
+    },
+    "generated_at": "2026-07-07T00:01:00Z",
+    "mode": "research_only",
+    "mode_gate": {
+      "order_instructions_allowed": false,
+      "paper_manual_candidates_allowed": false,
+      "reason_codes": [
+        "DATA_TRUST_PROMOTION_PENDING",
+        "REGIME_ROLLING_HISTORY_INSUFFICIENT",
+        "REGIME_TRUST_EVIDENCE_NOT_PROMOTED",
+        "REGIME_MIN_OBSERVATIONS_NOT_MET",
+        "REGIME_CURRENT_FEEDS_INCOMPLETE",
+        "REGIME_ROLLING_FIELDS_INCOMPLETE",
+        "CALIBRATION_NOT_IMPLEMENTED",
+        "BACKTEST_NOT_RUN",
+        "NO_VALIDATED_PATH_RISK",
+        "NO_OPEN_POSITIONS"
+      ],
+      "recommended_size_allowed": false,
+      "trade_recommendation_allowed": false
+    },
+    "publish_edition": {
+      "cadence": "daily",
+      "captured_at": "2026-07-07T00:01:00Z",
+      "next_expected_at": "2026-07-08T00:01:00Z",
+      "published_at": "2026-07-07T00:01:00Z",
+      "stale_after": "2026-07-09T00:01:00Z"
+    },
+    "reason_codes": [
+      "DATA_TRUST_PROMOTION_PENDING",
+      "REGIME_ROLLING_HISTORY_INSUFFICIENT",
+      "REGIME_TRUST_EVIDENCE_NOT_PROMOTED",
+      "REGIME_MIN_OBSERVATIONS_NOT_MET",
+      "REGIME_CURRENT_FEEDS_INCOMPLETE",
+      "REGIME_ROLLING_FIELDS_INCOMPLETE",
+      "CALIBRATION_NOT_IMPLEMENTED",
+      "BACKTEST_NOT_RUN",
+      "NO_VALIDATED_PATH_RISK",
+      "NO_OPEN_POSITIONS"
+    ],
+    "risk_state": "HALT",
+    "runtime_context": {
+      "evaluation_clock": "2026-07-07T00:01:00Z",
+      "live_fetch_allowed": false,
+      "mode": "published",
+      "notice": "Published edition evaluated at the capture time; wall-clock age and publication-stall state are declared separately.",
+      "profile": "published",
+      "replay": false,
+      "snapshot_fixture": null
+    },
+    "schema_version": "research_report.v1",
+    "strategy_brief": {
+      "action": "NO_TRADE",
+      "analysis_run_id": "analysis:a527d4b89bf13dcac570f13df12f4253c39b23c9be71aa3c0ff4dae14dd91812",
+      "brief_id": "brief:e62cc81398e1d93b29d1223a6e42f08ab4d1cd54fc591ca561cd9775f78fc6e2",
+      "evidence_summary": {
+        "as_of": "2026-07-07T00:01:00Z",
+        "candidate_count": 28,
+        "default_structure_family": null,
+        "hard_gate_pass_count": 0,
+        "items": [
+          {
+            "artifact_id": null,
+            "detail_zh": "组合入场使用 short bid / long ask 的冻结成本模型，不使用 mid 或 mark。",
+            "label": "市场证据",
+            "status": "BLOCK",
+            "summary_zh": "执行口径与报价同步通过硬门禁"
+          },
+          {
+            "artifact_id": null,
+            "detail_zh": "未验证或未对齐的历史结果自动退化为状态标签。",
+            "label": "历史证据",
+            "status": "WARN",
+            "summary_zh": "只有 VALIDATED 才显示历史胜率"
+          },
+          {
+            "artifact_id": null,
+            "detail_zh": "未校准、过期或超出适用范围的预测不会显示概率区间。",
+            "label": "预测胜率",
+            "status": "WARN",
+            "summary_zh": "只有 CALIBRATED 才显示预测区间"
+          }
+        ],
+        "primary_reason_codes": [
+          "NO_ELIGIBLE_STRATEGY"
+        ],
+        "recommended_count": 0,
+        "rejection_counts": {
+          "NO_ELIGIBLE_STRATEGY": 28
+        },
+        "selected_count": 0,
+        "summary_zh": "当前没有通过全部硬门禁的有限风险策略。",
+        "surface": {
+          "freshness_status": "UNAVAILABLE",
+          "presented_as": "published",
+          "source_kind": "fallback",
+          "source_label": "Presentation context unavailable"
+        },
+        "valid_until": "2026-07-07T00:02:00Z",
+        "watch_count": 0
+      },
+      "execution_allowed": false,
+      "generated_at": "2026-07-07T00:01:00Z",
+      "market": {
+        "action": "NO_TRADE",
+        "as_of": "2026-07-07T00:01:00Z",
+        "confidence": "UNAVAILABLE",
+        "direction": "UNCLEAR",
+        "expires_at": "2026-07-07T00:02:00Z",
+        "liquidity": "UNAVAILABLE",
+        "summary_zh": "BTC: 方向不明 | 隐含波动率未知 | 流动性不可用",
+        "underlying": "BTC",
+        "volatility": "UNKNOWN"
+      },
+      "no_trade": {
+        "active": true,
+        "headline_zh": "今日暂无可靠策略",
+        "next_update_at": "2026-07-07T00:02:00Z",
+        "primary_reason_codes": [
+          "NO_ELIGIBLE_STRATEGY"
+        ],
+        "summary_zh": "当前没有通过全部硬门禁的有限风险策略。"
+      },
+      "research_only": true,
+      "schema_version": "strategy_brief.v1",
+      "strategies": []
+    },
+    "strategy_research": {
+      "advisory_only": true,
+      "analysis": {
+        "interpretation_limits": [
+          "DVOL and fitted ATM IV are both implied-volatility measures; their gap is not labelled a volatility risk premium.",
+          "Expected move is a one-standard-deviation approximation, not a forecast or probability guarantee.",
+          "Candidate ranking uses observable screening quality because validated path-risk and EV evidence are unavailable."
+        ],
+        "market": {
+          "basis_rate": null,
+          "dvol_minus_atm_iv_points": 7.5,
+          "dvol_percent": 64.0,
+          "event_score": null,
+          "funding_rate": null,
+          "naked_permission": false,
+          "near_term_atm_iv_percent": 56.5,
+          "regime_label": "Collecting",
+          "regime_status": "blocked",
+          "sell_permission": 0.0,
+          "spot_usd": 100000.0,
+          "spread_permission": false
+        },
+        "volatility": {
+          "call_wing_richness_iv_points": -3.0,
+          "candidate_expiry_atm_iv_percent": 56.5,
+          "expected_move_percent": 12.66,
+          "expected_move_usd": 12662.36,
+          "fit_model": "quadratic_iv_vs_log_moneyness",
+          "front_expiry": {
+            "atm_fitted_iv_percent": 56.5,
+            "candidate_eligible": true,
+            "dte_days": 18.33,
+            "expiry_date": "2026-07-25",
+            "fit_quality_score": 0.9996,
+            "no_arbitrage_pass": true
+          },
+          "next_expiry": {
+            "atm_fitted_iv_percent": null,
+            "candidate_eligible": null,
+            "dte_days": null,
+            "expiry_date": null,
+            "fit_quality_score": null,
+            "no_arbitrage_pass": null
+          },
+          "surface_status": "validated",
+          "term_slope_iv_points": null
+        }
+      },
+      "collection": {
+        "captured_at": "2026-07-07T00:01:00Z",
+        "coverage": {
+          "coverage_ratio": 1.0,
+          "is_research_sample": false,
+          "scope": "full_snapshot",
+          "selected_instrument_count": 8,
+          "upstream_instrument_count": 8
+        },
+        "feed_graph": {
+          "complete": false,
+          "missing_required_feeds": []
+        },
+        "market_data_age_sec": 0.0,
+        "quality": {
+          "expiries_evaluated": 1,
+          "fetch_errors": 0,
+          "invalid_quotes": 0,
+          "total_quotes": 8,
+          "valid_quotes": 8
+        },
+        "source": "deribit_published_snapshot",
+        "status": "validated"
+      },
+      "confidence_ceiling": "screening_only",
+      "decision": {
+        "entry_readiness": "BLOCKED",
+        "primary_structure": "CALL_CREDIT_SPREAD",
+        "rejected_structures": [
+          {
+            "reason_codes": [
+              "UNBOUNDED_TAIL_LOSS",
+              "DEFINED_RISK_STRUCTURE_PREFERRED",
+              "NAKED_PERMISSION_FALSE"
+            ],
+            "status": "rejected_for_current_research_plan",
+            "structure": "NAKED_SHORT_CALL"
+          }
+        ],
+        "stance": "MONITOR_ONLY",
+        "summary": "A defined-risk call credit spread is the primary screening setup; activation gates remain closed.",
+        "why_not": [
+          "Regime evidence has not been promoted.",
+          "A fresh read-only account snapshot is unavailable.",
+          "Validated path-risk and EV ranking are unavailable.",
+          "Walk-forward calibration is not promoted.",
+          "The bounded historical backtest has not run."
+        ],
+        "why_now": [
+          "8/8 sampled quotes pass the market-data gate.",
+          "1 expiry surfaces are candidate-eligible.",
+          "1 defined-risk call credit spreads pass observable screening.",
+          "BTC-25JUL26-115000-C->BTC-25JUL26-125000-C:spread leads the observable screening rank."
+        ]
+      },
+      "degradation": [
+        {
+          "condition": "validated_path_risk_unavailable",
+          "effect": "screening_rank_only_no_ev_or_p_touch_claim"
+        },
+        {
+          "condition": "account_snapshot_missing_or_halted",
+          "effect": "risk_budget_formula_only_no_contract_count"
+        },
+        {
+          "condition": "regime_history_not_promoted",
+          "effect": "monitor_only_even_when_surface_candidates_exist"
+        },
+        {
+          "condition": "backtest_or_calibration_not_promoted",
+          "effect": "exit_policy_remains_template_only"
+        }
+      ],
+      "execution_allowed": false,
+      "generated_at": "2026-07-07T00:01:00Z",
+      "monitoring": [
+        {
+          "cadence": "each_refresh",
+          "current": 0.0,
+          "metric": "market_age_sec",
+          "response": "pause_research_setup",
+          "trigger": "> 60 sec"
+        },
+        {
+          "cadence": "each_refresh",
+          "current": 0.99955,
+          "metric": "surface_fit_quality",
+          "response": "remove_candidate",
+          "trigger": "< 0.9"
+        },
+        {
+          "cadence": "each_refresh",
+          "current": true,
+          "metric": "no_arbitrage_pass",
+          "response": "remove_candidate",
+          "trigger": "false"
+        },
+        {
+          "cadence": "each_refresh",
+          "current": false,
+          "metric": "spread_permission",
+          "response": "keep_monitor_only",
+          "trigger": "false_or_unpromoted"
+        },
+        {
+          "cadence": "each_refresh",
+          "current": null,
+          "metric": "event_score",
+          "response": "kill_new_entry",
+          "trigger": "> 0.75"
+        },
+        {
+          "cadence": "each_refresh",
+          "current": 0.104046,
+          "metric": "candidate_delta",
+          "response": "move_to_caution",
+          "trigger": "> 0.20 after entry"
+        },
+        {
+          "cadence": "each_refresh",
+          "current": 0.074766,
+          "metric": "sell_leg_spread_ratio",
+          "response": "remove_candidate",
+          "trigger": "> 0.25"
+        },
+        {
+          "cadence": "each_refresh",
+          "current": 0.078947,
+          "metric": "buy_leg_spread_ratio",
+          "response": "remove_candidate",
+          "trigger": "> 0.25"
+        },
+        {
+          "cadence": "each_refresh",
+          "current": 18.332639,
+          "metric": "dte_days",
+          "response": "time_management_review",
+          "trigger": "<= 7"
+        },
+        {
+          "cadence": "each_refresh",
+          "current": null,
+          "metric": "position_loss_multiple",
+          "response": "move_to_defense",
+          "trigger": ">= 2.0x"
+        }
+      ],
+      "pipeline": [
+        {
+          "output": "source_freshness_coverage_quality",
+          "stage": "COLLECT",
+          "status": "ready"
+        },
+        {
+          "output": "market_regime_term_structure_skew_expected_move",
+          "stage": "ANALYZE",
+          "status": "ready"
+        },
+        {
+          "output": "defined_risk_structure_and_ranked_candidate",
+          "stage": "SELECT",
+          "status": "ready"
+        },
+        {
+          "output": "conditional_gate_checklist",
+          "stage": "ENTER",
+          "status": "blocked"
+        },
+        {
+          "output": "nav_relative_budget_and_one_contract_shadow",
+          "stage": "RISK",
+          "status": "partial"
+        },
+        {
+          "output": "profit_time_and_position_state_policy",
+          "stage": "EXIT",
+          "status": "partial"
+        },
+        {
+          "output": "refresh_triggers_and_responses",
+          "stage": "MONITOR",
+          "status": "ready"
+        },
+        {
+          "output": "journal_backtest_calibration_and_promotion",
+          "stage": "REVIEW",
+          "status": "blocked"
+        }
+      ],
+      "playbook": {
+        "candidate": {
+          "buy_leg": "BTC-25JUL26-125000-C",
+          "buy_strike_usd": 125000.0,
+          "candidate_id": "BTC-25JUL26-115000-C->BTC-25JUL26-125000-C:spread",
+          "dte_days": 18.33,
+          "expiry_date": "2026-07-25",
+          "model_delta": 0.104,
+          "risk_neutral_p_itm": 0.1102,
+          "sell_leg": "BTC-25JUL26-115000-C",
+          "sell_strike_usd": 115000.0,
+          "surface_fit_quality": 0.9996
+        },
+        "economics": {
+          "assumption": "One-contract inverse-option USD shadow at entry reference price; fees use audited conservative defaults and slippage is not included.",
+          "breakeven_usd_shadow": 117400.0,
+          "credit_coin": 0.024,
+          "credit_to_max_loss_ratio": 0.3127,
+          "credit_usd_shadow": 2400.0,
+          "estimated_total_fees_usd_shadow": 75.0,
+          "premium_currency": "USD",
+          "reference_max_loss_usd_shadow": 7675.0,
+          "sell_strike_distance_percent": 15.0,
+          "sell_strike_distance_usd": 15000.0,
+          "sell_strike_expected_move_multiple": 1.18,
+          "spread_width_usd": 10000.0
+        },
+        "entry_contract": {
+          "conditions": [
+            {
+              "blocking": true,
+              "id": "market_quality",
+              "label": "Market snapshot passes the quality gate",
+              "observed": "validated",
+              "reason": null,
+              "requirement": "validated",
+              "status": "pass"
+            },
+            {
+              "blocking": true,
+              "id": "market_freshness",
+              "label": "Market snapshot remains inside its freshness limit",
+              "observed": 0.0,
+              "reason": null,
+              "requirement": "<= 60 sec",
+              "status": "pass"
+            },
+            {
+              "blocking": true,
+              "id": "candidate_eligibility",
+              "label": "Candidate remains eligible after refresh",
+              "observed": "eligible",
+              "reason": null,
+              "requirement": "eligible",
+              "status": "pass"
+            },
+            {
+              "blocking": true,
+              "id": "surface_fit",
+              "label": "Surface fit quality remains at or above 0.90",
+              "observed": 0.99955,
+              "reason": null,
+              "requirement": ">= 0.90",
+              "status": "pass"
+            },
+            {
+              "blocking": true,
+              "id": "no_arbitrage",
+              "label": "No-arbitrage check remains clear",
+              "observed": true,
+              "reason": null,
+              "requirement": "true",
+              "status": "pass"
+            },
+            {
+              "blocking": true,
+              "id": "delta_band",
+              "label": "Spread model delta remains inside the research band",
+              "observed": 0.104046,
+              "reason": null,
+              "requirement": "0.03 to 0.15",
+              "status": "pass"
+            },
+            {
+              "blocking": true,
+              "id": "leg_liquidity",
+              "label": "Both leg spread ratios remain at or below 0.25",
+              "observed": {
+                "buy": 0.078947,
+                "sell": 0.074766
+              },
+              "reason": null,
+              "requirement": "<= 0.25 each",
+              "status": "pass"
+            },
+            {
+              "blocking": true,
+              "id": "regime_permission",
+              "label": "Promoted regime evidence permits credit spreads",
+              "observed": {
+                "spread_permission": false,
+                "status": "blocked"
+              },
+              "reason": null,
+              "requirement": "validated and true",
+              "status": "block"
+            },
+            {
+              "blocking": true,
+              "id": "event_gate",
+              "label": "Event-risk score stays below the kill threshold",
+              "observed": null,
+              "reason": null,
+              "requirement": "<= 0.75",
+              "status": "block"
+            },
+            {
+              "blocking": true,
+              "id": "settlement_window",
+              "label": "Entry is outside the 07:30-08:00 UTC settlement window",
+              "observed": "outside",
+              "reason": null,
+              "requirement": "outside",
+              "status": "pass"
+            },
+            {
+              "blocking": true,
+              "id": "cost_coverage",
+              "label": "Net premium remains above five times fees and slippage",
+              "observed": null,
+              "reason": "live slippage estimate unavailable",
+              "requirement": "net premium > 5x total expected costs",
+              "status": "unknown"
+            },
+            {
+              "blocking": true,
+              "id": "calibrated_path_risk",
+              "label": "Validated path-risk and calibration evidence is promoted",
+              "observed": "unavailable",
+              "reason": null,
+              "requirement": "calibrated",
+              "status": "block"
+            }
+          ],
+          "execution_assumption": "post_only_limit_research_assumption",
+          "price_basis": "sell_bid_minus_buy_ask",
+          "revalidate_on_refresh": true,
+          "status": "blocked"
+        },
+        "exit_contract": {
+          "kill_switches": [],
+          "policy_status": "template_only_uncalibrated",
+          "position_states": [],
+          "profit_capture": [],
+          "time_management": {
+            "defensive_roll_minimum_stress_reduction": null,
+            "loss_deferral_alone_is_forbidden": null,
+            "review_below_dte_days": null,
+            "roll_allowed_states": [],
+            "roll_delta_band": [],
+            "roll_must_improve": []
+          }
+        },
+        "structure": "CALL_CREDIT_SPREAD"
+      },
+      "review": {
+        "backtest_status": "not_run",
+        "calibration_status": "unavailable",
+        "journal_template": [
+          "market_thesis_and_invalidation",
+          "selected_structure_and_rejected_alternatives",
+          "entry_gate_snapshot",
+          "risk_budget_assumptions",
+          "exit_state_transitions",
+          "post_observation_review"
+        ],
+        "missing_evidence": [
+          "MISSING_ACCOUNT_API_SNAPSHOT",
+          "CALIBRATION_NOT_IMPLEMENTED",
+          "BACKTEST_NOT_RUN",
+          "NO_VALIDATED_PATH_RISK"
+        ],
+        "path_risk_status": "blocked",
+        "promotion_conditions": [
+          "Persist enough rolling observations to promote regime evidence.",
+          "Run an aligned bounded backtest on licensed historical data.",
+          "Promote walk-forward calibration and validated path-risk outputs.",
+          "Reconcile paper observations, fees, slippage, and forced-exit behavior."
+        ],
+        "status": "blocked"
+      },
+      "schema_version": "strategy_research.v1",
+      "status": "partial",
+      "strategy_selection": {
+        "eligible_spread_count": 1,
+        "ranked_candidate_ids": [
+          "BTC-25JUL26-115000-C->BTC-25JUL26-125000-C:spread"
+        ],
+        "ranking_dimensions": [
+          "surface_fit_quality",
+          "no_arbitrage_pass",
+          "credit_to_width_shadow",
+          "delta_distance_from_0.10",
+          "leg_spread_quality"
+        ],
+        "selection_method": "screening_rank_no_path_risk"
+      }
+    },
+    "vol_surface_status": {
+      "expiries": [
+        {
+          "candidate_eligible": true,
+          "dte_days": 18.332639,
+          "expiry_date": "2026-07-25",
+          "fit_quality_pass": true,
+          "fit_quality_score": 0.99955,
+          "no_arb_error": 0.0,
+          "no_arb_pass": true,
+          "quality_passing_quotes": 8,
+          "reason_codes": [],
+          "surface_points": [
+            {
+              "instrument_name": "BTC-25JUL26-90000-C",
+              "market_mark_iv": 58.5,
+              "strike_price": 90000.0,
+              "surface_fitted_iv": 58.496344,
+              "underlying_price": 100000.0
+            },
+            {
+              "instrument_name": "BTC-25JUL26-95000-C",
+              "market_mark_iv": 57.5,
+              "strike_price": 95000.0,
+              "surface_fitted_iv": 57.503284,
+              "underlying_price": 100000.0
+            },
+            {
+              "instrument_name": "BTC-25JUL26-100000-C",
+              "market_mark_iv": 56.5,
+              "strike_price": 100000.0,
+              "surface_fitted_iv": 56.503705,
+              "underlying_price": 100000.0
+            },
+            {
+              "instrument_name": "BTC-25JUL26-105000-C",
+              "market_mark_iv": 55.5,
+              "strike_price": 105000.0,
+              "surface_fitted_iv": 55.50098,
+              "underlying_price": 100000.0
+            },
+            {
+              "instrument_name": "BTC-25JUL26-110000-C",
+              "market_mark_iv": 54.5,
+              "strike_price": 110000.0,
+              "surface_fitted_iv": 54.497762,
+              "underlying_price": 100000.0
+            },
+            {
+              "instrument_name": "BTC-25JUL26-115000-C",
+              "market_mark_iv": 53.5,
+              "strike_price": 115000.0,
+              "surface_fitted_iv": 53.496146,
+              "underlying_price": 100000.0
+            },
+            {
+              "instrument_name": "BTC-25JUL26-120000-C",
+              "market_mark_iv": 52.5,
+              "strike_price": 120000.0,
+              "surface_fitted_iv": 52.497786,
+              "underlying_price": 100000.0
+            },
+            {
+              "instrument_name": "BTC-25JUL26-125000-C",
+              "market_mark_iv": 51.5,
+              "strike_price": 125000.0,
+              "surface_fitted_iv": 51.503992,
+              "underlying_price": 100000.0
+            }
+          ]
+        }
+      ],
+      "fit_model": "quadratic_iv_vs_log_moneyness",
+      "reason_code": null,
+      "status": "validated",
+      "summary": {
+        "eligible_expiries": 1,
+        "expiries_evaluated": 1,
+        "quality_passing_quotes": 8
+      },
+      "validated": true
+    },
+    "vrp_status": {
+      "band": "P30-P70",
+      "current_dvol_percent": 44.7,
+      "current_rv30_percent": 7.22143,
+      "current_vrp_percent_points": 37.47857,
+      "evidence_class": "validated_public_deribit_histories",
+      "minimum_series_sample_count": 1000,
+      "missing_dates": [],
+      "percentile": 0.585923,
+      "reason_code": null,
+      "sample_count": 1094,
+      "schema_version": "vrp_status.v1",
+      "series": [
+        {
+          "band": null,
+          "dvol_percent": 46.95,
+          "evidence_class": "validated_public_deribit_histories",
+          "observed_at": "2023-01-15T00:00:00Z",
+          "percentile": null,
+          "rv30_percent": 1.798606,
+          "vrp_percent_points": 45.151394
+        },
+        {
+          "band": null,
+          "dvol_percent": 47.4,
+          "evidence_class": "validated_public_deribit_histories",
+          "observed_at": "2023-01-16T00:00:00Z",
+          "percentile": null,
+          "rv30_percent": 13.960229,
+          "vrp_percent_points": 33.439771
+        }
+      ],
+      "status": "available",
+      "window_days": 1095
+    }
+  },
+  "StrategyBrief": {
+    "action": "WATCH",
+    "analysis_run_id": "analysis:brief-contract",
+    "brief_id": "brief:405a0334e74c0a2be07584e55a2be39195ff78607e90cee4314e0e3635df4e77",
+    "evidence_summary": {
+      "as_of": "2026-08-30T14:30:05Z",
+      "candidate_count": 2,
+      "default_structure_family": "IRON_CONDOR",
+      "hard_gate_pass_count": 2,
+      "items": [
+        {
+          "label": "市场证据",
+          "status": "PASS",
+          "summary_zh": "执行口径与报价同步通过硬门禁",
+          "detail_zh": "组合入场使用 short bid / long ask 的冻结成本模型，不使用 mid 或 mark。",
+          "artifact_id": null
+        },
+        {
+          "label": "历史证据",
+          "status": "PASS",
+          "summary_zh": "只有 VALIDATED 才显示历史胜率",
+          "detail_zh": "未验证或未对齐的历史结果自动退化为状态标签。",
+          "artifact_id": null
+        },
+        {
+          "label": "预测胜率",
+          "status": "WARN",
+          "summary_zh": "只有 CALIBRATED 才显示预测区间",
+          "detail_zh": "未校准、过期或超出适用范围的预测不会显示概率区间。",
+          "artifact_id": null
+        }
+      ],
+      "primary_reason_codes": [
+        "COST_BUDGET_NOT_ABSOLUTE_LOSS_BOUND",
+        "FORECAST_NOT_CALIBRATED"
+      ],
+      "recommended_count": 0,
+      "rejection_counts": {},
+      "selected_count": 2,
+      "summary_zh": "当前有 2 个策略可供观察；模型损失预算不保证实际交割费用上界。",
+      "surface": {
+        "freshness_status": "UNAVAILABLE",
+        "presented_as": "published",
+        "source_kind": "fallback",
+        "source_label": "Presentation context unavailable"
+      },
+      "valid_until": "2026-08-30T14:35:05Z",
+      "watch_count": 2
+    },
+    "execution_allowed": false,
+    "generated_at": "2026-08-30T14:30:05Z",
+    "market": {
+      "action": "WATCH",
+      "as_of": "2026-08-30T14:30:05Z",
+      "confidence": "HIGH",
+      "direction": "RANGE",
+      "expires_at": "2026-08-30T14:35:05Z",
+      "liquidity": "EXECUTABLE",
+      "summary_zh": "BTC: 震荡 | 隐含波动率偏贵 | 流动性可执行",
+      "underlying": "BTC",
+      "volatility": "RICH"
+    },
+    "no_trade": {
+      "active": false,
+      "headline_zh": null,
+      "summary_zh": null,
+      "primary_reason_codes": [],
+      "next_update_at": "2026-08-30T14:35:05Z"
+    },
+    "research_only": true,
+    "schema_version": "strategy_brief.v1",
+    "strategies": [
+      {
+        "as_of": "2026-08-30T14:30:02Z",
+        "copy_recipe": "STRATEGY: Bear Call Credit Spread\nSELL 1 BTC-25SEP26-128000-C\nBUY  1 BTC-25SEP26-132000-C\nMIN NET CREDIT: 298 USD\nMODELLED LOSS BUDGET PER UNIT: 3742 USD\nFROZEN COSTS: ENTRY FEES 72 USD / SLIPPAGE 20 USD / LEGGING 10 USD / SETTLEMENT RESERVE 40 USD\nDELIVERY FEE UPPER BOUND: UNVERIFIED; ACTUAL LOSS MAY EXCEED BUDGET\nVALID UNTIL: 2026-08-30T14:34:55Z\nCANCEL IF: 任一腿报价过期或不同步; 扣除成本后期望收益不再为正\nRESEARCH_ONLY / MANUAL REVIEW REQUIRED",
+        "dte_days": 26.0,
+        "economics": {
+          "absolute_ev_status": "VALIDATED",
+          "ev_after_cost": 210.0,
+          "net_r": 0.05612,
+          "relative_value_status": "AVAILABLE"
+        },
+        "expiry_date": "2026-09-25",
+        "entry": {
+          "currency": "USD",
+          "cost_model_id": "cost-model:v1",
+          "cost_config_hash": "cost-config:abc123",
+          "cost_breakdown": {
+            "entry_fees": 72.0,
+            "slippage_reserve": 20.0,
+            "legging_reserve": 10.0,
+            "settlement_reserve": 40.0
+          },
+          "fees_included": true,
+          "minimum_net_credit": 298.0,
+          "price_basis": "SHORT_BID_LONG_ASK",
+          "slippage_included": true
+        },
+        "forecast": {
+          "artifact_id": "forecast:screening-only",
+          "confidence": null,
+          "scope": null,
+          "status": "SCREENING_ONLY",
+          "win_rate_high": null,
+          "win_rate_low": null
+        },
+        "history": {
+          "artifact_id": "history:bear-call-validated",
+          "exit_basis": "hold_to_expiry",
+          "independent_cohorts": 12,
+          "mean_net_r": 0.21,
+          "observation_count": 118,
+          "scope": {
+            "underlying": "BTC",
+            "structure_type": "BEAR_CALL_CREDIT_SPREAD",
+            "direction": "BEARISH",
+            "dte_band_days": [
+              7,
+              35
+            ],
+            "entry_cost_basis": "SHORT_BID_LONG_ASK",
+            "exit_basis": "hold_to_expiry",
+            "expiry_date": "2026-09-25",
+            "dte_days": 26.0
+          },
+          "status": "VALIDATED",
+          "win_rate": 0.68
+        },
+        "kill_conditions": [
+          "任一腿报价过期或不同步",
+          "扣除成本后期望收益不再为正"
+        ],
+        "legs": [
+          {
+            "ask": 1250.0,
+            "bid": 1200.0,
+            "expiry_date": "2026-09-25",
+            "instrument_name": "BTC-25SEP26-128000-C",
+            "observed_at": "2026-08-30T14:30:01Z",
+            "option_type": "call",
+            "premium_currency": "USD",
+            "premium_unit": "quote_currency",
+            "quantity": 1.0,
+            "side": "SELL",
+            "strike": 128000.0
+          },
+          {
+            "ask": 800.0,
+            "bid": 700.0,
+            "expiry_date": "2026-09-25",
+            "instrument_name": "BTC-25SEP26-132000-C",
+            "observed_at": "2026-08-30T14:30:02Z",
+            "option_type": "call",
+            "premium_currency": "USD",
+            "premium_unit": "quote_currency",
+            "quantity": 1.0,
+            "side": "BUY",
+            "strike": 132000.0
+          }
+        ],
+        "primary_reason_codes": [
+          "COST_BUDGET_NOT_ABSOLUTE_LOSS_BOUND",
+          "FORECAST_NOT_CALIBRATED"
+        ],
+        "rank": 1,
+        "recommendation_status": "WATCH",
+        "risk": {
+          "breakevens": [
+            128258.0
+          ],
+          "currency": "USD",
+          "cvar_95": 1900.0,
+          "max_loss_per_unit": 3742.0,
+          "max_loss_basis": "PAYOFF_BOUND_PLUS_FROZEN_COST_BUDGET",
+          "delivery_fee_upper_bound_verified": false,
+          "path_risk_status": "VALIDATED"
+        },
+        "structure_type": "BEAR_CALL_CREDIT_SPREAD",
+        "thesis_zh": "偏空且隐含波动率偏贵，卖出看涨价差并用高执行价保护上行风险。",
+        "valid_until": "2026-08-30T14:34:55Z",
+        "analysis_run_id": "analysis:brief-contract",
+        "candidate_id": "bear-call-1",
+        "recommendation_id": "recommendation:8d5c6d303443f7b02b94ebd3b77aee0f6fdbefb008860362cf41aa46105b3ff4"
+      },
+      {
+        "as_of": "2026-08-30T14:30:02Z",
+        "copy_recipe": "STRATEGY: Iron Condor\nSELL 1 BTC-25SEP26-130000-C\nSELL 1 BTC-25SEP26-110000-P\nBUY  1 BTC-25SEP26-135000-C\nBUY  1 BTC-25SEP26-105000-P\nMIN NET CREDIT: 346 USD\nMODELLED LOSS BUDGET PER UNIT: 4734 USD\nFROZEN COSTS: ENTRY FEES 144 USD / SLIPPAGE 40 USD / LEGGING 20 USD / SETTLEMENT RESERVE 80 USD\nDELIVERY FEE UPPER BOUND: UNVERIFIED; ACTUAL LOSS MAY EXCEED BUDGET\nVALID UNTIL: 2026-08-30T14:34:55Z\nCANCEL IF: 任一腿报价过期或不同步; 扣除成本后期望收益不再为正\nRESEARCH_ONLY / MANUAL REVIEW REQUIRED",
+        "dte_days": 26.0,
+        "economics": {
+          "absolute_ev_status": "VALIDATED",
+          "ev_after_cost": 180.0,
+          "net_r": 0.038023,
+          "relative_value_status": "AVAILABLE"
+        },
+        "expiry_date": "2026-09-25",
+        "entry": {
+          "currency": "USD",
+          "cost_model_id": "cost-model:v1",
+          "cost_config_hash": "cost-config:abc123",
+          "cost_breakdown": {
+            "entry_fees": 144.0,
+            "slippage_reserve": 40.0,
+            "legging_reserve": 20.0,
+            "settlement_reserve": 80.0
+          },
+          "fees_included": true,
+          "minimum_net_credit": 346.0,
+          "price_basis": "SHORT_BID_LONG_ASK",
+          "slippage_included": true
+        },
+        "forecast": {
+          "artifact_id": "forecast:unavailable",
+          "confidence": null,
+          "scope": null,
+          "status": "UNAVAILABLE",
+          "win_rate_high": null,
+          "win_rate_low": null
+        },
+        "history": {
+          "artifact_id": "history:condor-exploratory",
+          "exit_basis": "hold_to_expiry",
+          "independent_cohorts": 5,
+          "mean_net_r": null,
+          "observation_count": 44,
+          "scope": null,
+          "status": "EXPLORATORY",
+          "win_rate": null
+        },
+        "kill_conditions": [
+          "任一腿报价过期或不同步",
+          "扣除成本后期望收益不再为正"
+        ],
+        "legs": [
+          {
+            "ask": 1100.0,
+            "bid": 1000.0,
+            "expiry_date": "2026-09-25",
+            "instrument_name": "BTC-25SEP26-130000-C",
+            "observed_at": "2026-08-30T14:30:01Z",
+            "option_type": "call",
+            "premium_currency": "USD",
+            "premium_unit": "quote_currency",
+            "quantity": 1.0,
+            "side": "SELL",
+            "strike": 130000.0
+          },
+          {
+            "ask": 900.0,
+            "bid": 800.0,
+            "expiry_date": "2026-09-25",
+            "instrument_name": "BTC-25SEP26-110000-P",
+            "observed_at": "2026-08-30T14:30:01Z",
+            "option_type": "put",
+            "premium_currency": "USD",
+            "premium_unit": "quote_currency",
+            "quantity": 1.0,
+            "side": "SELL",
+            "strike": 110000.0
+          },
+          {
+            "ask": 700.0,
+            "bid": 650.0,
+            "expiry_date": "2026-09-25",
+            "instrument_name": "BTC-25SEP26-135000-C",
+            "observed_at": "2026-08-30T14:30:02Z",
+            "option_type": "call",
+            "premium_currency": "USD",
+            "premium_unit": "quote_currency",
+            "quantity": 1.0,
+            "side": "BUY",
+            "strike": 135000.0
+          },
+          {
+            "ask": 550.0,
+            "bid": 500.0,
+            "expiry_date": "2026-09-25",
+            "instrument_name": "BTC-25SEP26-105000-P",
+            "observed_at": "2026-08-30T14:30:02Z",
+            "option_type": "put",
+            "premium_currency": "USD",
+            "premium_unit": "quote_currency",
+            "quantity": 1.0,
+            "side": "BUY",
+            "strike": 105000.0
+          }
+        ],
+        "primary_reason_codes": [
+          "COST_BUDGET_NOT_ABSOLUTE_LOSS_BOUND",
+          "HISTORICAL_EVIDENCE_INSUFFICIENT",
+          "FORECAST_NOT_CALIBRATED"
+        ],
+        "rank": 2,
+        "recommendation_status": "WATCH",
+        "risk": {
+          "breakevens": [
+            109734.0,
+            130266.0
+          ],
+          "currency": "USD",
+          "cvar_95": 2500.0,
+          "max_loss_per_unit": 4734.0,
+          "max_loss_basis": "PAYOFF_BOUND_PLUS_FROZEN_COST_BUDGET",
+          "delivery_fee_upper_bound_verified": false,
+          "path_risk_status": "VALIDATED"
+        },
+        "structure_type": "IRON_CONDOR",
+        "thesis_zh": "预期区间震荡且隐含波动率偏贵，同时卖出两侧价差并用保护翼限定尾部风险。",
+        "valid_until": "2026-08-30T14:34:55Z",
+        "analysis_run_id": "analysis:brief-contract",
+        "candidate_id": "condor-1",
+        "recommendation_id": "recommendation:17d572fd54fe4ea17eaf6b9faae881cce7a87916b5fd833f230611c671ef8f83"
+      }
+    ]
+  }
+}

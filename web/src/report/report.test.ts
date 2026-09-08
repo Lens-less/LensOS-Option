@@ -134,7 +134,7 @@ describe("projectResearchReportForSidePanel", () => {
       vol_surface_status: {
         status: "available",
         expiries: Array.from({ length: 40 }, (_, index) => ({
-          expiry_date: `2026-09-${String(index + 1).padStart(2, "0")}`,
+          expiry_date: new Date(Date.UTC(2026, 8, index + 1)).toISOString().slice(0, 10),
           surface_points: Array.from({ length: 20 }, () => ({
             market_mark_iv: 0.5,
           })),
@@ -242,7 +242,7 @@ describe("projectResearchReportForSidePanel", () => {
       path_risk: { status: "unavailable" },
       kill_conditions: [],
       reason_codes: ["SOME_REASON_CODE_" + "x".repeat(64)],
-      edge_components: { smile_residual_richness: { value: 1, unit: "iv_points" } },
+      edge_components: { smile_residual_richness: { value: 1, unit: "iv_points", status: "OK" } },
       dominated_by: null,
       losing_axes: [],
     }));
@@ -258,7 +258,7 @@ describe("projectResearchReportForSidePanel", () => {
           tie_break_order: ["relative_value", "path_risk"],
           absolute_ev_available: true,
         },
-        dominated_explanations: [{ dense: "x".repeat(4096) }],
+        dominated_explanations: [{ candidate_id: "dominated", dense: "x".repeat(4096) }],
         ranked_candidates: [
           {
             candidate_id: "BTC-7AUG26-71000-C->BTC-7AUG26-77000-C:spread",
@@ -277,7 +277,7 @@ describe("projectResearchReportForSidePanel", () => {
               sample_size_basis: "independent_windows",
             },
             kill_conditions: [],
-            edge_components: { dense: "x".repeat(4096) },
+            edge_components: { dense: { status: "UNKNOWN", detail: "x".repeat(4096) } },
             margin_snapshot: { dense: "x".repeat(4096) },
             fair_iv_diagnostics: { dense: "x".repeat(4096) },
             dominated_by: null,
@@ -318,6 +318,62 @@ describe("projectResearchReportForSidePanel", () => {
       JSON.stringify(payload).length / 4,
     );
     expect(() => validateResearchReport(projected)).not.toThrow();
+    expect(projectResearchReportForSidePanel(projected)).toEqual(projected);
+  });
+
+  it.each([0, 32, Number.MAX_SAFE_INTEGER])("preserves an already compacted rejected count of %s", (rejectedCount) => {
+    const projected = projectResearchReportForSidePanel({
+      ...safeResearchReport,
+      ev_candidate_scanner: {
+        status: "validated",
+        ranked_candidates: [],
+        rejected_count: rejectedCount,
+      },
+    });
+
+    expect(projected.ev_candidate_scanner).toMatchObject({ rejected_count: rejectedCount });
+    expect(projectResearchReportForSidePanel(projected)).toEqual(projected);
+  });
+
+  it("adds newly collapsed REJECT rows to the already compacted count", () => {
+    const projected = projectResearchReportForSidePanel({
+      ...safeResearchReport,
+      ev_candidate_scanner: {
+        status: "validated",
+        ranked_candidates: [{ candidate_id: "newly-rejected", action: "REJECT" }],
+        rejected_count: 32,
+      },
+    });
+
+    expect(projected.ev_candidate_scanner).toMatchObject({ ranked_candidates: [], rejected_count: 33 });
+    expect(projectResearchReportForSidePanel(projected)).toEqual(projected);
+  });
+
+  it.each([-1, 1.5, "32", Number.MAX_SAFE_INTEGER + 1])(
+    "does not carry an invalid compacted rejected count of %s",
+    (rejectedCount) => {
+      const projected = projectResearchReportForSidePanel({
+        ...safeResearchReport,
+        ev_candidate_scanner: {
+          status: "validated",
+          ranked_candidates: [{ candidate_id: "newly-rejected", action: "REJECT" }],
+          rejected_count: rejectedCount,
+        },
+      });
+
+      expect(projected.ev_candidate_scanner).toMatchObject({ rejected_count: 1 });
+    },
+  );
+
+  it("rejects a compacted count that would overflow when newly rejected rows are added", () => {
+    expect(() => projectResearchReportForSidePanel({
+      ...safeResearchReport,
+      ev_candidate_scanner: {
+        status: "validated",
+        ranked_candidates: [{ candidate_id: "newly-rejected", action: "REJECT" }],
+        rejected_count: Number.MAX_SAFE_INTEGER,
+      },
+    })).toThrow("Invalid research report structure at report.ev_candidate_scanner.rejected_count");
   });
 });
 
@@ -436,6 +492,37 @@ describe("selectContractComparison", () => {
 });
 
 describe("report selectors", () => {
+  it.each([
+    [Number.NaN, 1000], [1000, Number.NaN],
+    [Number.POSITIVE_INFINITY, 1000], [1000, Number.POSITIVE_INFINITY],
+    [1001, 1000], [-1, 1000],
+  ])("withdraws freshness for a corrupt or future receipt clock (%s, %s)", (receivedAtMs, nowMs) => {
+    expect(selectReportFreshness(safeResearchReport, receivedAtMs, nowMs)).toMatchObject({
+      phase: "unavailable", ageSec: null,
+    });
+  });
+
+  it("withdraws a publication from the future instead of presenting age zero", () => {
+    const nowMs = Date.parse("2026-09-08T10:00:00Z");
+    const report: ResearchReport = {
+      ...safeResearchReport,
+      runtime_context: { ...safeResearchReport.runtime_context!, mode: "published" },
+      publish_edition: {
+        captured_at: "2026-09-08T10:00:01Z",
+        published_at: "2026-09-08T10:00:02Z",
+        stale_after: "2026-09-10T10:00:00Z",
+      },
+    };
+    expect(selectReportFreshness(report, nowMs, nowMs)).toMatchObject({ phase: "unavailable", ageSec: null });
+    report.publish_edition!.captured_at = "2026-09-08T09:00:00Z";
+    expect(selectReportFreshness(report, nowMs, nowMs).phase).toBe("unavailable");
+    report.publish_edition!.published_at = "2026-09-08T09:01:00Z";
+    expect(selectReportFreshness(report, nowMs, nowMs).phase).toBe("current");
+    expect(selectReportFreshness(report, nowMs, nowMs - 1).phase).toBe("unavailable");
+    report.publish_edition!.stale_after = "invalid";
+    expect(selectReportFreshness(report, nowMs, nowMs).phase).toBe("unavailable");
+  });
+
   it("marks warning and expired freshness from report age plus receipt age", () => {
     const warning = selectReportFreshness(
       safeResearchReport,

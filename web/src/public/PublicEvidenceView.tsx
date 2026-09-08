@@ -85,7 +85,7 @@ function publicBandLabel(band: string | null | undefined): string {
     "P70+": "偏贵",
     "P90+": "极贵",
   };
-  return band ? (labels[band] ?? band) : "刻度带不可用";
+  return band ? (Object.hasOwn(labels, band) ? labels[band] : band) : "刻度带不可用";
 }
 
 function VrpChangeLine({
@@ -131,7 +131,7 @@ function bandTone(band: string | null | undefined): "danger" | "warning" | "safe
   return "safe";
 }
 
-function isValidatedVrpStatus(status: string | undefined): boolean {
+function isValidatedVrpStatus(status: string | null | undefined): boolean {
   return status === "validated" || status === "available";
 }
 
@@ -157,7 +157,7 @@ function PublicReasonNotice({
                 <strong>{reading.title}</strong>
                 <code className="reason-notice-code">{code}</code>
               </div>
-              <p>{detailOverrides[code] ?? reading.detail}</p>
+              <p>{Object.hasOwn(detailOverrides, code) ? detailOverrides[code] : reading.detail}</p>
             </li>
           );
         })}
@@ -273,12 +273,11 @@ function PublicVrpOverview({
           VRP 为正不等于机会。它同样可能反映一段即将到来的高波动，事后看是买方的钱。
         </p>
       </header>
-      {state === "stale" ? (
+      {state === "stale" || (state !== "available" && isValidatedVrpStatus(vrp?.status)) ? (
         <div className="section-empty published-stop-state" role="status">
-          <strong>发布已停摆</strong>
+          <strong>{state === "stale" ? "发布已停摆" : "市场证据不可用"}</strong>
           <p>
-            这版公开稿已超过发布时效上限，VRP、DVOL、曲面与候选数字全部收起，
-            直到下一版发布。
+            VRP 与 DVOL 当前读数已收起；发布时效与市场质量均有效后重新评估。
           </p>
           <small>{formatPublishedAge(freshness.ageSec)}</small>
         </div>
@@ -700,10 +699,10 @@ function PublicSurfaceResearch({
           拟合质量和无套利检查分开展示；只有两者都通过，曲面才进入候选研究。
         </p>
       </header>
-      {displayState === "stale" ? (
+      {displayState !== "available" ? (
         <div className="section-empty published-stop-state" role="status">
-          <strong>发布已停摆</strong>
-          <p>当前公开版已超过时效上限，曲面图和到期数字全部收起，直到下一版发布。</p>
+          <strong>{displayState === "stale" ? "发布已停摆" : "市场证据不可用"}</strong>
+          <p>曲面图、到期数字与候选资格已收起；发布时效与市场质量均有效后重新评估。</p>
         </div>
       ) : chartAvailable ? (
         <div className="surface-layout">
@@ -787,14 +786,16 @@ function PublicCandidateResearch({
           <h2 id="candidates-title">研究候选清单</h2>
         </div>
         <p>
-          {summary?.eligible_naked_short_calls ?? 0} 个单腿、
-          {summary?.eligible_call_credit_spreads ?? 0} 个价差通过当前过滤；这不是交易建议。
+          {displayState === "available" ? <>
+            {summary?.eligible_naked_short_calls ?? 0} 个单腿、
+            {summary?.eligible_call_credit_spreads ?? 0} 个价差通过当前过滤；这不是交易建议。
+          </> : "当前候选资格不可用；快照中的筛选结果不能延续为当前判断。"}
         </p>
       </header>
-      {displayState === "stale" ? (
+      {displayState !== "available" ? (
         <div className="section-empty published-stop-state" role="status">
-          <strong>发布已停摆</strong>
-          <p>候选排序依赖当前市场截面；在公开版过期后，这些数字不会继续对外展示。</p>
+          <strong>{displayState === "stale" ? "发布已停摆" : "市场证据不可用"}</strong>
+          <p>候选排序依赖有效的市场截面；发布时效与市场质量均有效后重新筛选。</p>
         </div>
       ) : candidates.length > 0 ? (
         <div
@@ -949,9 +950,11 @@ function PublicStrategySection({
             </span>
           </div>
           <strong className="primary-structure">
-            {report.strategy_research?.decision?.primary_structure === "CALL_CREDIT_SPREAD"
-              ? "CALL 信用价差"
-              : "当前无主策略"}
+            {displayState !== "available"
+              ? "当前策略已收起"
+              : report.strategy_research?.decision?.primary_structure === "CALL_CREDIT_SPREAD"
+                ? "CALL 信用价差"
+                : "当前无主策略"}
           </strong>
           <p>
             公开版只保留结构、候选和定价证据；内部控制层不进入这份构建。
@@ -960,7 +963,7 @@ function PublicStrategySection({
         <div className="strategy-verdict-aside">
           <span>研究置信上限</span>
           <strong>
-            {report.strategy_research?.confidence_ceiling === "screening_only"
+            {displayState === "available" && report.strategy_research?.confidence_ceiling === "screening_only"
               ? "筛选级"
               : "证据不足"}
           </strong>
@@ -973,10 +976,10 @@ function PublicStrategySection({
         report={report}
       />
 
-      {displayState === "stale" ? (
+      {displayState !== "available" ? (
         <div className="strategy-empty published-stop-state" role="status">
-          <strong>发布已停摆</strong>
-          <p>公开版过期后，策略样本、定价影子与候选比较全部收起，直到下一版发布。</p>
+          <strong>{displayState === "stale" ? "发布已停摆" : "市场证据不可用"}</strong>
+          <p>策略样本、定价影子、研究条件与候选比较已收起；发布时效与市场质量均有效后重新评估。</p>
         </div>
       ) : playbook && candidate ? (
         <>
@@ -1097,9 +1100,10 @@ function PublicBoundarySection({
   const marketBoundary =
     displayState === "stale"
       ? "发布已停摆"
-      : report.data_status?.validated === true
+      : displayState === "available"
         ? "快照已验证"
-        : "快照未达发布条件";
+        : "市场证据不可用";
+  const historical = displayState !== "available";
   const trustBoundary =
     report.data_trust?.verdict === "trusted"
       ? "证据链可信"
@@ -1133,9 +1137,9 @@ function PublicBoundarySection({
             <dt>市场证据</dt>
             <dd>{marketBoundary}</dd>
           </div>
-          <div data-tone={report.data_trust?.verdict === "trusted" ? "safe" : "warning"}>
+          <div data-tone={!historical && report.data_trust?.verdict === "trusted" ? "safe" : "warning"}>
             <dt>证据链</dt>
-            <dd>{trustBoundary}</dd>
+            <dd>{historical ? `计算时：${trustBoundary}` : trustBoundary}</dd>
           </div>
           <div data-tone="danger">
             <dt>运行边界</dt>
@@ -1143,6 +1147,11 @@ function PublicBoundarySection({
           </div>
         </dl>
       </section>
+
+      {historical ? <p className="section-note">
+        快照审计 · 计算时刻：{formatCutoffTime(report.runtime_context?.evaluation_clock ?? report.generated_at)}。
+        证据链记录为计算时的历史状态，不代表当前有效性。
+      </p> : null}
 
       <PublicReasonNotice codes={visibleReasonCodes} />
 
@@ -1198,15 +1207,15 @@ function loadStrategyBrief(report: ResearchReport) {
 }
 
 function publicStrategyBriefSurface(
-  _report: ResearchReport,
+  report: ResearchReport,
   freshness: PublicFreshness,
 ): StrategyBriefSurfaceState {
   return {
     freshness_status:
-      freshness.phase === "current"
-        ? "CURRENT"
-        : freshness.phase === "unavailable"
-          ? "UNAVAILABLE"
+      publicMarketDisplayState(report, freshness) === "quality_blocked"
+        ? "UNAVAILABLE"
+        : freshness.phase === "current"
+          ? "CURRENT"
           : "STALE",
     source_kind: "published",
     presented_as: "published",

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crypto-options-research-console"
-version = "0.4.0"
+version = "0.5.0"
 description = "Fail-closed, evidence-first crypto options research console"
 authors = [{ name = "Lens-less" }]
 readme = "README.md"
@@ -43,7 +43,7 @@ Changelog = "https://github.com/Lens-less/LensOS-Option/blob/main/CHANGELOG.md"
 # Packaging contract tests invoke setup.py directly, so the build backend must
 # also be present in the test environment rather than only its isolated build env.
 test = ["pytest>=8,<10", "setuptools>=77"]
-dev = ["pytest>=8,<10", "ruff>=0.9", "setuptools>=77"]
+dev = ["pytest>=8,<10", "ruff>=0.9", "setuptools>=77", "mypy>=2.3.1,<3"]
 
 [project.scripts]
 crypto-options-report = "crypto_options_report.cli:main"
@@ -75,6 +75,30 @@ crypto_options_report = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+# Check the migrated interfaces strictly while retaining inferred types from
+# legacy imports. "silent" hides legacy diagnostics; unlike "skip", it does
+# not replace those imports with Any. Expand this list when a seam migrates.
+python_version = "3.12"
+files = [
+    "crypto_options_report/api.py",
+    "crypto_options_report/analysis_run.py",
+    "crypto_options_report/analysis_inputs.py",
+    "crypto_options_report/admission_conditions.py",
+    "crypto_options_report/compatibility_projection.py",
+    "crypto_options_report/build_info.py",
+    "crypto_options_report/public_api_contract.py",
+    "crypto_options_report/public_schema.py",
+    "crypto_options_report/public_artifact_schema.py",
+    "tools/check_release_versions.py",
+    "tools/check_installed_wheel.py",
+    "tools/reproduce_research.py",
+]
+strict = true
+follow_imports = "silent"
+show_error_codes = true
+pretty = false
 
 [tool.ruff]
 target-version = "py312"

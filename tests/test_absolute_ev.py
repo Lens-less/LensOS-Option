@@ -9,6 +9,7 @@ conclusion, which is why the arithmetic is pinned here rather than eyeballed.
 from __future__ import annotations
 
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from crypto_options_report.ev_scanner import (
     MAX_ABSOLUTE_EV_CANDIDATES,
@@ -24,12 +25,14 @@ def history(days: int = 1200, *, drift: float = 0.0) -> dict:
     """Deterministic oscillating series with an optional drift."""
     observations = []
     price = 100_000.0
+    start = datetime(2022, 1, 1, tzinfo=UTC)
     for index in range(days):
         price *= 1.0 + drift + (0.010 if index % 2 else -0.0099)
+        observed_at = start + timedelta(days=index)
         observations.append(
             {
-                "timestamp_ms": 1_700_000_000_000 + index * 86_400_000,
-                "observed_at": f"2024-01-01T00:00:{index % 60:02d}Z",
+                "timestamp_ms": int(observed_at.timestamp() * 1000),
+                "observed_at": observed_at.isoformat().replace("+00:00", "Z"),
                 "close": round(price, 4),
             }
         )
@@ -425,7 +428,7 @@ def _condor_candidate(candidate_id: str, *, net_credit: float) -> dict:
     }
 
 
-def _scanner(candidate_research: dict) -> dict:
+def _scanner(candidate_research: dict, *, price_drift: float = 0.0) -> dict:
     return build_ev_candidate_scanner(
         generated_at="2026-07-26T00:00:00Z",
         data_status={"status": "validated"},
@@ -434,7 +437,7 @@ def _scanner(candidate_research: dict) -> dict:
         permission_state={},
         candidate_research=candidate_research,
         vol_surface_status=_vol_surface_status(),
-        underlying_history=history(),
+        underlying_history=history(drift=price_drift),
     )
 
 
@@ -463,7 +466,11 @@ class ScannerAbsoluteEvOrderingTests(unittest.TestCase):
                     "review": [],
                     "rejected": [],
                 },
-            }
+            },
+            # A rising realized path keeps the low credits economically
+            # negative under the bidirectional stress mix. The quotes remain
+            # inside the existing price-divergence envelope.
+            price_drift=0.003,
         )
 
         rows = scanner["ranked_candidates"]

@@ -257,21 +257,21 @@ export function evCandidateScannerOf(
  * identifiers reuse that convention: a spread joins two legs with `->` and a
  * trailing `:spread` tag; a single leg carries a trailing `:naked` tag. This
  * mirrors the naming already produced by `candidate_research` elsewhere in
- * this report, so payoff geometry can be derived without a second network
- * round trip.
+ * this report. Only same-expiry call shapes can use the legacy upside-only
+ * curve; other structures require explicit signed legs.
  */
 function stripTag(token: string): string {
   return token.split(":")[0] ?? token;
 }
 
-function extractStrike(instrumentName: string): number | null {
+function extractCallStrike(instrumentName: string): number | null {
   const parts = instrumentName.split("-");
-  if (parts.length < 4) {
+  if (parts.length !== 4 || parts[3] !== "C") {
     return null;
   }
-  const strikeToken = parts[parts.length - 2];
+  const strikeToken = parts[2];
   const strike = Number(strikeToken);
-  return Number.isFinite(strike) ? strike : null;
+  return Number.isFinite(strike) && strike > 0 ? strike : null;
 }
 
 export function parseCandidateLegs(candidateId: string): CandidateLegs {
@@ -283,13 +283,26 @@ export function parseCandidateLegs(candidateId: string): CandidateLegs {
     if (parts.length !== 2) {
       return { shortStrikeUsdc: null, longStrikeUsdc: null, kind: "unknown" };
     }
+    const shortInstrument = stripTag(parts[0] ?? "");
+    const longInstrument = stripTag(parts[1] ?? "");
+    const shortStrike = extractCallStrike(shortInstrument);
+    const longStrike = extractCallStrike(longInstrument);
+    // This legacy curve represents one same-expiry short call spread only.
+    // Put, mixed-option and calendar geometry requires explicit signed legs.
+    if (
+      shortStrike === null || longStrike === null ||
+      shortInstrument.split("-").slice(0, 2).join("-") !==
+        longInstrument.split("-").slice(0, 2).join("-")
+    ) {
+      return { shortStrikeUsdc: null, longStrikeUsdc: null, kind: "unknown" };
+    }
     return {
-      shortStrikeUsdc: extractStrike(stripTag(parts[0] ?? "")),
-      longStrikeUsdc: extractStrike(stripTag(parts[1] ?? "")),
+      shortStrikeUsdc: shortStrike,
+      longStrikeUsdc: longStrike,
       kind: "spread",
     };
   }
-  const strike = extractStrike(stripTag(candidateId));
+  const strike = extractCallStrike(stripTag(candidateId));
   if (strike === null) {
     return { shortStrikeUsdc: null, longStrikeUsdc: null, kind: "unknown" };
   }

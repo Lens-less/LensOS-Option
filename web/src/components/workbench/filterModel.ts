@@ -152,7 +152,10 @@ export function encodeFilters(filters: ScreenerFilters): URLSearchParams {
   if (filters.minCreditUsdc !== null) {
     params.set(PARAM_KEYS.minCredit, String(filters.minCreditUsdc));
   }
-  if (filters.actionTiers.length !== ALL_ACTION_TIERS.length) {
+  if (
+    filters.actionTiers.length !== DEFAULT_ACTION_TIERS.length ||
+    !DEFAULT_ACTION_TIERS.every((tier) => filters.actionTiers.includes(tier))
+  ) {
     params.set(PARAM_KEYS.tiers, filters.actionTiers.join(","));
   }
   return params;
@@ -178,6 +181,10 @@ export function decodeFilters(params: URLSearchParams): ScreenerFilters {
     absDeltaMax: numberParam(params, PARAM_KEYS.deltaMax),
     minCreditUsdc: numberParam(params, PARAM_KEYS.minCredit),
     actionTiers:
-      decodedTiers.length > 0 ? decodedTiers : [...DEFAULT_ACTION_TIERS],
+      tiersParam === ""
+        ? []
+        : decodedTiers.length > 0
+          ? decodedTiers
+          : [...DEFAULT_ACTION_TIERS],
   };
 }

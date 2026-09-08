@@ -37,7 +37,7 @@ from crypto_options_report.strategy_history import (
     build_strategy_history_protocol,
 )
 from tests import test_strategy_brief_forecast as forecast_fixtures
-from tests.test_strategy_brief_contract import _bear_call
+from tests.test_strategy_brief_contract import _bear_call, _entry_cost_identity
 from tests.test_strategy_brief_history import (
     _cohort_entries,
     _passing_holdout_metrics,
@@ -56,7 +56,7 @@ class StrategyBriefAnalysisIntegrationTests(unittest.TestCase):
 
         brief = first.project_strategy_brief_v1()
         self.assertEqual([], validate_strategy_brief(brief))
-        self.assertEqual("STRATEGIES_AVAILABLE", brief["action"])
+        self.assertEqual("WATCH", brief["action"])
         self.assertEqual(1, len(brief["strategies"]))
         strategy = brief["strategies"][0]
         self.assertEqual("VALIDATED", strategy["history"]["status"])
@@ -129,6 +129,7 @@ class StrategyBriefAnalysisIntegrationTests(unittest.TestCase):
             "direction": "BEARISH",
             "selection": {
                 "expiry_date": "2028-01-28",
+                "entry_costs": _entry_cost_identity(self._candidate()),
                 "legs": [
                     {
                         "instrument_name": "BTC-28JAN28-129000-C",
@@ -403,6 +404,7 @@ class StrategyBriefAnalysisIntegrationTests(unittest.TestCase):
             "direction": "BEARISH",
             "selection": {
                 "expiry_date": "2028-01-28",
+                "entry_costs": _entry_cost_identity(self._candidate()),
                 "legs": [
                     {
                         "instrument_name": "BTC-28JAN28-128000-C",

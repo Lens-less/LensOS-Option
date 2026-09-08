@@ -2759,8 +2759,8 @@ class PublishWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("vercel", workflow.lower())
 
     def test_scheduled_task_docs_set_restart_policy(self) -> None:
-        readme = (self.REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        readme_en = (self.REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
+        readme = (self.REPO_ROOT / "docs/guides/operator-guide.md").read_text(encoding="utf-8")
+        readme_en = (self.REPO_ROOT / "docs/guides/operator-guide.en.md").read_text(encoding="utf-8")
 
         for document in (readme, readme_en):
             self.assertIn("-RestartCount 3", document)
@@ -2790,8 +2790,8 @@ class PublishWorkflowContractTests(unittest.TestCase):
     def test_capture_docs_distinguish_process_success_from_validation_usability(
         self,
     ) -> None:
-        readme = (self.REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        readme_en = (self.REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
+        readme = (self.REPO_ROOT / "docs/guides/operator-guide.md").read_text(encoding="utf-8")
+        readme_en = (self.REPO_ROOT / "docs/guides/operator-guide.en.md").read_text(encoding="utf-8")
         runbook = (
             self.REPO_ROOT / "docs" / "operations" / "public-publishing.md"
         ).read_text(encoding="utf-8")

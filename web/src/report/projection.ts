@@ -7,6 +7,24 @@ import type {
   StrategyResearch,
 } from "../contracts";
 import { validateResearchReport } from "./runtime";
+import { validateStrategyBrief } from "./strategyBrief";
+import { ResearchReportStructureError } from "./structure";
+
+function panelSource(report: ResearchReport): string | undefined {
+  const source = report.data_status?.source;
+  if (!source || source === "not_configured") return source;
+  if (report.runtime_context?.mode === "published") return "公开发布快照";
+  if (report.runtime_context?.mode === "replay") {
+    return report.runtime_context.demo_mode ? "演示快照" : "历史回放快照";
+  }
+  if (source.startsWith("demo:")) return "演示数据";
+  if (source.startsWith("fixture:")) return "验证回放数据";
+  if (source.startsWith("deribit_live:")) return "deribit_live:public";
+  if (source === "deribit_published_snapshot") return "公开发布快照";
+  // Cached projections run through this function again; preserve safe labels.
+  if (["公开发布快照", "演示快照", "历史回放快照", "演示数据", "验证回放数据"].includes(source)) return source;
+  return "其他研究数据源";
+}
 
 function projectSurfaceQuality(
   quality: CandidateSurfaceQuality | undefined,
@@ -256,6 +274,7 @@ interface RawEvCandidateScanner {
     absolute_ev_available?: unknown;
   } | null;
   ranked_candidates?: unknown[];
+  rejected_count?: unknown;
 }
 
 function asStringOrNull(value: unknown): string | null {
@@ -331,7 +350,17 @@ function projectEvCandidateScanner(
         .filter((row): row is EvCandidateComparisonRow => row !== null)
     : [];
   const kept = rows.filter((row) => row.action !== "REJECT");
-  const rejectedCount = rows.length - kept.length;
+  // Published reports and cached projections already omit their counted rows.
+  const compactedRejectedCount =
+    typeof raw.rejected_count === "number" &&
+    Number.isSafeInteger(raw.rejected_count) && raw.rejected_count >= 0
+      ? raw.rejected_count
+      : 0;
+  const newlyRejectedCount = rows.length - kept.length;
+  if (compactedRejectedCount > Number.MAX_SAFE_INTEGER - newlyRejectedCount) {
+    throw new ResearchReportStructureError("report.ev_candidate_scanner.rejected_count");
+  }
+  const rejectedCount = compactedRejectedCount + newlyRejectedCount;
 
   return {
     status: typeof raw.status === "string" ? raw.status : undefined,
@@ -363,6 +392,12 @@ export function projectResearchReportForSidePanel(
   payload: unknown,
 ): ResearchReport {
   const report = validateResearchReport(payload);
+  const runtime = report.runtime_context;
+  const brief = report.strategy_brief === undefined || report.strategy_brief === null
+    ? undefined : validateStrategyBrief(report.strategy_brief);
+  // The panel constructs its own presentation provenance. Do not send the
+  // report's optional free-text surface label or unknown brief extensions.
+  if (brief) delete brief.evidence_summary.surface;
   const evCandidateScanner = projectEvCandidateScanner(
     (report as ResearchReport & { ev_candidate_scanner?: unknown })
       .ev_candidate_scanner,
@@ -371,6 +406,21 @@ export function projectResearchReportForSidePanel(
     ev_candidate_scanner?: EvCandidateScannerProjection;
   } = {
     schema_version: report.schema_version,
+    generated_at: report.generated_at,
+    runtime_context: runtime?.mode ? {
+      mode: runtime.mode,
+      replay: runtime.replay,
+      demo_mode: runtime.demo_mode,
+      evaluation_clock: runtime.evaluation_clock,
+    } : undefined,
+    publish_edition: report.publish_edition ? {
+      cadence: report.publish_edition.cadence,
+      captured_at: report.publish_edition.captured_at,
+      published_at: report.publish_edition.published_at,
+      next_expected_at: report.publish_edition.next_expected_at,
+      stale_after: report.publish_edition.stale_after,
+    } : undefined,
+    strategy_brief: brief,
     action: report.action,
     mode: report.mode,
     effective_mode: report.effective_mode,
@@ -393,10 +443,14 @@ export function projectResearchReportForSidePanel(
       : undefined,
     data_status: report.data_status
       ? {
-          source: report.data_status.source,
+          source: panelSource(report),
+          status: report.data_status.status,
+          reason_code: report.data_status.reason_code,
+          validated: report.data_status.validated,
           market_data_age_sec: report.data_status.market_data_age_sec,
           quality_gate: report.data_status.quality_gate
             ? {
+                passed: report.data_status.quality_gate.passed,
                 reason_codes: report.data_status.quality_gate.reason_codes,
                 advisory_reason_codes:
                   report.data_status.quality_gate.advisory_reason_codes,
@@ -415,6 +469,9 @@ export function projectResearchReportForSidePanel(
     strategy_research: projectStrategy(report.strategy_research),
     ev_candidate_scanner: evCandidateScanner,
     full_system_surface: {
+      release_gates: report.full_system_surface?.release_gates
+        ?.filter((gate) => gate.name === "research_publication" || gate.name === "execution_authorization")
+        .map((gate) => ({ name: gate.name, status: gate.status, satisfied: gate.satisfied })),
       release_readiness: {
         status: report.full_system_surface?.release_readiness?.status,
       },

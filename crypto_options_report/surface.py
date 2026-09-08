@@ -101,7 +101,7 @@ def build_vol_surface_and_candidate_research(
             evaluation_now_ms=evaluation_now_ms,
         )
         expiries.append(expiry_report)
-        if expiry_report["candidate_eligible"]:
+        if expiry_report["candidate_eligible"] or expiry_report["put_candidate_eligible"]:
             eligible_expiries.append(expiry_report)
 
     surface_reason_code = None
@@ -125,7 +125,7 @@ def build_vol_surface_and_candidate_research(
         "expiries": expiries,
         "summary": {
             "expiries_evaluated": len(expiries),
-            "eligible_expiries": sum(exp["candidate_eligible"] for exp in expiries),
+            "eligible_expiries": len(eligible_expiries),
             "quality_passing_quotes": sum(
                 exp["quality_passing_quotes"] for exp in expiries
             ),
@@ -987,6 +987,7 @@ def _build_spread_candidates(
     rather than a copy.
     """
     structure_type = f"{option_type}_credit_spread"
+    side_report = expiry_report["sides"][option_type]
     spreads = []
     for sell_leg in points:
         sell_filter_reasons = _candidate_filter_reasons(sell_leg, expiry_report)
@@ -1100,9 +1101,9 @@ def _build_spread_candidates(
                     "underlying_price_source": sell_leg["underlying_price_source"],
                     "forward_basis": sell_leg["forward_basis"],
                     "surface_quality": {
-                        "fit_quality_score": expiry_report["fit_quality_score"],
-                        "no_arb_pass": expiry_report["no_arb_pass"],
-                        "no_arb_error": expiry_report["no_arb_error"],
+                        "fit_quality_score": side_report["fit_quality_score"],
+                        "no_arb_pass": side_report["no_arb_pass"],
+                        "no_arb_error": side_report["no_arb_error"],
                     },
                     "greek_consistency": greek_consistency,
                     "filter_status": "pass" if not reason_codes else "fail",
@@ -1446,7 +1447,10 @@ def _candidate_filter_reasons(
         reasons.append("SPREAD_RATIO_TOO_WIDE")
     if point["quote_age_sec"] > DEFAULT_SURFACE_LIMITS["max_quote_age_sec"]:
         reasons.append("QUOTE_TOO_STALE")
-    if not expiry_report["candidate_eligible"]:
+    eligibility_key = (
+        "put_candidate_eligible" if point.get("option_type") == "put" else "candidate_eligible"
+    )
+    if not expiry_report[eligibility_key]:
         reasons.append("SURFACE_QUALITY_BLOCKED")
     return reasons
 

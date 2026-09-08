@@ -33,6 +33,8 @@ class SignalArtifactEndpointTests(unittest.TestCase):
     def test_a_configured_artifact_is_served_verbatim(self) -> None:
         artifact = {
             "schema_version": "signal_validation_report.v1",
+            "generated_at": "2026-08-07T00:00:00Z",
+            "research_only": True,
             "status": "projected",
             "cohorts": [{"expiry_date": "2026-08-07"}],
         }

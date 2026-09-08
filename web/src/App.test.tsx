@@ -16,6 +16,7 @@ import {
 import type { ResearchReport } from "./contracts";
 import evidenceStyles from "./styles.css?raw";
 import type { LoadedReport } from "./transport";
+import { ReportLoadError } from "./transport/requestJson";
 
 const blockedReport: ResearchReport = {
   schema_version: "research_report.v1",
@@ -903,7 +904,7 @@ describe("EvidenceConsole", () => {
     expect(releaseBoundary).toHaveTextContent("NO_TRADE");
     expect(
       screen.getByText(
-        /不会生成交易建议、推荐仓位或订单指令。缺口只影响置信度与执行升级。/,
+        /不会生成交易建议、推荐仓位或订单指令；须补齐有效证据后重新评估。/,
       ),
     ).toBeInTheDocument();
 
@@ -1202,9 +1203,25 @@ describe("EvidenceConsole", () => {
       "RESEARCH_ONLY · NO_TRADE",
     );
     expect(screen.queryByText(/\d+\s*秒/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "进入离线学习导览" })).toHaveAttribute("href", "./index.html?view=demo");
 
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     expect(loadReport).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["network", "无法连接研究服务"],
+    ["timeout", "读取研究数据超时"],
+    ["invalid", "报告校验失败"],
+  ] as const)("explains a %s failure and recovers after retry", async (kind, title) => {
+    const loadReport = vi.fn<() => Promise<LoadedReport>>()
+      .mockRejectedValueOnce(new ReportLoadError(kind))
+      .mockResolvedValueOnce(loadedReport());
+    render(<App loadReport={loadReport} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(title);
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByRole("region", { name: "发布与能力边界" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("lets the operator explicitly refresh the evidence report", async () => {
@@ -1223,6 +1240,23 @@ describe("EvidenceConsole", () => {
     expect(
       await screen.findByRole("button", { name: "刷新" }),
     ).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("rejects a malformed report before rendering and recovers after a valid replacement", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const brokenReport = {
+      ...blockedReport,
+      full_system_surface: { release_readiness: { status: "NO-GO", prerequisites: {} } },
+    } as unknown as ResearchReport;
+    const loadReport = vi.fn<() => Promise<LoadedReport>>()
+      .mockResolvedValueOnce(loadedReport(brokenReport))
+      .mockResolvedValueOnce(loadedReport());
+    render(<App loadReport={loadReport} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("报告校验失败");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByRole("region", { name: "发布与能力边界" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(loadReport).toHaveBeenCalledTimes(2);
   });
 
   it("shows a published edition bar with wall-clock age instead of replay language", async () => {
@@ -1592,6 +1626,47 @@ describe("EvidenceConsole", () => {
     expect(
       await screen.findByRole("heading", { name: "排序信号有没有预测力" }),
     ).toBeInTheDocument();
+  });
+
+  it("opens the offline guide without requesting or relabeling a report", async () => {
+    window.history.pushState(window.history.state, "", "/?view=demo");
+    const loadReport = vi.fn().mockRejectedValue(new Error("offline"));
+    render(<App loadReport={loadReport} />);
+    expect(await screen.findByRole("heading", { name: "离线学习导览" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "发布与能力边界" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回研究简报" })).toHaveAttribute("href", "./index.html");
+    expect(loadReport).not.toHaveBeenCalled();
+    expect(blockedReport.mode_gate?.trade_recommendation_allowed).toBe(false);
+  });
+
+  it("loads and validates actual research when leaving the offline guide through browser history", async () => {
+    window.history.pushState(window.history.state, "", "/?view=demo");
+    const loadReport = vi.fn().mockResolvedValue(loadedReport());
+    render(<App loadReport={loadReport} />);
+    expect(screen.getByRole("heading", { name: "离线学习导览" })).toBeInTheDocument();
+    expect(loadReport).not.toHaveBeenCalled();
+
+    window.history.replaceState(window.history.state, "", "/");
+    fireEvent.popState(window);
+    expect(await screen.findByRole("region", { name: "发布与能力边界" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "离线学习导览" })).not.toBeInTheDocument();
+    expect(loadReport).toHaveBeenCalledTimes(1);
+    expect(blockedReport.runtime_context?.demo_mode).not.toBe(true);
+  });
+
+  it("keeps learning accessible when an in-flight research load fails", async () => {
+    let rejectLoad!: (reason: Error) => void;
+    const loadReport = vi.fn(() => new Promise<LoadedReport>((_resolve, reject) => { rejectLoad = reject; }));
+    render(<App loadReport={loadReport} />);
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取市场研究");
+
+    window.history.replaceState(window.history.state, "", "/?view=demo");
+    fireEvent.popState(window);
+    rejectLoad(new Error("offline"));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "离线学习导览" })).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(loadReport).toHaveBeenCalledTimes(1);
   });
 
   it("preserves transport receipt time when calculating evidence age", async () => {

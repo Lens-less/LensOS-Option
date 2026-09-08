@@ -14,6 +14,7 @@ import type {
 } from "./messages";
 import { loadResearchReportHttp } from "../transport";
 import type { LoadedReport } from "../transport";
+import { ReportLoadError } from "../transport/requestJson";
 
 const ENGINE_CONFIG_KEY = "engineConfig";
 const PANEL_REPORT_KEY = "panelReport";
@@ -82,6 +83,8 @@ export function createExtensionWorkerController(deps: WorkerDeps): {
     sender?: { tab?: { id?: number } },
   ): Promise<ExtensionResponse>;
 } {
+  let configGeneration = 0;
+  let reportSequence = 0;
   return {
     async handleMessage(
       message: ExtensionMessage,
@@ -90,9 +93,18 @@ export function createExtensionWorkerController(deps: WorkerDeps): {
       try {
         switch (message.type) {
           case "REPORT_GET": {
+            const generation = configGeneration;
             const origin = await readOrigin(deps);
+            const ensureOrigin = () => {
+              if (generation !== configGeneration ||
+                  (message.expectedOrigin !== undefined && normalizeEngineOrigin(message.expectedOrigin) !== origin)) {
+                throw new ReportLoadError("aborted");
+              }
+            };
+            ensureOrigin();
             const cached =
               await deps.readSession<CachedPanelReport>(PANEL_REPORT_KEY);
+            ensureOrigin();
             if (cached?.origin === origin && !message.force) {
               const validatedCached =
                 projectLoadedReportEnvelope(cached.loaded);
@@ -107,6 +119,7 @@ export function createExtensionWorkerController(deps: WorkerDeps): {
               };
             }
 
+            const sequence = ++reportSequence;
             const loaded = projectLoadedReportEnvelope(
               await deps.loadReport(origin),
             );
@@ -114,10 +127,15 @@ export function createExtensionWorkerController(deps: WorkerDeps): {
               ...loaded,
               cached: loaded.cached ?? false,
             };
-            await deps.writeSession<CachedPanelReport>(PANEL_REPORT_KEY, {
-              origin,
-              loaded: cachedReport,
-            });
+            ensureOrigin();
+            // A slower prior request must not replace a newer session snapshot.
+            if (sequence === reportSequence) {
+              await deps.writeSession<CachedPanelReport>(PANEL_REPORT_KEY, {
+                origin,
+                loaded: cachedReport,
+              });
+            }
+            ensureOrigin();
             return {
               ok: true,
               origin,
@@ -129,9 +147,14 @@ export function createExtensionWorkerController(deps: WorkerDeps): {
             // Offline onboarding path: read whatever was last cached for the
             // configured origin without touching the network. A miss is not
             // an error - it just means there is nothing to fall back to yet.
+            const generation = configGeneration;
             const origin = await readOrigin(deps);
             const cached =
               await deps.readSession<CachedPanelReport>(PANEL_REPORT_KEY);
+            if (generation !== configGeneration ||
+                (message.expectedOrigin !== undefined && normalizeEngineOrigin(message.expectedOrigin) !== origin)) {
+              throw new ReportLoadError("aborted");
+            }
             if (!cached || cached.origin !== origin) {
               return { ok: true, origin };
             }
@@ -177,7 +200,15 @@ export function createExtensionWorkerController(deps: WorkerDeps): {
             return { ok: true, origin: await readOrigin(deps) };
           }
           case "ENGINE_CONFIG_SET": {
-            return { ok: true, origin: await writeOrigin(deps, message.origin) };
+            const origin = normalizeEngineOrigin(message.origin);
+            configGeneration += 1;
+            try {
+              return { ok: true, origin: await writeOrigin(deps, origin) };
+            } finally {
+              // Also revoke reads that started while the asynchronous storage
+              // mutation was still in flight and observed the previous value.
+              configGeneration += 1;
+            }
           }
           default: {
             return { ok: false, error: "unsupported extension message" };
@@ -217,6 +248,7 @@ if (typeof chrome !== "undefined") {
     loadReport: (origin) =>
       loadResearchReportHttp({
         url: `${origin}/research/report`,
+        init: { redirect: "error", credentials: "omit" },
       }),
     readSession: (key) => readStorage(chrome.storage.session, key),
     writeSession: (key, value) =>

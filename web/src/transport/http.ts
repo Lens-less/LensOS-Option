@@ -1,5 +1,8 @@
 import type { ResearchReport } from "../contracts";
 import { validateResearchReport } from "../report";
+import { ReportLoadError, requestJson, type FetchLike } from "./requestJson";
+
+export type { FetchLike } from "./requestJson";
 
 export interface LoadedReport {
   report: ResearchReport;
@@ -8,11 +11,6 @@ export interface LoadedReport {
   analysisRunId?: string;
   cached?: boolean;
 }
-
-export type FetchLike = (
-  input: RequestInfo | URL,
-  init?: RequestInit,
-) => Promise<Response>;
 
 function inferCached(response: Response): boolean | undefined {
   const ageHeader = response.headers.get("Age");
@@ -44,32 +42,15 @@ export async function loadResearchReportHttp(options?: {
   url?: string;
   init?: RequestInit;
   receivedAtMs?: number;
+  timeoutMs?: number;
 }): Promise<LoadedReport> {
-  const fetchImpl = options?.fetchImpl ?? globalThis.fetch;
-  if (typeof fetchImpl !== "function") {
-    throw new Error("fetch implementation is unavailable");
+  const { response, payload } = await requestJson(options?.url ?? "/research/report", options);
+  let report: ResearchReport;
+  try {
+    report = validateResearchReport(payload);
+  } catch {
+    throw new ReportLoadError("invalid");
   }
-
-  const { headers: initHeaders, ...init } = options?.init ?? {};
-  const headers = new Headers(initHeaders);
-  if (!headers.has("Accept")) {
-    headers.set("Accept", "application/json");
-  }
-
-  const response = await fetchImpl(options?.url ?? "/research/report", {
-    ...init,
-    method: "GET",
-    body: undefined,
-    cache: "no-store",
-    headers,
-  });
-
-  if (!response.ok) {
-    throw new Error(`report request failed with ${response.status}`);
-  }
-
-  const payload: unknown = await response.json();
-  const report = validateResearchReport(payload);
 
   return {
     report,

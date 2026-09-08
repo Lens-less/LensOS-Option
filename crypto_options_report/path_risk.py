@@ -7,6 +7,7 @@ import math
 import random
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,8 @@ VOL_SCALING_MODES = frozenset({VOL_SCALING_NONE, VOL_SCALING_EVIDENCE_TARGET})
 # still honoured so recorded fixtures keep replaying, but it is labelled in the
 # report rather than passing as a measurement.
 UNEVIDENCED_VOL_SCALING_TARGET = "UNEVIDENCED_VOL_SCALING_TARGET"
+UNCONDITIONED_UNIFORM = "unconditioned_uniform"
+HISTORICAL_PRE_PATH_FEATURES_UNAVAILABLE = "HISTORICAL_PRE_PATH_FEATURES_UNAVAILABLE"
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,7 @@ def build_path_risk_report_from_historical_report(
     """Build path-risk evidence from eligible historical rows, never placeholders."""
 
     candidate_spec = _candidate_spec(candidate)
+    generated_at = generated_at or utc_timestamp()
     eligible_quotes = list(
         (historical_report.get("canonical_data") or {}).get("eligible_quotes") or []
     )
@@ -110,6 +114,17 @@ def build_path_risk_report_from_historical_report(
             historical_report=historical_report,
             generated_at=generated_at,
             reason_codes=["HISTORICAL_RECONCILIATION_NOT_ELIGIBLE"],
+        )
+
+    timestamp_error = _historical_timestamp_error(
+        eligible_quotes, timestamp_field="ts", generated_at=generated_at
+    )
+    if timestamp_error is not None:
+        return _blocked_historical_path_report(
+            candidate=candidate_spec,
+            historical_report=historical_report,
+            generated_at=generated_at,
+            reason_codes=[timestamp_error],
         )
 
     paths = _historical_paths_from_quotes(
@@ -131,6 +146,7 @@ def build_path_risk_report_from_historical_report(
     ]
     payload = {
         "source": "validated_historical_reconciliation",
+        "historical_sampling_mode": UNCONDITIONED_UNIFORM,
         "input_evidence": {
             "status": "validated_historical",
             "placeholder_data": False,
@@ -192,6 +208,7 @@ def build_path_risk_report_from_underlying_history(
     reconciliation evidence.
     """
     candidate_spec = _candidate_spec(candidate)
+    generated_at = generated_at or utc_timestamp()
     observations = (history or {}).get("observations")
     if not isinstance(observations, list) or len(observations) < 2:
         return _blocked_underlying_path_report(
@@ -207,6 +224,21 @@ def build_path_risk_report_from_underlying_history(
             history=history,
             generated_at=generated_at,
             reason_codes=["NON_DAILY_UNDERLYING_RESOLUTION"],
+            independent_windows=0,
+        )
+
+    timestamp_error = _historical_timestamp_error(
+        observations,
+        timestamp_field="observed_at",
+        generated_at=generated_at,
+        check_timestamp_ms=True,
+    )
+    if timestamp_error is not None:
+        return _blocked_underlying_path_report(
+            candidate=candidate_spec,
+            history=history,
+            generated_at=generated_at,
+            reason_codes=[timestamp_error],
             independent_windows=0,
         )
 
@@ -245,6 +277,7 @@ def build_path_risk_report_from_underlying_history(
     all_returns = [value for path in paths for value in path["returns"]]
     payload = {
         "source": UNDERLYING_HISTORY_SOURCE,
+        "historical_sampling_mode": UNCONDITIONED_UNIFORM,
         "input_evidence": {
             "status": "validated_historical",
             "evidence_class": UNDERLYING_HISTORY_SOURCE,
@@ -448,19 +481,32 @@ def build_path_risk_distribution_report(
         raise ValueError("mixture group weights must contain positive mass")
 
     candidate = _candidate_spec(payload["candidate"])
+    directional_risk = _directional_risk_spec(candidate)
     report_generated_at = generated_at or utc_timestamp()
+    historical_sampling_mode = payload.get("historical_sampling_mode", "similarity_weighted")
+    if not isinstance(historical_sampling_mode, str) or historical_sampling_mode not in {
+        "similarity_weighted", UNCONDITIONED_UNIFORM
+    }:
+        raise ValueError("unsupported historical_sampling_mode")
+    similarity_applied = historical_sampling_mode == "similarity_weighted"
 
     historical_paths = payload.get("historical_paths")
     if not isinstance(historical_paths, list) or not historical_paths:
         raise ValueError("historical_paths must contain at least one path")
     base_paths = [
-        _prepare_path_record(path_payload, candidate)
+        _prepare_path_record(
+            path_payload, candidate, require_historical_features=similarity_applied
+        )
         for path_payload in historical_paths
     ]
-    initial_similarity_weights = _similarity_weights(
-        candidate.feature_vector,
-        [path["feature_vector"] for path in base_paths],
-        bandwidth=merged_config["similarity_bandwidth"],
+    initial_similarity_weights = (
+        _similarity_weights(
+            candidate.feature_vector,
+            [path["feature_vector"] for path in base_paths],
+            bandwidth=merged_config["similarity_bandwidth"],
+        )
+        if similarity_applied
+        else [1.0 / len(base_paths)] * len(base_paths)
     )
     initial_ess = _effective_sample_size(initial_similarity_weights)
 
@@ -469,7 +515,9 @@ def build_path_risk_distribution_report(
     fallback_triggered = initial_ess < merged_config["min_effective_sample_size"]
     if fallback_triggered:
         pooled_paths = [
-            _prepare_path_record(path_payload, candidate)
+            _prepare_path_record(
+                path_payload, candidate, require_historical_features=similarity_applied
+            )
             for path_payload in payload.get("fallback_pool", [])
         ]
         applied_paths.extend(pooled_paths)
@@ -498,16 +546,18 @@ def build_path_risk_distribution_report(
 
     all_scenarios = []
     for path, weight in zip(applied_paths, applied_weights, strict=True):
-        scenario = _scenario_from_record(path, candidate)
+        scenario = _scenario_from_record(path, candidate, directional_risk=directional_risk)
         scenario["scenario_id"] = path["path_id"]
-        scenario["source_group"] = "historical_similarity"
+        scenario["source_group"] = (
+            "historical_similarity" if similarity_applied else "historical_unconditioned"
+        )
         scenario["weight"] = weight * group_weights["historical"]
         all_scenarios.append(scenario)
 
     bootstrap_paths = bootstrap_report["paths"]
     bootstrap_count = len(bootstrap_paths) or 1
     for index, path in enumerate(bootstrap_paths):
-        scenario = _scenario_from_record(path, candidate)
+        scenario = _scenario_from_record(path, candidate, directional_risk=directional_risk)
         scenario["scenario_id"] = f"bootstrap-{index + 1}"
         scenario["source_group"] = "circular_block_bootstrap"
         scenario["weight"] = group_weights["bootstrap"] / bootstrap_count
@@ -538,7 +588,7 @@ def build_path_risk_distribution_report(
         raise ValueError("normalized stress scenario weights must preserve applied mass")
     for path, scenario_weight in zip(stress_paths, stress_weights, strict=True):
         path["mixture_weight"] = scenario_weight
-        scenario = _scenario_from_record(path, candidate)
+        scenario = _scenario_from_record(path, candidate, directional_risk=directional_risk)
         scenario["scenario_id"] = path["path_id"]
         scenario["source_group"] = "stress_mixture"
         scenario["weight"] = scenario_weight
@@ -605,6 +655,14 @@ def build_path_risk_distribution_report(
                 for key, value in evidence_override.items()
                 if key not in {"status", "placeholder_data", "readiness_contribution"}
             },
+            "conditional_similarity": {
+                "applied": similarity_applied,
+                "status": "provided_features" if similarity_applied else "unavailable",
+                "reason_code": (
+                    None if similarity_applied else HISTORICAL_PRE_PATH_FEATURES_UNAVAILABLE
+                ),
+                "requested_feature_names": sorted(candidate.feature_vector),
+            },
         },
         "candidate": {
             "instrument_name": candidate.instrument_name,
@@ -627,8 +685,18 @@ def build_path_risk_distribution_report(
         },
         "historical_path_records": applied_paths,
         "path_sampling": {
-            "method": "similarity_weighted_plus_circular_block_bootstrap",
+            "method": (
+                "similarity_weighted_plus_circular_block_bootstrap"
+                if similarity_applied
+                else "unconditioned_uniform_plus_circular_block_bootstrap"
+            ),
             "similarity_weighted": {
+                "applied": similarity_applied,
+                "mode": historical_sampling_mode,
+                "status": "provided_features" if similarity_applied else "unavailable",
+                "reason_code": (
+                    None if similarity_applied else HISTORICAL_PRE_PATH_FEATURES_UNAVAILABLE
+                ),
                 "bandwidth": merged_config["similarity_bandwidth"],
                 "initial_effective_sample_size": round(initial_ess, 8),
                 "minimum_effective_sample_size": merged_config[
@@ -663,6 +731,9 @@ def build_path_risk_distribution_report(
             },
         },
         "stress_mixture": {
+            "scenario_basis": "authored_deterministic_shocks",
+            "weights_are_calibrated_probabilities": False,
+            "statistical_confidence_available": False,
             "configured_min_weight": max(
                 merged_config["stress_mixture_min_weight"],
                 payload_stress_floor,
@@ -674,6 +745,12 @@ def build_path_risk_distribution_report(
         },
         "distributions": metrics,
         "diagnostics": {
+            "directional_risk": directional_risk,
+            "dynamic_delta_crossing": {
+                "status": "unavailable",
+                "reason_code": "NO_DYNAMIC_DELTA_PATH_MODEL",
+                "note": "Crossing probabilities describe spot thresholds, not modelled future option Delta.",
+            },
             "terminal_only_touch_proxy": round(historical_itm, 8),
             "historical_touch_probability_before_bootstrap": round(historical_touch, 8),
             "path_maximum_touch": True,
@@ -1043,20 +1120,72 @@ def _blocked_historical_path_report(
     return report
 
 
+def _historical_timestamp_error(
+    rows: list[dict[str, Any]],
+    *,
+    timestamp_field: str,
+    generated_at: str,
+    check_timestamp_ms: bool = False,
+) -> str | None:
+    """Validate time before claiming daily paths or independent samples.
+
+    Sorting or dropping invalid observations would silently change the source
+    history. Reject them instead, including gaps: a two-observation interval
+    cannot stand in for one day merely because the payload declares daily data.
+    """
+    def parse_aware(value: Any) -> datetime:
+        if not isinstance(value, str):
+            raise ValueError("timestamp must be a timezone-aware ISO string")
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("timestamp must declare its timezone")
+        return parsed
+
+    try:
+        as_of = parse_aware(generated_at)
+    except (TypeError, ValueError, OverflowError):
+        return "INVALID_PATH_RISK_GENERATED_AT"
+    previous = None
+    for row in rows:
+        if not isinstance(row, dict):
+            return "HISTORICAL_TIMESTAMP_INVALID"
+        try:
+            observed_at = parse_aware(row.get(timestamp_field))
+        except (TypeError, ValueError, OverflowError):
+            return "HISTORICAL_TIMESTAMP_INVALID"
+        if observed_at > as_of:
+            return "HISTORICAL_TIMESTAMP_AFTER_GENERATED_AT"
+        if previous is not None:
+            elapsed_seconds = (observed_at - previous).total_seconds()
+            if elapsed_seconds <= 0:
+                return "HISTORICAL_TIMESTAMP_NOT_STRICTLY_INCREASING"
+            if elapsed_seconds != 86400:
+                return "HISTORICAL_DAILY_CADENCE_INVALID"
+        if check_timestamp_ms and "timestamp_ms" in row:
+            timestamp_ms = row["timestamp_ms"]
+            if (
+                isinstance(timestamp_ms, bool)
+                or not isinstance(timestamp_ms, int)
+                or timestamp_ms != round(observed_at.timestamp() * 1000)
+            ):
+                return "HISTORICAL_TIMESTAMP_MISMATCH"
+        previous = observed_at
+    return None
+
+
 def _historical_paths_from_quotes(
     quotes: list[dict[str, Any]],
     *,
     candidate: CandidateSpec,
 ) -> list[dict[str, Any]]:
-    sorted_quotes = sorted(quotes, key=lambda item: str(item.get("ts") or ""))
     prices = [
         _finite_positive_float(
             item["underlying_price"],
             "historical quote underlying_price",
         )
-        for item in sorted_quotes
+        for item in quotes
     ]
-    timestamps = [str(item.get("ts")) for item in sorted_quotes]
+    timestamps = [str(item.get("ts")) for item in quotes]
     paths = []
     for start in range(0, len(prices) - candidate.horizon_days):
         window = prices[start : start + candidate.horizon_days + 1]
@@ -1073,11 +1202,14 @@ def _historical_paths_from_quotes(
                 "start_time": timestamps[start],
                 "horizon_days": candidate.horizon_days,
                 "source_realized_vol": _realized_vol(returns),
-                "regime_scores": dict(candidate.regime_scores),
-                "feature_vector": {
-                    **candidate.feature_vector,
-                    "trend_7d": round((window[-1] / window[0]) - 1.0, 8),
-                },
+                # These quote rows carry outcomes, not measurements known at
+                # each window's start. In particular the terminal return must
+                # never become a matching feature: that would select paths by
+                # the future outcome whose probability we are estimating.
+                # Callers replay these paths uniformly and explicitly mark
+                # conditional similarity unavailable.
+                "regime_scores": {},
+                "feature_vector": {},
                 "returns": returns,
             }
         )
@@ -1093,6 +1225,29 @@ def _realized_vol(returns: list[float]) -> float:
 
 
 def _default_stress_scenarios(candidate: CandidateSpec) -> list[dict[str, Any]]:
+    # A one-day horizon still receives the full compounded shock. A two-step
+    # path cannot be passed to its one-day tracer, nor may truncation silently
+    # remove part of the authored severity.
+    up_shock = (
+        [round(1.12 * 1.08 - 1.0, 8)]
+        if candidate.horizon_days == 1
+        else [0.12, 0.08] + [0.0] * (candidate.horizon_days - 2)
+    )
+    liquidity_shock = (
+        [round(1.05 * 1.03 - 1.0, 8)]
+        if candidate.horizon_days == 1
+        else [0.05, 0.03] + [0.0] * (candidate.horizon_days - 2)
+    )
+    down_shock = (
+        [round(0.88 * 0.92 - 1.0, 8)]
+        if candidate.horizon_days == 1
+        else [-0.12, -0.08] + [0.0] * (candidate.horizon_days - 2)
+    )
+    downside_liquidity_shock = (
+        [round(0.95 * 0.97 - 1.0, 8)]
+        if candidate.horizon_days == 1
+        else [-0.05, -0.03] + [0.0] * (candidate.horizon_days - 2)
+    )
     return [
         {
             "name": "synthetic-stress-spot-up-10-iv-jump",
@@ -1103,14 +1258,35 @@ def _default_stress_scenarios(candidate: CandidateSpec) -> list[dict[str, Any]]:
         },
         {
             "name": "synthetic-stress-spot-up-20-iv-jump",
-            "path_returns": [0.12, 0.08] + [0.0] * max(candidate.horizon_days - 2, 0),
+            "path_returns": up_shock,
             "iv_jump": 0.25,
             "liquidity_exit_cost_usdc": 250.0,
             "weight": 0.01,
         },
         {
             "name": "synthetic-stress-liquidity-gap",
-            "path_returns": [0.05, 0.03] + [0.0] * max(candidate.horizon_days - 2, 0),
+            "path_returns": liquidity_shock,
+            "iv_jump": 0.10,
+            "liquidity_exit_cost_usdc": 400.0,
+            "weight": 0.01,
+        },
+        {
+            "name": "synthetic-stress-spot-down-10-iv-jump",
+            "path_returns": [-0.10] + [0.0] * (candidate.horizon_days - 1),
+            "iv_jump": 0.15,
+            "liquidity_exit_cost_usdc": 120.0,
+            "weight": 0.03,
+        },
+        {
+            "name": "synthetic-stress-spot-down-20-iv-jump",
+            "path_returns": down_shock,
+            "iv_jump": 0.25,
+            "liquidity_exit_cost_usdc": 250.0,
+            "weight": 0.01,
+        },
+        {
+            "name": "synthetic-stress-downside-liquidity-gap",
+            "path_returns": downside_liquidity_shock,
             "iv_jump": 0.10,
             "liquidity_exit_cost_usdc": 400.0,
             "weight": 0.01,
@@ -1121,6 +1297,8 @@ def _default_stress_scenarios(candidate: CandidateSpec) -> list[dict[str, Any]]:
 def _prepare_path_record(
     payload: dict[str, Any],
     candidate: CandidateSpec,
+    *,
+    require_historical_features: bool = True,
 ) -> dict[str, Any]:
     raw_returns = _validated_path_returns(payload["returns"])
     path_horizon_days = _positive_int(
@@ -1178,24 +1356,32 @@ def _prepare_path_record(
         for level in rounded_spot_path
     ):
         raise ValueError("normalized spot path must remain finite and positive")
-    max_up_return = max(normalized_spot_path) - 1.0
+    max_up_return = max(max(normalized_spot_path) - 1.0, 0.0)
+    max_down_return = max(1.0 - min(normalized_spot_path), 0.0)
     terminal_return = normalized_spot_path[-1] - 1.0
     return {
         "path_id": payload["path_id"],
         "start_time": payload["start_time"],
         "horizon_days": path_horizon_days,
-        "regime_scores": _validated_numeric_mapping(
-            payload.get("regime_scores"),
-            "historical path regime_scores",
+        "regime_scores": (
+            _validated_numeric_mapping(
+                payload.get("regime_scores"),
+                "historical path regime_scores",
+            )
+            if require_historical_features else {}
         ),
-        "feature_vector": _validated_numeric_mapping(
-            payload.get("feature_vector"),
-            "historical path feature_vector",
+        "feature_vector": (
+            _validated_numeric_mapping(
+                payload.get("feature_vector"),
+                "historical path feature_vector",
+            )
+            if require_historical_features else {}
         ),
         "returns": raw_returns,
         "scaled_returns": scaled_returns,
         "normalized_spot_path": rounded_spot_path,
         "max_up_return": round(max_up_return, 8),
+        "max_down_return": round(max_down_return, 8),
         "terminal_return": round(terminal_return, 8),
         "source_realized_vol": source_vol,
         "scale_factor": scale_factor,
@@ -1328,12 +1514,131 @@ def _build_stress_scenarios(
     return {"paths": paths, "raw_weight_total": raw_weight_total}
 
 
+def _directional_risk_spec(candidate: CandidateSpec) -> dict[str, Any]:
+    """Derive credit-position directions from legs, never from a label or Delta.
+
+    A net short option or balanced credit vertical has an unambiguous adverse
+    side. Two such wings with ordered short strikes cover a condor/strangle.
+    Other shapes may change risk direction inside their strike range, so these
+    simple directional diagnostics are unavailable for them.
+    """
+    structure = candidate.structure_legs
+    quantities: dict[tuple[str, float], list[float]] = {}
+    for leg in structure.legs:
+        quantities.setdefault((leg.option_type, leg.strike), []).append(leg.quantity)
+    net_legs = {
+        key: math.fsum(values)
+        for key, values in quantities.items()
+        if math.fsum(values) != 0.0
+    }
+
+    def credit_boundary(option_type: str) -> tuple[float | None, bool]:
+        side = sorted(
+            (strike, quantity)
+            for (kind, strike), quantity in net_legs.items()
+            if kind == option_type
+        )
+        if not side:
+            return None, True
+        if len(side) == 1 and side[0][1] < 0:
+            return side[0][0], True
+        if len(side) == 2:
+            (lower_strike, lower_quantity), (upper_strike, upper_quantity) = side
+            balanced = math.isclose(lower_quantity, -upper_quantity, rel_tol=1e-12)
+            if balanced and option_type == "call" and lower_quantity < 0:
+                return lower_strike, True
+            if balanced and option_type == "put" and upper_quantity < 0:
+                return upper_strike, True
+        return None, False
+
+    up_strike, call_supported = credit_boundary("call")
+    down_strike, put_supported = credit_boundary("put")
+    supported = (
+        not structure.is_multi_expiry
+        and call_supported
+        and put_supported
+        and (up_strike is not None or down_strike is not None)
+        and (up_strike is None or down_strike is None or down_strike < up_strike)
+    )
+    if not supported:
+        return {
+            "status": "unavailable",
+            "reason_code": "UNSUPPORTED_DIRECTIONAL_RISK_GEOMETRY",
+            "direction": None,
+            "up_short_strike": None,
+            "down_short_strike": None,
+            "up_return_threshold": None,
+            "down_return_threshold": None,
+            "delta_cross_probability_basis": None,
+        }
+    direction = (
+        "both" if up_strike is not None and down_strike is not None
+        else "up" if up_strike is not None
+        else "down"
+    )
+    return {
+        "status": "available",
+        "reason_code": None,
+        "direction": direction,
+        "up_short_strike": up_strike,
+        "down_short_strike": down_strike,
+        "up_return_threshold": (
+            round(max(up_strike / candidate.current_spot - 1.0, 0.0), 8)
+            if up_strike is not None else None
+        ),
+        "down_return_threshold": (
+            round(max(1.0 - down_strike / candidate.current_spot, 0.0), 8)
+            if down_strike is not None else None
+        ),
+        "short_strike_cross_probability_basis": "short_leg_strike_boundary_proxy",
+        "delta_cross_probability_basis": (
+            "legacy_up_return_proxy" if direction == "up"
+            else "short_leg_strike_boundary_proxy"
+        ),
+    }
+
+
 def _scenario_from_record(
     path_record: dict[str, Any],
     candidate: CandidateSpec,
+    *,
+    directional_risk: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_path = [float(value) for value in path_record["normalized_spot_path"]]
-    max_up_return = max(normalized_path) - 1.0
+    max_up_return = max(max(normalized_path) - 1.0, 0.0)
+    max_down_return = max(1.0 - min(normalized_path), 0.0)
+    risk = directional_risk or _directional_risk_spec(candidate)
+    direction = risk["direction"]
+    adverse_excursion_return = (
+        max_up_return if direction == "up"
+        else max_down_return if direction == "down"
+        else max(max_up_return, max_down_return) if direction == "both"
+        else None
+    )
+    peak_spot = candidate.current_spot * max(1.0, max(normalized_path))
+    trough_spot = candidate.current_spot * min(1.0, min(normalized_path))
+    up_strike = risk["up_short_strike"]
+    down_strike = risk["down_short_strike"]
+    up_crossed = (
+        peak_spot >= up_strike or math.isclose(peak_spot, up_strike, rel_tol=1e-12)
+        if up_strike is not None else None
+    )
+    down_crossed = (
+        trough_spot <= down_strike or math.isclose(trough_spot, down_strike, rel_tol=1e-12)
+        if down_strike is not None else None
+    )
+    short_strike_crossed = (
+        bool(up_crossed or down_crossed) if risk["status"] == "available" else None
+    )
+    # Keep the historical upside-return contract for pure call-side risk. A
+    # put or condor cannot inherit that number as a fabricated downside Delta
+    # threshold; their compatibility field instead exposes actual strike
+    # crossing, with the distinct proxy basis published in the report.
+    delta_crossed = (
+        max_up_return >= candidate.delta_cross_up_return
+        or math.isclose(max_up_return, candidate.delta_cross_up_return, rel_tol=1e-12)
+        if direction == "up" else short_strike_crossed
+    )
     terminal_return = normalized_path[-1] - 1.0
     terminal_spot = candidate.current_spot * normalized_path[-1]
     # The obligation is read off the legs, so a put spread or a condor settles
@@ -1349,10 +1654,18 @@ def _scenario_from_record(
     )
     return {
         "max_up_return": round(max_up_return, 8),
+        "max_down_return": round(max_down_return, 8),
+        "adverse_excursion_return": (
+            round(adverse_excursion_return, 8)
+            if adverse_excursion_return is not None else None
+        ),
         "terminal_return": round(terminal_return, 8),
         "touched": bool(path_record["path_touch"]),
         "itm": bool(path_record["path_itm"]),
-        "delta_crossed": max_up_return >= candidate.delta_cross_up_return,
+        "delta_crossed": delta_crossed,
+        "short_strike_crossed": short_strike_crossed,
+        "up_short_strike_crossed": up_crossed,
+        "down_short_strike_crossed": down_crossed,
         "loss_usdc": round(loss_usdc, 8),
         "payoff_usdc": round(payoff_usdc, 8),
         "intrinsic_value_usdc": round(intrinsic_value_usdc, 8),
@@ -1471,12 +1784,22 @@ def _weighted_path_metrics(
         raise ValueError("path scenario weights must form complete probability mass")
     p_touch = sum(weight for weight, item in zip(weights, scenarios, strict=True) if item["touched"])
     p_itm = sum(weight for weight, item in zip(weights, scenarios, strict=True) if item["itm"])
+    directional_risk = _directional_risk_spec(candidate)
+    direction_available = directional_risk["status"] == "available"
     delta_cross_probability = sum(
         weight
         for weight, item in zip(weights, scenarios, strict=True)
         if item["delta_crossed"]
     )
-    max_up_returns = [float(item["max_up_return"]) for item in scenarios]
+    short_strike_cross_probability = sum(
+        weight
+        for weight, item in zip(weights, scenarios, strict=True)
+        if item["short_strike_crossed"]
+    )
+    adverse_returns = (
+        [float(item["adverse_excursion_return"]) for item in scenarios]
+        if direction_available else []
+    )
     losses = [float(item["loss_usdc"]) for item in scenarios]
     payoffs = [float(item["payoff_usdc"]) for item in scenarios]
     stress_losses = [
@@ -1484,19 +1807,38 @@ def _weighted_path_metrics(
         for item in scenarios
         if item["source_group"] == "stress_mixture"
     ]
-    adverse_excursion_mean = sum(
-        weight * max_up_return
-        for weight, max_up_return in zip(weights, max_up_returns, strict=True)
+    adverse_excursion_mean = (
+        sum(
+            weight * adverse_return
+            for weight, adverse_return in zip(weights, adverse_returns, strict=True)
+        )
+        if direction_available else None
     )
     return {
         "p_touch": round(p_touch, 8),
         "p_itm": round(p_itm, 8),
         "adverse_excursion": {
-            "mean": round(adverse_excursion_mean, 8),
-            "p95": round(_weighted_quantile(max_up_returns, weights, 0.95), 8),
-            "max": round(max(max_up_returns) if max_up_returns else 0.0, 8),
+            "status": directional_risk["status"],
+            "reason_code": directional_risk["reason_code"],
+            "direction": directional_risk["direction"],
+            "basis": "maximum_adverse_underlying_return_from_initial_spot",
+            "mean": (
+                round(adverse_excursion_mean, 8)
+                if adverse_excursion_mean is not None else None
+            ),
+            "p95": (
+                round(_weighted_quantile(adverse_returns, weights, 0.95), 8)
+                if direction_available else None
+            ),
+            "max": round(max(adverse_returns), 8) if direction_available else None,
         },
-        "delta_cross_probability": round(delta_cross_probability, 8),
+        "delta_cross_probability": (
+            round(delta_cross_probability, 8) if direction_available else None
+        ),
+        "delta_cross_probability_basis": directional_risk["delta_cross_probability_basis"],
+        "short_strike_cross_probability": (
+            round(short_strike_cross_probability, 8) if direction_available else None
+        ),
         "expected_payoff_usdc": round(
             sum(weight * payoff for weight, payoff in zip(weights, payoffs, strict=True)),
             8,

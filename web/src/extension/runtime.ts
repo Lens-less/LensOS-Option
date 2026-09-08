@@ -6,19 +6,20 @@ import type {
 } from "./messages";
 import type { LoadedReport } from "../transport";
 import { buildEvidenceUrl, normalizeEngineOrigin } from "./config";
+import { ReportLoadError } from "../transport/requestJson";
 
 export interface SidePanelRuntime {
   getEngineOrigin(): Promise<string>;
   setEngineOrigin(origin: string): Promise<string>;
   getContext(): Promise<DeribitContext | null>;
-  getReport(force?: boolean): Promise<LoadedReport>;
+  getReport(force?: boolean, expectedOrigin?: string): Promise<LoadedReport>;
   /**
    * Best-effort read of the last report cached for the current engine
    * origin, without contacting the engine. Used only to turn an offline
    * state into "showing last known result" instead of a dead end; returns
    * `null` on any miss or failure rather than throwing.
    */
-  getCachedReport(): Promise<LoadedReport | null>;
+  getCachedReport(expectedOrigin?: string): Promise<LoadedReport | null>;
   getEvidenceUrl(origin: string): string;
 }
 
@@ -46,7 +47,7 @@ export const chromeSidePanelRuntime: SidePanelRuntime = {
     if (!("origin" in response) || typeof response.origin !== "string") {
       throw new Error("worker returned no engine origin");
     }
-    return response.origin;
+    return normalizeEngineOrigin(response.origin);
   },
 
   async setEngineOrigin(origin: string): Promise<string> {
@@ -56,7 +57,7 @@ export const chromeSidePanelRuntime: SidePanelRuntime = {
       origin: normalized,
     });
     ensureSuccess(response);
-    return response.origin ?? normalized;
+    return normalizeEngineOrigin(response.origin ?? normalized);
   },
 
   async getContext(): Promise<DeribitContext | null> {
@@ -65,9 +66,12 @@ export const chromeSidePanelRuntime: SidePanelRuntime = {
     return response.context ?? null;
   },
 
-  async getReport(force = false): Promise<LoadedReport> {
-    const response = await sendMessage({ type: "REPORT_GET", force });
+  async getReport(force = false, expectedOrigin?: string): Promise<LoadedReport> {
+    const response = await sendMessage({ type: "REPORT_GET", force, expectedOrigin });
     ensureSuccess(response);
+    if (expectedOrigin && response.origin !== normalizeEngineOrigin(expectedOrigin)) {
+      throw new ReportLoadError("aborted");
+    }
     if (!("loaded" in response) || !response.loaded) {
       throw new Error("worker returned no report envelope");
     }
@@ -80,12 +84,13 @@ export const chromeSidePanelRuntime: SidePanelRuntime = {
     };
   },
 
-  async getCachedReport(): Promise<LoadedReport | null> {
+  async getCachedReport(expectedOrigin?: string): Promise<LoadedReport | null> {
     try {
-      const response = await sendMessage({ type: "REPORT_GET_CACHED_ONLY" });
+      const response = await sendMessage({ type: "REPORT_GET_CACHED_ONLY", expectedOrigin });
       if (!response.ok || !("loaded" in response) || !response.loaded) {
         return null;
       }
+      if (expectedOrigin && response.origin !== normalizeEngineOrigin(expectedOrigin)) return null;
       if (!Number.isFinite(response.loaded.receivedAtMs)) {
         return null;
       }

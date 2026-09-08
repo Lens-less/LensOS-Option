@@ -9,6 +9,7 @@ scope, and when that claim must be retired.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 from typing import Any
 
 from ._canonical import canonical_sha256
@@ -832,7 +833,7 @@ def _normalize_selection_identity(scope: Any) -> dict[str, Any] | None:
         try:
             strike = float(leg.get("strike"))
             quantity = float(leg.get("quantity"))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         normalized_legs.append(
             {
@@ -850,10 +851,41 @@ def _normalize_selection_identity(scope: Any) -> dict[str, Any] | None:
             item["instrument_name"],
         )
     )
-    return {
+    normalized_selection = {
         "expiry_date": expiry_date,
         "legs": normalized_legs,
     }
+    # Legacy artifacts stay readable, but cannot match a current card that
+    # binds its frozen costs and executable net credit.
+    if "entry_costs" in selection:
+        entry_costs = selection["entry_costs"]
+        if not isinstance(entry_costs, dict):
+            return None
+        for field in ("cost_model_id", "cost_config_hash", "currency"):
+            if not isinstance(entry_costs.get(field), str) or not entry_costs[field].strip():
+                return None
+        breakdown = entry_costs.get("cost_breakdown")
+        fields = ("entry_fees", "slippage_reserve", "legging_reserve", "settlement_reserve")
+        if not isinstance(breakdown, dict):
+            return None
+        amounts = {"minimum_net_credit": entry_costs.get("minimum_net_credit")}
+        amounts.update({field: breakdown.get(field) for field in fields})
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not isfinite(_coerce_float(value)) or value < 0
+            for value in amounts.values()
+        ):
+            return None
+        if amounts["minimum_net_credit"] <= 0:
+            return None
+        normalized_selection["entry_costs"] = {
+            "cost_model_id": entry_costs["cost_model_id"],
+            "cost_config_hash": entry_costs["cost_config_hash"],
+            "currency": entry_costs["currency"].upper(),
+            "minimum_net_credit": float(amounts["minimum_net_credit"]),
+            "cost_breakdown": {field: float(amounts[field]) for field in fields},
+        }
+    return normalized_selection
 
 
 def _expected_artifact_id(artifact: dict[str, Any]) -> str:
@@ -893,7 +925,7 @@ def _is_probability(value: Any) -> bool:
 def _coerce_float(value: Any) -> float:
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return float("inf")
 
 

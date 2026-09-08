@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildLoadedReport, safeResearchReport } from "../report/testFixtures";
 import type { SidePanelRuntime } from "../extension/runtime";
 import { SidePanelApp } from "./SidePanelApp";
 import { isOfflineError } from "./sidepanelFormatters";
+import type { LoadedReport } from "../transport";
 
 function buildRuntime(): SidePanelRuntime {
   return {
@@ -41,6 +42,41 @@ function expectBefore(first: Element, second: Element): void {
 }
 
 describe("SidePanelApp", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-25T08:00:10Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("withdraws current rankings and readiness conditions as a valid report expires", async () => {
+    vi.useFakeTimers();
+    await act(async () => { render(<SidePanelApp runtime={buildRuntime()} />); });
+    expect(screen.getByText("完整两腿")).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+    expect(screen.queryByText("完整两腿")).not.toBeInTheDocument();
+    expect(screen.queryByText("为什么现在关注")).not.toBeInTheDocument();
+    expect(screen.getByText("当前研究证据已失效")).toBeInTheDocument();
+    expect(screen.getByText("当前研究证据已失效").closest("details")).toBeNull();
+  });
+
+  it("withdraws current research and marks a quality-rejected brief unavailable", async () => {
+    const runtime = buildRuntime();
+    vi.mocked(runtime.getReport).mockResolvedValue(buildLoadedReport({
+      receivedAtMs: Date.now(),
+      report: {
+        ...safeResearchReport,
+        runtime_context: { mode: "live", replay: false, evaluation_clock: "2026-07-25T08:00:10Z" },
+        data_status: { ...safeResearchReport.data_status, validated: false },
+      },
+    }));
+    render(<SidePanelApp runtime={runtime} />);
+    expect(await screen.findByText("当前研究证据不可用")).toBeInTheDocument();
+    expect(screen.queryByText("完整两腿")).not.toBeInTheDocument();
+    const brief = within(screen.getByRole("region", { name: "策略简报" }));
+    expect(brief.getByRole("status", { name: "NO_TRADE" })).toBeInTheDocument();
+    expect(brief.queryByRole("button", { name: /复制/ })).not.toBeInTheDocument();
+  });
+
   it("renders the read-only side panel composition from shared report data", async () => {
     render(<SidePanelApp runtime={buildRuntime()} />);
 
@@ -109,6 +145,8 @@ describe("SidePanelApp", () => {
       await screen.findByText("本地引擎离线 · 首次设置"),
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("alert").closest("details")).toBeNull();
+    expect(screen.getByRole("button", { name: "保存地址" })).toBeVisible();
     expect(
       screen.getByText(
         "python -m crypto_options_report.api --host 127.0.0.1 --port 8000",
@@ -137,8 +175,9 @@ describe("SidePanelApp", () => {
       await screen.findByText("本地引擎离线 · 显示上次结果"),
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    // The stale report is still fully shown underneath the banner.
-    expect(screen.getByText("完整两腿")).toBeInTheDocument();
+    expect(screen.getByRole("alert").closest("details")).toBeNull();
+    // Cached provenance remains inspectable; current strategy evidence is withdrawn.
+    expect(screen.queryByText("完整两腿")).not.toBeInTheDocument();
     expect(screen.getAllByText("BTC-7AUG26-71000-C").length).toBeGreaterThan(0);
   });
 
@@ -151,6 +190,8 @@ describe("SidePanelApp", () => {
     render(<SidePanelApp runtime={runtime} />);
 
     expect(await screen.findByText("报告校验失败")).toBeInTheDocument();
+    expect(screen.getByRole("alert").closest("details")).toBeNull();
+    expect(screen.getByRole("alert")).not.toHaveTextContent("attempted to weaken");
     expect(screen.queryByText("本地引擎离线")).not.toBeInTheDocument();
   });
 
@@ -164,7 +205,7 @@ describe("SidePanelApp", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "刷新研究" }));
     await waitFor(() => {
-      expect(runtime.getReport).toHaveBeenCalledWith(true);
+      expect(runtime.getReport).toHaveBeenCalledWith(true, "http://127.0.0.1:8000");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "引擎设置" }));
@@ -176,8 +217,48 @@ describe("SidePanelApp", () => {
 
     expect(
       await screen.findByText(
-        "Engine origin must stay on a loopback http origin",
+        /引擎地址保存失败。请使用包含端口的本机 HTTP 地址/,
       ),
     ).toBeInTheDocument();
+  });
+
+  it("withdraws the old engine result immediately and ignores its delayed response after an origin change", async () => {
+    const runtime = buildRuntime();
+    let origin = "http://127.0.0.1:8000";
+    let finishOld!: (loaded: LoadedReport) => void;
+    vi.mocked(runtime.getEngineOrigin).mockImplementation(async () => origin);
+    vi.mocked(runtime.setEngineOrigin).mockImplementation(async (value) => {
+      origin = value;
+      return origin;
+    });
+    vi.mocked(runtime.getReport)
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce(buildLoadedReport({ receivedAtMs: Date.now(), analysisRunId: "new-engine-run" }));
+
+    render(<SidePanelApp runtime={runtime} />);
+    await waitFor(() => expect(runtime.getReport).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "引擎设置" }));
+    fireEvent.change(screen.getByDisplayValue(origin), { target: { value: "http://localhost:8123" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存地址" }));
+    expect(await screen.findByText("new-engine-run")).toBeInTheDocument();
+
+    await act(async () => { finishOld(buildLoadedReport({ receivedAtMs: Date.now(), analysisRunId: "old-engine-run" })); });
+    expect(screen.queryByText("old-engine-run")).not.toBeInTheDocument();
+    expect(screen.getByText("new-engine-run")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "打开完整 Evidence Console" }))
+      .toHaveAttribute("href", "http://localhost:8123/evidence/");
+    expect(runtime.getReport).toHaveBeenLastCalledWith(true, "http://localhost:8123");
+  });
+
+  it("clears current rankings while an engine-origin change is still saving", async () => {
+    const runtime = buildRuntime();
+    vi.mocked(runtime.setEngineOrigin).mockReturnValue(new Promise(() => undefined));
+    render(<SidePanelApp runtime={runtime} />);
+    expect(await screen.findByText("完整两腿")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "引擎设置" }));
+    fireEvent.change(screen.getByDisplayValue("http://127.0.0.1:8000"), { target: { value: "http://localhost:8123" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存地址" }));
+    expect(screen.queryByText("完整两腿")).not.toBeInTheDocument();
+    expect(screen.queryByText("run-123")).not.toBeInTheDocument();
   });
 });

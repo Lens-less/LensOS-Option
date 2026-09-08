@@ -1,9 +1,13 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, type ReactNode } from "react";
 
 interface ResearchErrorBoundaryProps {
   children: ReactNode;
   /** Names the fallen-back region in the fallback card and the console log. */
   label: string;
+  /** Identity of freshly validated input; a valid replacement recovers the region. */
+  resetKey?: unknown;
+  onRetry?: () => void;
+  retrying?: boolean;
 }
 
 interface ResearchErrorBoundaryState {
@@ -25,8 +29,14 @@ export class ResearchErrorBoundary extends Component<
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error(`${this.props.label} failed to render`, error, info.componentStack);
+  componentDidCatch(): void {
+    console.error(`${this.props.label} failed to render`);
+  }
+
+  componentDidUpdate(previousProps: ResearchErrorBoundaryProps): void {
+    if (this.state.error && previousProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null });
+    }
   }
 
   render(): ReactNode {
@@ -36,8 +46,19 @@ export class ResearchErrorBoundary extends Component<
           <h3>研究数据不可用</h3>
           <p>
             这一区域（{this.props.label}）的数据无法安全渲染，已按 fail-closed
-            原则整体停用；其余界面不受影响。请刷新或检查本地引擎输出后重试。
+            原则整体停用；其余界面不受影响。可在此重新读取并恢复该区域。
           </p>
+          <button
+            className="refresh-button"
+            disabled={this.props.retrying}
+            onClick={() => {
+              this.props.onRetry?.();
+              this.setState({ error: null });
+            }}
+            type="button"
+          >
+            {this.props.retrying ? "重新读取中…" : "重试此区域"}
+          </button>
         </section>
       );
     }

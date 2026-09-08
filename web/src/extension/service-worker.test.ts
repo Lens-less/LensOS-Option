@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ResearchReport } from "../contracts";
 import type { ExtensionMessage } from "./messages";
 import { createExtensionWorkerController } from "./service-worker";
@@ -366,5 +366,78 @@ describe("createExtensionWorkerController", () => {
       },
       fromCache: false,
     });
+  });
+
+  it("rejects a report from a prior origin even if its fetch finishes after the new engine responds", async () => {
+    const session = new Map<string, unknown>();
+    const local = new Map<string, unknown>();
+    let finishOld!: (loaded: LoadedReport) => void;
+    const loadReport = vi.fn()
+      .mockImplementationOnce(() => new Promise<LoadedReport>((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce({ report: safeReport, receivedAtMs: 1721865600001, analysisRunId: "new-run" });
+    const controller = createExtensionWorkerController({
+      loadReport,
+      readSession: async <T>(key: string) => session.get(key) as T | undefined,
+      writeSession: async (key, value) => { session.set(key, value); },
+      readLocal: async <T>(key: string) => local.get(key) as T | undefined,
+      writeLocal: async (key, value) => { local.set(key, value); },
+      setSidePanelOptions: async () => undefined,
+    });
+    const oldRequest = controller.handleMessage({ type: "REPORT_GET", force: true, expectedOrigin: "http://127.0.0.1:8000" });
+    await vi.waitFor(() => expect(loadReport).toHaveBeenCalledTimes(1));
+    await controller.handleMessage({ type: "ENGINE_CONFIG_SET", origin: "http://localhost:8123" });
+    const latest = await controller.handleMessage({ type: "REPORT_GET", expectedOrigin: "http://localhost:8123" });
+    expect(latest).toMatchObject({ ok: true, origin: "http://localhost:8123", loaded: { analysisRunId: "new-run" } });
+
+    finishOld({ report: safeReport, receivedAtMs: 1721865600000, analysisRunId: "old-run" });
+    expect(await oldRequest).toMatchObject({ ok: false, error: expect.stringContaining("[report:aborted]") });
+    expect(session.get("panelReport")).toMatchObject({ origin: "http://localhost:8123", loaded: { analysisRunId: "new-run" } });
+    expect(await controller.handleMessage({ type: "REPORT_GET_CACHED_ONLY", expectedOrigin: "http://127.0.0.1:8000" }))
+      .toMatchObject({ ok: false, error: expect.stringContaining("[report:aborted]") });
+  });
+
+  it("does not replace the session snapshot when an earlier same-origin request finishes last", async () => {
+    const session = new Map<string, unknown>();
+    let finishOld!: (loaded: LoadedReport) => void;
+    const loadReport = vi.fn()
+      .mockImplementationOnce(() => new Promise<LoadedReport>((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce({ report: safeReport, receivedAtMs: 1721865600001, analysisRunId: "new-run" });
+    const controller = createExtensionWorkerController({
+      loadReport,
+      readSession: async <T>(key: string) => session.get(key) as T | undefined,
+      writeSession: async (key, value) => { session.set(key, value); },
+      readLocal: async () => undefined,
+      writeLocal: async () => undefined,
+      setSidePanelOptions: async () => undefined,
+    });
+    const oldRequest = controller.handleMessage({ type: "REPORT_GET", force: true });
+    await vi.waitFor(() => expect(loadReport).toHaveBeenCalledTimes(1));
+    await controller.handleMessage({ type: "REPORT_GET", force: true });
+    finishOld({ report: safeReport, receivedAtMs: 1721865600000, analysisRunId: "old-run" });
+    await oldRequest;
+    expect(session.get("panelReport")).toMatchObject({ loaded: { analysisRunId: "new-run" } });
+  });
+
+  it("revokes reads that started while the new engine origin was still being saved", async () => {
+    let finishSave!: () => void;
+    let finishReport!: (loaded: LoadedReport) => void;
+    const writeSession = vi.fn();
+    const loadReport = vi.fn().mockImplementation(() => new Promise<LoadedReport>((resolve) => { finishReport = resolve; }));
+    const controller = createExtensionWorkerController({
+      loadReport,
+      readSession: async () => undefined,
+      writeSession,
+      readLocal: async () => undefined,
+      writeLocal: async () => new Promise<void>((resolve) => { finishSave = resolve; }),
+      setSidePanelOptions: async () => undefined,
+    });
+    const save = controller.handleMessage({ type: "ENGINE_CONFIG_SET", origin: "http://localhost:8123" });
+    const request = controller.handleMessage({ type: "REPORT_GET", force: true });
+    await vi.waitFor(() => expect(loadReport).toHaveBeenCalledTimes(1));
+    finishSave();
+    await save;
+    finishReport({ report: safeReport, receivedAtMs: 1721865600000 });
+    expect(await request).toMatchObject({ ok: false, error: expect.stringContaining("[report:aborted]") });
+    expect(writeSession).not.toHaveBeenCalled();
   });
 });

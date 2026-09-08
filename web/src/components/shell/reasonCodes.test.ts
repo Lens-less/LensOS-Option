@@ -99,6 +99,19 @@ describe("exchange event evidence readings", () => {
 });
 
 describe("reason-code readings", () => {
+  it.each([
+    "REGIME_ROLLING_HISTORY_INSUFFICIENT",
+    "REGIME_TRUST_EVIDENCE_NOT_PROMOTED",
+    "REGIME_MIN_OBSERVATIONS_NOT_MET",
+    "REGIME_ROLLING_FIELDS_INCOMPLETE",
+    "NO_OPEN_POSITIONS",
+  ])("explains the packaged demo reason %s without an unknown-code fallback", (code) => {
+    const reading = readReasonCode(code);
+
+    expect(reading.title).not.toBe("未收录的阻断原因");
+    expect(reading.detail).not.toContain("尚未收录");
+  });
+
   it("does not hard-code the VRP minimum and never drops unknown codes", () => {
     const insufficient = readReasonCode("INSUFFICIENT_VRP_HISTORY");
     const unknown = readReasonCode("UNKNOWN_PUBLIC_BLOCKER");

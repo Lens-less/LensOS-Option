@@ -1,0 +1,22 @@
+{
+  "missing": {
+    "analysis": "eecd1a89dbaeeeb938bc366dd196a1f934edba936ebf1ee4f855b6f850772a73",
+    "report": "3422cfa1204971a89e1b1083ee7ee9f05d88e254624c94a093d728c7933c7fa8"
+  },
+  "fixture": {
+    "analysis": "6bc3a979459ac35675e8edb2008e08668384c18e4c40bd52f84272ab6a3f6ecf",
+    "report": "c377eb196ac5f63dae2e7072b05f8b449f26db0518f1c6eb3bbb9a4db415a5fb"
+  },
+  "account_green": {
+    "analysis": "6266fd1ba3079a5a169719719ee45101dc40a6c33cd1aae265bdd4ff0d07409b",
+    "report": "372c2492107f74b27ee0d88a73c7c87dc795f75361f85d4f2ee1f27554f3b7c1"
+  },
+  "account_red": {
+    "analysis": "a532ee751ab207a4748f4648f70d6571b8ae57d2d03f212ee47d5b846ea5aaa4",
+    "report": "1f7396152f2940477128a1b09860e33ddd4617a8ec773b3edf5677c425e762a5"
+  },
+  "manual_mode": {
+    "analysis": "6bc3a979459ac35675e8edb2008e08668384c18e4c40bd52f84272ab6a3f6ecf",
+    "report": "c44c688dc203fae12630b8e4a1f01ef6465b6ca4c67827cc5d819073846c6d57"
+  }
+}

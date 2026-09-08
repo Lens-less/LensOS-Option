@@ -39,6 +39,19 @@ const ratio = parseLegs([
 ]);
 
 describe("terminal value", () => {
+  it.each([
+    { strike: 120_000, quantity: 1 },
+    { option_type: "unknown", strike: 120_000, quantity: 1 },
+    { option_type: "call", strike: -1, quantity: 1 },
+    { option_type: "call", strike: 120_000, quantity: 0 },
+    null,
+  ])("rejects a whole structure when its protection leg is invalid: %j", (invalidLeg) => {
+    expect(parseLegs([
+      { option_type: "call", strike: 110_000, quantity: -1 },
+      invalidLeg,
+    ])).toEqual([]);
+  });
+
   it("prices a short call above its strike", () => {
     expect(valueAt(shortCall, 105_000)).toBe(0);
     expect(valueAt(shortCall, 120_000)).toBe(-10_000);
@@ -81,6 +94,12 @@ describe("risk bounds", () => {
 });
 
 describe("profit and breakevens", () => {
+  it("preserves fractional breakevens and an exact endpoint crossing", () => {
+    const legs = parseLegs([{ option_type: "call", strike: 110.5, quantity: -1 }]);
+    expect(breakevens(payoffPoints(legs, { entryCash: 0.25, spot: 110 }))).toEqual([110.75]);
+    expect(breakevens([{ spot: 110, pnl: 1 }, { spot: 111.25, pnl: 0 }])).toEqual([111.25]);
+  });
+
   it("breaks even at strike plus credit for a short call", () => {
     const points = payoffPoints(shortCall, { entryCash: 500, spot: 100_000 });
     expect(breakevens(points)).toEqual([110_500]);
@@ -117,5 +136,10 @@ describe("sampling", () => {
   it("returns nothing for a structure with no usable legs", () => {
     expect(payoffPoints(parseLegs([]), { entryCash: 0, spot: 1 })).toEqual([]);
     expect(parseLegs([{ option_type: "call", quantity: 1 }])).toEqual([]);
+  });
+
+  it("does not turn a missing entry credit into a chart", () => {
+    expect(payoffPoints(callSpread, { entryCash: Number.NaN, spot: 110_000 })).toEqual([]);
+    expect(payoffPoints(callSpread, { entryCash: 10, spot: 110_000, samples: 0 })).toEqual([]);
   });
 });

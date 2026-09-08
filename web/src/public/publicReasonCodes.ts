@@ -6,7 +6,7 @@ import type { PublicReasonCodeReading } from "./publicReasonCodes.generated";
 
 export function readPublicReasonCode(code: string): PublicReasonCodeReading {
   return (
-    PUBLIC_REASON_CODE_READINGS[code] ?? {
+    (Object.hasOwn(PUBLIC_REASON_CODE_READINGS, code) ? PUBLIC_REASON_CODE_READINGS[code] : undefined) ?? {
       title: "未收录的阻断原因",
       detail:
         "这是尚未收录公开解释的阻断原因。机器码仍会原样展示，页面不静默忽略或自行猜测。",

@@ -15,6 +15,7 @@ import {
   deriveStrategyBriefAction,
   projectStrategyBriefForSurface,
   validateStrategyBrief,
+  type StrategyBrief,
 } from "./strategyBrief";
 
 describe("validateStrategyBrief", () => {
@@ -31,14 +32,17 @@ describe("validateStrategyBrief", () => {
 
     const brief = validateStrategyBrief(golden);
 
-    expect(brief.brief_id).toBe(
-      "brief:39c3dfb9d44e98b3564edca7ff661d2e0b5bf322d2f0cfe9cd41237e1c3a264c",
-    );
+    expect(brief.brief_id).toBe((golden as { brief_id: string }).brief_id);
     expect(brief.strategies[0].expiry_date).toBe("2026-09-25");
     expect(brief.strategies[0].history.scope?.structure_type).toBe(
       "BEAR_CALL_CREDIT_SPREAD",
     );
     expect(brief.evidence_summary.surface?.source_kind).toBe("fallback");
+    expect(brief.strategies[0].entry.minimum_net_credit).toBe(298);
+    expect(brief.strategies[0].entry.cost_breakdown.settlement_reserve).toBe(40);
+    expect(brief.strategies[0].risk.max_loss_per_unit).toBe(3742);
+    expect(brief.strategies[0].risk.breakevens).toEqual([128258]);
+    expect(brief.strategies.every((strategy) => strategy.recommendation_status === "WATCH")).toBe(true);
   });
 
   it("accepts the canonical fixture", () => {
@@ -77,12 +81,32 @@ describe("validateStrategyBrief", () => {
       }),
     ).toThrow(/history metrics must be null/i);
   });
+
+  it.each([
+    ["gross credit presented as net", (brief: StrategyBrief) => { brief.strategies[0].entry.minimum_net_credit = 400; }, /net entry credit/],
+    ["settlement reserve omitted from risk", (brief: StrategyBrief) => { brief.strategies[0].risk.max_loss_per_unit = 4635; }, /loss budget/],
+    ["settlement reserve omitted from breakeven", (brief: StrategyBrief) => { brief.strategies[0].risk.breakevens = [125365]; }, /breakevens/],
+    ["negative costs", (brief: StrategyBrief) => { brief.strategies[0].entry.cost_breakdown.entry_fees = -1; }, /non-negative/],
+    ["missing costs", (brief: StrategyBrief) => { Object.assign(brief.strategies[0].entry, { cost_breakdown: undefined }); }, /cost_breakdown/],
+    ["incomplete exact legs", (brief: StrategyBrief) => { Object.assign(brief.strategies[0].legs[0], { strike: undefined }); }, /exact strategy legs/],
+    ["unverified recommendation", (brief: StrategyBrief) => { brief.strategies[0].recommendation_status = "RECOMMENDED"; }, /remain WATCH/],
+    ["invented delivery bound", (brief: StrategyBrief) => { Object.assign(brief.strategies[0].risk, { delivery_fee_upper_bound_verified: true }); }, /delivery fee/],
+    ["BTC premiums mixed with USD strikes", (brief: StrategyBrief) => {
+      brief.strategies[0].entry.currency = "BTC";
+      brief.strategies[0].risk.currency = "BTC";
+      brief.strategies[0].legs.forEach((leg) => { leg.premium_currency = "BTC"; });
+    }, /USD or USDC/],
+  ] as const)("rejects %s", (_name, mutate, expected) => {
+    const brief = structuredClone(strategyBriefFixture);
+    mutate(brief);
+    expect(() => validateStrategyBrief(brief)).toThrow(expected);
+  });
 });
 
 describe("surface projection", () => {
   it("derives action from cards", () => {
     expect(deriveStrategyBriefAction(strategyBriefFixture.strategies)).toBe(
-      "STRATEGIES_AVAILABLE",
+      "WATCH",
     );
     expect(deriveStrategyBriefAction(watchOnlyBriefFixture.strategies)).toBe(
       "WATCH",

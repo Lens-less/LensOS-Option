@@ -7,7 +7,10 @@ import {
   humanize,
   marketDisplayState,
 } from "../../report/display";
-import { REPORT_REASON_COPY as REASON_COPY } from "../../reasonCodes/catalog";
+import {
+  isInformationalReason,
+  REPORT_REASON_COPY as REASON_COPY,
+} from "../../reasonCodes/catalog";
 
 export { selectReportFreshness as reportFreshness } from "../../report";
 export { finiteNumber };
@@ -48,17 +51,6 @@ const STATUS_LABELS: Record<string, string> = {
   untrusted: "不可信",
   validated: "已验证",
 };
-
-const INFORMATIONAL_REASONS = new Set([
-  "ACCOUNT_MARGIN_GREEN",
-  "DATA_TRUST_OBSERVATION_COLLECTING",
-  "EVENT_CLEAR",
-  "EXCHANGE_ONLINE",
-  "LIQUIDITY_NORMAL",
-  "MDD_CLEAR",
-  "NO_OPEN_POSITIONS",
-  "POSITION_NORMAL",
-]);
 
 export const OUTPUT_LABELS: Record<string, string> = {
   order_instructions: "订单指令",
@@ -165,14 +157,6 @@ function statusTone(status: string | null | undefined): Tone {
   return "muted";
 }
 
-function isInformationalReason(code: string): boolean {
-  return (
-    INFORMATIONAL_REASONS.has(code) ||
-    code.startsWith("PRIMARY_REGIME_") ||
-    code.endsWith("_PERMISSION_ACTIVE")
-  );
-}
-
 function labelForReason(code: string): string {
   return REASON_COPY[code]?.label ?? humanize(code);
 }
@@ -276,7 +260,7 @@ export function reportBlockers(report: ResearchReport): Blocker[] {
   for (const prerequisite of
     report.full_system_surface?.release_readiness?.prerequisites ?? []) {
     const blocker = blockerFromPrerequisite(prerequisite, report);
-    if (blocker) {
+    if (blocker && !isInformationalReason(blocker.code)) {
       byCode.set(blocker.code, blocker);
     }
   }
@@ -306,7 +290,6 @@ export function reportBlockers(report: ResearchReport): Blocker[] {
   return blockers.filter(
     (blocker) =>
       blocker.code !== "MISSING_ACCOUNT_API_SNAPSHOT" &&
-      blocker.code !== "SIMULATION_NOT_REQUESTED" &&
       !(
         publicationIsAuthorized &&
         blocker.code === "EXTERNAL_RELEASE_AUTHORIZATION_REQUIRED"

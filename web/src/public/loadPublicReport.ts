@@ -1,4 +1,6 @@
 import type { ResearchReport } from "../contracts";
+import { ReportLoadError, requestJson } from "../transport/requestJson";
+import { isPublicSummary, validatePublicReportStructure } from "./structure";
 
 export interface LoadedPublicReport {
   report: ResearchReport;
@@ -42,7 +44,7 @@ const PRIVATE_BLOCKED_OUTPUT_CODE_POINTS = [
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isPrivateBlockedOutput(value: string): boolean {
@@ -58,6 +60,7 @@ function validatePublicResearchReport(payload: unknown): ResearchReport {
   if (!isRecord(payload) || payload.schema_version !== "research_report.v1") {
     throw new Error(`public report payload is invalid. ${REPUBLISH_GUIDANCE}`);
   }
+  validatePublicReportStructure(payload);
 
   const report = payload as unknown as ResearchReport;
   const gate = report.mode_gate;
@@ -107,10 +110,13 @@ function validatePublicResearchReport(payload: unknown): ResearchReport {
   const truthfulClock =
     runtime?.mode === "published" &&
     runtime.replay === false &&
+    runtime.demo_mode !== true &&
+    runtime.live_fetch_allowed !== true &&
     runtime.evaluation_clock === edition?.captured_at &&
     edition?.cadence === "daily" &&
     [capturedAt, publishedAt, nextExpectedAt, staleAfter].every(Number.isFinite) &&
     publishedAt >= capturedAt &&
+    publishedAt <= Date.now() &&
     nextExpectedAt > capturedAt &&
     staleAfter > nextExpectedAt;
   if (!truthfulClock) {
@@ -150,19 +156,11 @@ function validatePublicResearchReport(payload: unknown): ResearchReport {
 
 async function loadPublicSummary(
   url: string,
+  timeoutMs?: number,
 ): Promise<PublicReleaseSummary | null> {
   try {
-    const response = await fetch(url, {
-      cache: "no-store",
-      headers: {
-        Accept: "application/json",
-      },
-    });
-    if (!response.ok) {
-      return null;
-    }
-    const payload: unknown = await response.json();
-    if (!isRecord(payload) || payload.schema_version !== "public_summary.v1") {
+    const { payload } = await requestJson(url, { timeoutMs });
+    if (!isPublicSummary(payload)) {
       return null;
     }
     return payload as unknown as PublicReleaseSummary;
@@ -195,26 +193,21 @@ function selectMatchingSummary(
 export async function loadPublicReport(
   url = "./research/report",
   summaryUrl = "./api/v1/summary.json",
+  options?: { timeoutMs?: number },
 ): Promise<LoadedPublicReport> {
-  const response = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(
-      `public report request failed with ${response.status}. Verify the public origin is reachable and redeploy the static bundle`,
-    );
+  const { payload } = await requestJson(url, options);
+  let report: ResearchReport;
+  try {
+    report = validatePublicResearchReport(payload);
+  } catch {
+    throw new ReportLoadError("invalid");
   }
-
-  const payload: unknown = await response.json();
-  const report = validatePublicResearchReport(payload);
-  const summary = await loadPublicSummary(summaryUrl);
+  const receivedAtMs = Date.now();
+  const summary = await loadPublicSummary(summaryUrl, options?.timeoutMs);
 
   return {
     report,
-    receivedAtMs: Date.now(),
+    receivedAtMs,
     summary: selectMatchingSummary(report, summary),
   };
 }

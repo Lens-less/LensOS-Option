@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+from crypto_options_report.analysis_inputs import AnalysisInputs
 from crypto_options_report.analysis_run import _strategy_brief_candidates
 from crypto_options_report.strategy_brief import (
     build_strategy_brief,
@@ -50,6 +51,18 @@ def _fallback_candidate(*, candidate_id: str = "fallback-bear-call") -> dict[str
         "settlement_currency": "USD",
         "valid_until": "2026-08-30T14:34:55Z",
         "cost_components_complete": True,
+        "fees_included": True,
+        "slippage_included": True,
+        "legging_included": True,
+        "settlement_included": True,
+        "cost_model_id": "cost-model:fallback-timestamp-test",
+        "cost_config_hash": "cost-config:fallback-timestamp-test-v1",
+        "cost_breakdown": {
+            "entry_fees": 72.0,
+            "slippage_reserve": 20.0,
+            "legging_reserve": 10.0,
+            "settlement_reserve": 40.0,
+        },
         "relative_value_status": "AVAILABLE",
         "ranking_score": 1.0,
         "ev_after_cost": 210.0,
@@ -91,7 +104,9 @@ def _projection(candidate: dict[str, object]) -> dict[str, object]:
 
 
 def _project_brief(candidate: dict[str, object]) -> tuple[list[dict[str, object]], dict[str, object]]:
-    candidates = _strategy_brief_candidates(_record_stub(), _projection(candidate))
+    candidates = _strategy_brief_candidates(
+        _record_stub(), AnalysisInputs.from_legacy_report(_projection(candidate))
+    )
     brief = build_strategy_brief(
         analysis_run_id="analysis:fallback-leg-timestamps",
         generated_at=FIXED_CLOCK,
@@ -103,6 +118,26 @@ def _project_brief(candidate: dict[str, object]) -> tuple[list[dict[str, object]
 
 
 class StrategyBriefFallbackLegTimestampTests(unittest.TestCase):
+    def test_fallback_preserves_source_quantity_and_contract_scale(self) -> None:
+        candidate = _fallback_candidate(candidate_id="non-unit-fallback")
+        candidate["contract_scale"] = 2.0
+        for leg in candidate["structure_legs"]:
+            leg["quantity"] *= 2
+            leg["observed_at"] = "2026-08-30T14:30:01Z"
+
+        candidates, brief = _project_brief(candidate)
+
+        self.assertEqual(
+            [-2.0, 2.0],
+            [leg["quantity"] for leg in candidates[0]["structure_legs"]],
+        )
+        self.assertEqual(
+            [2.0, 2.0],
+            [leg["contract_scale"] for leg in candidates[0]["structure_legs"]],
+        )
+        self.assertEqual("NO_TRADE", brief["action"])
+        self.assertEqual([], brief["strategies"])
+
     def test_fallback_preserves_source_leg_timestamps_and_rejects_stale_quotes(self) -> None:
         candidate = _fallback_candidate(candidate_id="stale-fallback")
         candidate["structure_legs"][0]["observed_at"] = "2026-08-30T14:20:01Z"

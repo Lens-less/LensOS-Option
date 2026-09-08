@@ -2,6 +2,7 @@ import type { ResearchReport } from "../../contracts";
 import {
   OUTPUT_LABELS,
   evidenceItems,
+  formatCutoffTime,
   humanize,
   marketDisplayState,
 } from "./reportModel";
@@ -19,7 +20,9 @@ function TruthStrip({
   const displayState = marketDisplayState(report, freshness);
   const evidenceBoundary =
     displayState === "stale"
-      ? { label: "发布已停摆", tone: "danger" }
+      ? { label: isPublished ? "发布已停摆" : "已失效", tone: "danger" }
+      : displayState !== "available"
+      ? { label: "不可声明", tone: "danger" }
       : freshness.phase === "current" && trustVerdict === "trusted"
       ? { label: "当前且可信", tone: "safe" }
       : freshness.phase === "current" &&
@@ -150,8 +153,10 @@ export function ReleaseBoundary({
       <TruthStrip freshness={freshness} report={report} />
       <div className="blocked-output-note">
         <div>
-          <strong>策略研究已形成，执行能力保持阻断。</strong>
-          <p>不会生成交易建议、推荐仓位或订单指令。缺口只影响置信度与执行升级。</p>
+          <strong>{marketDisplayState(report, freshness) === "available"
+            ? "策略研究已形成，执行能力保持阻断。"
+            : "当前研究结果不可用，执行能力保持阻断。"}</strong>
+          <p>不会生成交易建议、推荐仓位或订单指令；须补齐有效证据后重新评估。</p>
         </div>
         <p>
           {blockedOutputs.length} 项输出已阻断：{" "}
@@ -212,9 +217,12 @@ export function ReleaseBoundary({
 
 export function EvidenceChain({
   report,
+  freshness,
 }: {
   report: ResearchReport;
+  freshness: Freshness;
 }): React.JSX.Element {
+  const historical = marketDisplayState(report, freshness) !== "available";
   return (
     <section
       id="evidence-chain"
@@ -226,15 +234,17 @@ export function EvidenceChain({
           <p className="section-kicker">Evidence chain / 审计</p>
           <h2 id="evidence-chain-title">从市场数据到组合仲裁</h2>
         </div>
-        <p>只展示报告中存在的状态；缺失值不会被估算或补齐。</p>
+        <p>快照审计 · 计算时刻：{formatCutoffTime(report.runtime_context?.evaluation_clock ?? report.generated_at)}。
+          {historical ? "以下为计算时的历史状态，不代表当前有效性。" : "仅记录本次报告中的状态，缺失值不会被估算或补齐。"}
+        </p>
       </header>
       <ol className="evidence-chain">
         {evidenceItems(report).map((item) => (
-          <li key={item.label} data-tone={item.tone}>
+          <li key={item.label} data-tone={historical ? "muted" : item.tone}>
             <span className="chain-marker" aria-hidden="true" />
             <div>
               <p>{item.label}</p>
-              <strong>{item.status}</strong>
+              <strong>{historical ? `计算时：${item.status}` : item.status}</strong>
               <small>{item.detail}</small>
             </div>
           </li>

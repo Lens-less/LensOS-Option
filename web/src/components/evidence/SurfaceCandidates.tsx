@@ -163,10 +163,12 @@ export function SurfaceResearch({
           拟合质量和无套利检查分开呈现；只有两者都通过，曲面才进入候选研究。
         </p>
       </header>
-      {displayState === "stale" ? (
+      {displayState !== "available" ? (
         <div className="section-empty published-stop-state" role="status">
-          <strong>发布已停摆</strong>
-          <p>当前公开版已超过时效上限；曲面图和到期数字全部收起，直到下一版发布。</p>
+          <strong>{displayState === "stale"
+            ? report.runtime_context?.mode === "published" ? "发布已停摆" : "市场证据已失效"
+            : "市场证据不可用"}</strong>
+          <p>曲面图、到期数字与候选资格已收起；取得时效与质量均有效的新快照后重新评估。</p>
         </div>
       ) : chartAvailable ? (
         <div className="surface-layout">
@@ -311,14 +313,18 @@ export function CandidateResearchSection({
           <h2 id="candidates-title">研究候选清单</h2>
         </div>
         <p>
-          {summary?.eligible_naked_short_calls ?? 0} 个单腿、{" "}
-          {summary?.eligible_call_credit_spreads ?? 0} 个价差通过当前过滤；这不是交易建议。
+          {displayState === "available" ? <>
+            {summary?.eligible_naked_short_calls ?? 0} 个单腿、{" "}
+            {summary?.eligible_call_credit_spreads ?? 0} 个价差通过当前过滤；这不是交易建议。
+          </> : "当前候选资格不可用；快照中的筛选结果不能延续为当前判断。"}
         </p>
       </header>
-      {displayState === "stale" ? (
+      {displayState !== "available" ? (
         <div className="section-empty published-stop-state" role="status">
-          <strong>发布已停摆</strong>
-          <p>候选排序依赖当前市场截面；在公开版过期后，这些数字不会继续对外展示。</p>
+          <strong>{displayState === "stale"
+            ? report.runtime_context?.mode === "published" ? "发布已停摆" : "市场证据已失效"
+            : "市场证据不可用"}</strong>
+          <p>候选排序依赖有效的市场截面；取得新快照后重新筛选。</p>
         </div>
       ) : candidates.length > 0 ? (
         <CandidateTable candidates={candidates} />

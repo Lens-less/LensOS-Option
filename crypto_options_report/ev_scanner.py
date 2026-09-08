@@ -703,7 +703,6 @@ def build_absolute_ev(
     # neutral inputs are used and the weighting degenerates to uniform. That is
     # the honest "no regime information" behaviour, and it is recorded as such
     # rather than presented as a regime-matched sample.
-    regime_similarity_applied = bool(regime_scores and feature_vector)
     if not regime_scores:
         regime_scores = {"neutral": 0.0}
     if not feature_vector:
@@ -813,7 +812,9 @@ def build_absolute_ev(
         "sample_size_basis": bound.get("sample_size_basis"),
         "evidence_class": evidence.get("evidence_class"),
         "nav_relative_metrics_available": False,
-        "regime_similarity_applied": regime_similarity_applied,
+        "regime_similarity_applied": bool(
+            (report.get("path_sampling") or {}).get("similarity_weighted", {}).get("applied")
+        ),
         # Where the edge sits relative to the quoted spread. A negative figure
         # at the bid means nothing on its own: it can mean the structure is
         # unprofitable, or that the fair value simply lies inside the spread and

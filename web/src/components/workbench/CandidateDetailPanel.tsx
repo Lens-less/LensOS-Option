@@ -89,10 +89,21 @@ export function CandidateDetailPanel({
   const legs = parseLegs(
     (row.raw as { structure_legs?: unknown }).structure_legs,
   );
+  const curveCredit = row.executableCreditUsdc ?? row.premiumUsdc;
+  const legExpiries = legs.map((leg) => leg.expiryDate ?? row.raw.expiry_date ?? null);
+  const hasSingleExpiry = legs.length === 1 || (
+    legExpiries.every((expiry) => typeof expiry === "string" && expiry.trim() !== "") &&
+    new Set(legExpiries).size === 1
+  );
+  const canDrawLegs = legs.length > 0 && curveCredit !== null && hasSingleExpiry;
+  const canUseLegacyCurve = row.raw.structure_legs === undefined && (
+    (row.structureKind === "naked" && row.structureType === "naked_short_call") ||
+    (row.structureKind === "spread" && row.structureType === "call_credit_spread")
+  );
   const curvePoints =
-    legs.length > 0
+    canDrawLegs
       ? payoffPoints(legs, {
-          entryCash: row.executableCreditUsdc ?? row.premiumUsdc ?? 0,
+          entryCash: curveCredit,
           spot: spotUsdc,
         })
       : [];
@@ -117,7 +128,16 @@ export function CandidateDetailPanel({
   }));
 
   return (
-    <section aria-label="候选详情" className="candidate-detail-panel">
+    <section
+      aria-label="候选详情"
+      className="candidate-detail-panel"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onClose();
+        }
+      }}
+    >
       <header className="candidate-detail-heading">
         <div>
           <p className="section-kicker">Candidate detail / 只读</p>
@@ -138,7 +158,7 @@ export function CandidateDetailPanel({
         </button>
       </header>
 
-      {legs.length > 0 ? (
+      {canDrawLegs ? (
         <div className="candidate-detail-block">
           <h4>到期盈亏</h4>
           <PayoffChart
@@ -164,7 +184,7 @@ export function CandidateDetailPanel({
             </p>
           ) : null}
         </div>
-      ) : (
+      ) : canUseLegacyCurve ? (
         <PayoffCurve
           creditUsdc={row.executableCreditUsdc ?? row.premiumUsdc}
           longStrikeUsdc={row.legs.longStrikeUsdc}
@@ -172,6 +192,10 @@ export function CandidateDetailPanel({
           spotUsdc={spotUsdc}
           structureKind={row.structureKind}
         />
+      ) : (
+        <p className="payoff-unavailable" role="status">
+          缺少完整的结构腿、同到期日或实得信用证据，暂时无法绘制到期盈亏图。
+        </p>
       )}
 
       {!hideExecutionDetails && executionRows.length > 0 ? (
@@ -224,11 +248,11 @@ export function CandidateDetailPanel({
         )}
       </section>
 
-      <section aria-label="税后期望值分解" className="absolute-ev-block">
-        <h4>税后期望值分解（卖方视角）</h4>
+      <section aria-label="扣除成本后的期望值分解" className="absolute-ev-block">
+        <h4>扣除成本后的期望值分解（卖方视角）</h4>
         {evAfterCost === null ? (
           <p className="absolute-ev-empty" role="status">
-            尚无已验证的路径风险证据，无法计算税后 EV；不会显示为 0 或留空占位。
+            尚无已验证的路径风险证据，无法计算成本后 EV；不会显示为 0 或留空占位。
           </p>
         ) : (
           <>
@@ -246,7 +270,7 @@ export function CandidateDetailPanel({
                 <dd>{formatUsdc(feesTotal)}</dd>
               </div>
               <div>
-                <dt>税后 EV = 信用 − 支出 − 费用</dt>
+                <dt>成本后 EV = 信用 − 支出 − 费用</dt>
                 <dd>{formatUsdcSigned(evAfterCost)}</dd>
               </div>
             </dl>

@@ -190,6 +190,28 @@ describe("tier-promotion impossibility", () => {
 });
 
 describe("URL codec", () => {
+  it.each(
+    Array.from({ length: 2 ** ALL_ACTION_TIERS.length }, (_, mask) => [
+      ALL_ACTION_TIERS.filter((_, index) => (mask & (1 << index)) !== 0),
+    ]),
+  )("round-trips the action-tier subset %j", (actionTiers) => {
+    const filters = { ...defaultFilters(), actionTiers };
+    expect(decodeFilters(encodeFilters(filters))).toEqual(filters);
+  });
+
+  it("omits the tier parameter only for the default selection", () => {
+    expect(encodeFilters(defaultFilters()).has("tiers")).toBe(false);
+    expect(
+      encodeFilters({
+        ...defaultFilters(),
+        actionTiers: [...ALL_ACTION_TIERS],
+      }).get("tiers"),
+    ).toBe(ALL_ACTION_TIERS.join(","));
+    expect(
+      encodeFilters({ ...defaultFilters(), actionTiers: [] }).get("tiers"),
+    ).toBe("");
+  });
+
   it("round-trips a fully-populated filter set", () => {
     const filters = {
       structureTypes: ["naked_short_call", "call_credit_spread"],

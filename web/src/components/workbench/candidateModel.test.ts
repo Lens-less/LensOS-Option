@@ -167,6 +167,19 @@ describe("candidateRows", () => {
 });
 
 describe("parseCandidateLegs", () => {
+  it.each([
+    "BTC-7AUG26-61000-P:naked",
+    "BTC-7AUG26-61000-P->BTC-7AUG26-57000-P:spread",
+    "BTC-7AUG26-61000-C->BTC-7AUG26-67000-P:spread",
+    "BTC-7AUG26-61000-C->BTC-14AUG26-67000-C:spread",
+  ])("does not infer an upside-only payoff from %s", (id) => {
+    expect(parseCandidateLegs(id)).toEqual({
+      shortStrikeUsdc: null,
+      longStrikeUsdc: null,
+      kind: "unknown",
+    });
+  });
+
   it("extracts both strikes from a spread candidate id", () => {
     const legs = parseCandidateLegs(
       "BTC-7AUG26-71000-C->BTC-7AUG26-77000-C:spread",

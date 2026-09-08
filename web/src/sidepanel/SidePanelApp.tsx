@@ -9,6 +9,7 @@ import {
   validateStrategyBrief,
 } from "../report/strategyBrief";
 import type { LoadedReport } from "../transport";
+import { marketDisplayState } from "../report/display";
 import type { DeribitContext } from "../extension/messages";
 import { ResearchErrorBoundary } from "../components/shell/ResearchErrorBoundary";
 import { StrategyBriefView } from "../components/strategyBrief/StrategyBriefView";
@@ -21,9 +22,11 @@ import { SidePanelResearchSections } from "./SidePanelResearchSections";
 import {
   type PanelStatus,
   SidePanelSettings,
+  SidePanelConnectionStatus,
   SidePanelStatusSections,
 } from "./SidePanelStatusSections";
 import { isOfflineError } from "./sidepanelFormatters";
+import { normalizeEngineOrigin } from "../extension/config";
 
 interface PanelState {
   status: PanelStatus;
@@ -32,8 +35,7 @@ interface PanelState {
   loaded: LoadedReport | null;
   /**
    * Last report cached for the current origin, kept only while `status` is
-   * `"offline"`. Lets an unreachable engine still show research content
-   * under a persistent "stale" banner instead of a dead end.
+   * `"offline"`. Only provenance remains visible; current research is hidden.
    */
   cachedLoaded: LoadedReport | null;
   error: string | null;
@@ -61,17 +63,23 @@ export function SidePanelApp({
   const [showSettings, setShowSettings] = React.useState(false);
   const [configError, setConfigError] = React.useState<string | null>(null);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
+  const requestSequence = React.useRef(0);
 
   const load = React.useCallback(
     async (force = false) => {
-      setRefreshing(force);
+      const sequence = ++requestSequence.current;
+      const isCurrent = () => requestSequence.current === sequence;
+      setRefreshing(true);
       try {
-        const [origin, context] = await Promise.all([
+        const [configuredOrigin, context] = await Promise.all([
           runtime.getEngineOrigin(),
           runtime.getContext(),
         ]);
+        if (!isCurrent()) return;
+        const origin = normalizeEngineOrigin(configuredOrigin);
         setDraftOrigin(origin);
-        const loaded = await runtime.getReport(force);
+        const loaded = await runtime.getReport(force, origin);
+        if (!isCurrent()) return;
         setNowMs(Date.now());
         setPanel({
           status: "ready",
@@ -82,17 +90,23 @@ export function SidePanelApp({
           error: null,
         });
       } catch (error) {
+        if (!isCurrent()) return;
         const message =
           error instanceof Error ? error.message : "side panel failed to load";
-        const origin = await runtime
+        const configuredOrigin = await runtime
           .getEngineOrigin()
           .catch(() => INITIAL_STATE.origin);
+        let origin = INITIAL_STATE.origin;
+        try { origin = normalizeEngineOrigin(configuredOrigin); } catch { /* Keep links on the safe default. */ }
         const context = await runtime.getContext().catch(() => null);
+        if (!isCurrent()) return;
         setDraftOrigin(origin);
         const offline = isOfflineError(message);
         const cachedLoaded = offline
-          ? await runtime.getCachedReport().catch(() => null)
+          ? await runtime.getCachedReport(origin).catch(() => null)
           : null;
+        if (!isCurrent()) return;
+        if (!cachedLoaded) setShowSettings(true);
         setPanel({
           status: offline ? "offline" : "error",
           origin,
@@ -102,7 +116,7 @@ export function SidePanelApp({
           error: message,
         });
       } finally {
-        setRefreshing(false);
+        if (isCurrent()) setRefreshing(false);
       }
     },
     [runtime],
@@ -110,6 +124,7 @@ export function SidePanelApp({
 
   React.useEffect(() => {
     void load(false);
+    return () => { requestSequence.current += 1; };
   }, [load]);
 
   React.useEffect(() => {
@@ -134,12 +149,14 @@ export function SidePanelApp({
     return () => window.clearInterval(timer);
   }, [runtime]);
 
-  // Offline with a cached report still shows the last known result (under a
-  // persistent banner), rather than nothing; only a genuine validation
-  // failure (status "error") ever leaves both null.
+  // Cached data supplies provenance only; current evidence requires a ready report.
   const displayLoaded = panel.loaded ?? panel.cachedLoaded;
   const isStaleOffline =
     panel.status === "offline" && panel.cachedLoaded !== null;
+  const marketState = displayLoaded
+    ? marketDisplayState(displayLoaded.report, selectReportFreshness(displayLoaded.report, displayLoaded.receivedAtMs, nowMs))
+    : "quality_blocked";
+  const showCurrentEvidence = panel.status === "ready" && marketState === "available";
 
   const effectiveInstrumentName =
     manualInstrument.trim() || panel.context?.instrument || null;
@@ -171,19 +188,23 @@ export function SidePanelApp({
   }, [runtime]);
 
   const saveOrigin = React.useCallback(async () => {
+    // Invalidate the prior request and withdraw its result before changing origins.
+    requestSequence.current += 1;
     setSavingOrigin(true);
+    setRefreshing(true);
     setConfigError(null);
+    setPanel((current) => ({ ...current, status: "loading", loaded: null, cachedLoaded: null, error: null }));
     try {
       const origin = await runtime.setEngineOrigin(draftOrigin);
       setDraftOrigin(origin);
       setPanel((current) => ({ ...current, origin }));
       await load(true);
-    } catch (error) {
-      setConfigError(
-        error instanceof Error ? error.message : "引擎地址保存失败",
-      );
+    } catch {
+      setConfigError("引擎地址保存失败。请使用包含端口的本机 HTTP 地址，例如 http://127.0.0.1:8000。");
+      setPanel((current) => ({ ...current, status: "error", error: "[report:aborted]" }));
     } finally {
       setSavingOrigin(false);
+      setRefreshing(false);
     }
   }, [draftOrigin, load, runtime]);
 
@@ -220,7 +241,7 @@ export function SidePanelApp({
         <div className="panel-header-actions">
           <button
             className="panel-button"
-            disabled={refreshing}
+            disabled={refreshing || savingOrigin}
             onClick={() => void load(true)}
             type="button"
           >
@@ -235,7 +256,26 @@ export function SidePanelApp({
         <span className="panel-chip panel-chip-readonly">NO_TRADE</span>
       </div>
 
-      <ResearchErrorBoundary label="研究数据区">
+      <SidePanelConnectionStatus
+        error={panel.error}
+        evidenceUrl={evidenceUrl}
+        isStaleOffline={isStaleOffline}
+        onRetry={() => void load(true)}
+        status={panel.status}
+      />
+      {panel.status === "ready" && !showCurrentEvidence ? (
+        <section className="panel-card panel-status" role="status">
+          <p className="panel-status-title">{marketState === "stale" ? "当前研究证据已失效" : "当前研究证据不可用"}</p>
+          <p>当前排名、策略条件与研究数值已收起。请刷新取得时效与质量均有效的新报告。</p>
+        </section>
+      ) : null}
+
+      <ResearchErrorBoundary
+        label="研究数据区"
+        onRetry={() => void load(true)}
+        resetKey={displayLoaded}
+        retrying={refreshing}
+      >
         <StrategyBriefView
           brief={strategyBrief}
           surface={strategyBriefSurface}
@@ -243,23 +283,20 @@ export function SidePanelApp({
         <details className="strategy-brief-details panel-details">
           <summary>查看依据</summary>
           <SidePanelStatusSections
+            currentEvidence={showCurrentEvidence}
             context={panel.context}
             effectiveInstrument={effectiveInstrument}
-            error={panel.error}
-            evidenceUrl={evidenceUrl}
-            isStaleOffline={isStaleOffline}
             manualInstrument={manualInstrument}
             model={model}
             onManualInstrumentChange={setManualInstrument}
-            onRetry={() => void load(true)}
             onSyncContext={() => void syncContext()}
-            status={panel.status}
           />
-          <SidePanelComparisonSection
-            comparison={comparison}
-            onSelectInstrument={setManualInstrument}
-          />
-          <SidePanelResearchSections model={model} />
+          {showCurrentEvidence ? (
+            <>
+              <SidePanelComparisonSection comparison={comparison} onSelectInstrument={setManualInstrument} />
+              <SidePanelResearchSections model={model} />
+            </>
+          ) : null}
         </details>
       </ResearchErrorBoundary>
 
@@ -318,12 +355,13 @@ function sidePanelStrategyBriefSurface(
     };
   }
   const mode = runtime.mode;
+  const displayState = marketDisplayState(report, freshness);
   const currentFreshness =
-    isStaleOffline || freshness.phase === "expired" || freshness.phase === "warning"
+    report.data_status?.validated !== true || displayState === "quality_blocked"
+      ? "UNAVAILABLE"
+      : isStaleOffline || displayState === "stale" || freshness.phase === "warning"
       ? "STALE"
-      : freshness.phase === "unavailable"
-        ? "UNAVAILABLE"
-        : "CURRENT";
+      : "CURRENT";
   return {
     freshness_status: currentFreshness,
     source_kind:

@@ -13,7 +13,7 @@ import {
 } from "./SurfaceCandidates";
 import { StrategyFrameworkSection } from "./StrategyFramework";
 import { marketFacts, researchCandidates } from "./marketModel";
-import { reportBlockers, reportFreshness } from "./reportModel";
+import { marketDisplayState, reportBlockers, reportFreshness } from "./reportModel";
 import { VrpOverview } from "./VrpOverview";
 import { SiteFooter } from "../shell/SiteFooter";
 
@@ -57,6 +57,8 @@ export function EvidenceConsole({
     report,
     freshness,
     facts.source,
+    receivedAtMs,
+    nowMs,
   );
 
   const body = (
@@ -92,7 +94,7 @@ export function EvidenceConsole({
             report={report}
             systemBlockers={systemBlockers}
           />
-          <EvidenceChain report={report} />
+          <EvidenceChain freshness={freshness} report={report} />
         </details>
       </main>
     </>
@@ -133,6 +135,8 @@ function strategyBriefSurfaceState(
   report: ResearchReport,
   freshness: ReturnType<typeof reportFreshness>,
   sourceLabel: string,
+  receivedAtMs: number,
+  nowMs: number,
 ): StrategyBriefSurfaceState {
   const runtime = report.runtime_context;
   if (!runtime) {
@@ -140,16 +144,22 @@ function strategyBriefSurfaceState(
       freshness_status: "UNAVAILABLE",
       source_kind: "fallback",
       presented_as: "published",
-      source_label: "Runtime provenance unavailable",
+      source_label: "运行来源不可验证",
+      now_ms: nowMs,
     };
   }
   const mode = runtime.mode;
+  const evaluationMs = Date.parse(runtime.evaluation_clock ?? "");
+  const viewClock = mode === "replay" && Number.isFinite(evaluationMs)
+    ? evaluationMs + Math.max(0, nowMs - receivedAtMs)
+    : nowMs;
   return {
+    now_ms: viewClock,
     freshness_status:
-      freshness.phase === "current"
-        ? "CURRENT"
-        : freshness.phase === "unavailable"
-          ? "UNAVAILABLE"
+      marketDisplayState(report, freshness) === "quality_blocked"
+        ? "UNAVAILABLE"
+        : freshness.phase === "current"
+          ? "CURRENT"
           : "STALE",
     source_kind:
       mode === "published"
@@ -167,11 +177,11 @@ function strategyBriefSurfaceState(
           : "live",
     source_label:
       mode === "published"
-        ? "Published edition"
+        ? "公开快照"
         : mode === "replay"
           ? runtime.demo_mode
-            ? "Demo snapshot"
-            : "Replay snapshot"
+            ? "演示快照"
+            : "历史回放快照"
           : sourceLabel,
   };
 }

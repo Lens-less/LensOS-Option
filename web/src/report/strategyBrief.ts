@@ -72,6 +72,14 @@ export interface StrategyBriefEntry {
   currency: string;
   fees_included: boolean;
   slippage_included: boolean;
+  cost_model_id: string;
+  cost_config_hash: string;
+  cost_breakdown: {
+    entry_fees: number;
+    slippage_reserve: number;
+    legging_reserve: number;
+    settlement_reserve: number;
+  };
 }
 
 export interface StrategyBriefRisk {
@@ -80,6 +88,8 @@ export interface StrategyBriefRisk {
   breakevens: number[];
   path_risk_status: PathRiskStatus;
   cvar_95: number;
+  max_loss_basis: "PAYOFF_BOUND_PLUS_FROZEN_COST_BUDGET";
+  delivery_fee_upper_bound_verified: false;
 }
 
 export interface StrategyBriefEconomics {
@@ -298,7 +308,7 @@ const REASON_TEXT_ZH: Record<string, string> = {
   STRATEGY_EXPIRED: "策略已过期，等待下一次筛选",
   KILL_CONDITION_HIT: "触发取消条件，当前不再成立",
   NO_ELIGIBLE_STRATEGY: "当前没有通过全部硬门禁的有限风险策略",
-  SURFACE_SOURCE_STALE_OR_UNAVAILABLE: "当前表面已过期或不可验证，策略卡被收起。",
+  SURFACE_SOURCE_STALE_OR_UNAVAILABLE: "当前简报未满足展示所需的时效或可验证性，策略卡已收起。",
   SURFACE_PROVENANCE_NOT_LIVE: "当前来源不是 live，不展示可执行感很强的策略卡。",
 };
 
@@ -347,6 +357,12 @@ function requirePositiveNumber(value: unknown, field: string): number {
   if (number <= 0) {
     fail(`${field} must be positive`);
   }
+  return number;
+}
+
+function requireNonnegativeNumber(value: unknown, field: string): number {
+  const number = requireFiniteNumber(value, field);
+  if (number < 0) fail(`${field} must be non-negative`);
   return number;
 }
 
@@ -551,16 +567,14 @@ function validateLeg(leg: unknown, index: number): StrategyBriefLeg {
 function deriveExactLegEconomics(
   structureType: StrategyStructureType,
   legs: StrategyBriefLeg[],
-): { credit: number; expiryDate: string; maxLoss: number } | null {
+  modelCredit: number,
+): { credit: number; expiryDate: string; maxLoss: number; breakevens: number[] } {
   const optionalFields = legs.flatMap((leg) => [
     leg.expiry_date,
     leg.option_type,
     leg.premium_currency,
     leg.strike,
   ]);
-  if (optionalFields.every((value) => value === undefined)) {
-    return null;
-  }
   if (optionalFields.some((value) => value === undefined)) {
     fail("exact strategy legs must provide expiry, option type, currency, and strike together");
   }
@@ -569,6 +583,9 @@ function deriveExactLegEconomics(
   const premiumCurrencies = new Set(legs.map((leg) => leg.premium_currency));
   if (expiryDates.size !== 1 || premiumUnits.size !== 1 || premiumCurrencies.size !== 1) {
     fail("exact strategy legs must share expiry and unit semantics");
+  }
+  if (legs.some((leg) => leg.premium_unit !== "quote_currency")) {
+    fail("exact strategy legs must use quote_currency premium units");
   }
   const credit =
     legs
@@ -581,6 +598,7 @@ function deriveExactLegEconomics(
     fail("exact strategy executable credit must be positive");
   }
   let width: number;
+  let breakevens: number[];
   if (structureType === "BEAR_CALL_CREDIT_SPREAD") {
     const short = legs.find((leg) => leg.side === "SELL" && leg.option_type === "call");
     const long = legs.find((leg) => leg.side === "BUY" && leg.option_type === "call");
@@ -588,6 +606,7 @@ function deriveExactLegEconomics(
       fail("legs do not form a bear call credit spread");
     }
     width = long.strike! - short.strike!;
+    breakevens = [short.strike! + modelCredit];
   } else if (structureType === "BULL_PUT_CREDIT_SPREAD") {
     const short = legs.find((leg) => leg.side === "SELL" && leg.option_type === "put");
     const long = legs.find((leg) => leg.side === "BUY" && leg.option_type === "put");
@@ -595,6 +614,7 @@ function deriveExactLegEconomics(
       fail("legs do not form a bull put credit spread");
     }
     width = short.strike! - long.strike!;
+    breakevens = [short.strike! - modelCredit];
   } else {
     const shortPut = legs.find(
       (leg) => leg.side === "SELL" && leg.option_type === "put",
@@ -615,7 +635,8 @@ function deriveExactLegEconomics(
       !longCall ||
       legs.length !== 4 ||
       shortPut.strike! <= longPut.strike! ||
-      longCall.strike! <= shortCall.strike!
+      longCall.strike! <= shortCall.strike! ||
+      shortPut.strike! >= shortCall.strike!
     ) {
       fail("legs do not form an iron condor");
     }
@@ -623,8 +644,9 @@ function deriveExactLegEconomics(
       shortPut.strike! - longPut.strike!,
       longCall.strike! - shortCall.strike!,
     );
+    breakevens = [shortPut.strike! - modelCredit, shortCall.strike! + modelCredit];
   }
-  const maxLoss = width - credit;
+  const maxLoss = width - modelCredit;
   if (!(maxLoss > 0)) {
     fail("exact strategy max loss must be bounded and positive");
   }
@@ -632,6 +654,7 @@ function deriveExactLegEconomics(
     credit,
     expiryDate: legs[0].expiry_date!,
     maxLoss,
+    breakevens,
   };
 }
 
@@ -822,6 +845,7 @@ function validateStrategy(
   const history = validateHistory(strategy.history);
   const forecast = validateForecast(strategy.forecast);
   const entryRaw = requireRecord(strategy.entry, `strategies[${index}].entry`);
+  const costRaw = requireRecord(entryRaw.cost_breakdown, `strategies[${index}].entry.cost_breakdown`);
   const riskRaw = requireRecord(strategy.risk, `strategies[${index}].risk`);
   const economicsRaw = requireRecord(
     strategy.economics,
@@ -832,6 +856,13 @@ function validateStrategy(
   }
   if (riskRaw.path_risk_status !== "VALIDATED") {
     fail(`strategies[${index}].risk.path_risk_status must be VALIDATED`);
+  }
+  if (riskRaw.max_loss_basis !== "PAYOFF_BOUND_PLUS_FROZEN_COST_BUDGET"
+    || riskRaw.delivery_fee_upper_bound_verified !== false) {
+    fail(`strategies[${index}].risk must identify a frozen cost budget without a verified delivery fee upper bound`);
+  }
+  if (status !== "WATCH") {
+    fail(`strategies[${index}] without a verified delivery fee upper bound must remain WATCH`);
   }
   if (economicsRaw.absolute_ev_status !== "VALIDATED") {
     fail(`strategies[${index}].economics.absolute_ev_status must be VALIDATED`);
@@ -854,7 +885,9 @@ function validateStrategy(
   );
   for (const marker of [
     "MIN NET CREDIT:",
-    "MAX LOSS PER UNIT:",
+    "MODELLED LOSS BUDGET PER UNIT:",
+    "FROZEN COSTS:",
+    "DELIVERY FEE UPPER BOUND: UNVERIFIED; ACTUAL LOSS MAY EXCEED BUDGET",
     "VALID UNTIL:",
     "CANCEL IF:",
     "RESEARCH_ONLY / MANUAL REVIEW REQUIRED",
@@ -894,6 +927,14 @@ function validateStrategy(
       ),
       fees_included: true,
       slippage_included: true,
+      cost_model_id: requireString(entryRaw.cost_model_id, `strategies[${index}].entry.cost_model_id`),
+      cost_config_hash: requireString(entryRaw.cost_config_hash, `strategies[${index}].entry.cost_config_hash`),
+      cost_breakdown: {
+        entry_fees: requireNonnegativeNumber(costRaw.entry_fees, `strategies[${index}].entry.cost_breakdown.entry_fees`),
+        slippage_reserve: requireNonnegativeNumber(costRaw.slippage_reserve, `strategies[${index}].entry.cost_breakdown.slippage_reserve`),
+        legging_reserve: requireNonnegativeNumber(costRaw.legging_reserve, `strategies[${index}].entry.cost_breakdown.legging_reserve`),
+        settlement_reserve: requireNonnegativeNumber(costRaw.settlement_reserve, `strategies[${index}].entry.cost_breakdown.settlement_reserve`),
+      },
     },
     risk: {
       max_loss_per_unit: requirePositiveNumber(
@@ -922,6 +963,8 @@ function validateStrategy(
         riskRaw.cvar_95,
         `strategies[${index}].risk.cvar_95`,
       ),
+      max_loss_basis: "PAYOFF_BOUND_PLUS_FROZEN_COST_BUDGET",
+      delivery_fee_upper_bound_verified: false,
     },
     economics: {
       relative_value_status: requireString(
@@ -965,13 +1008,19 @@ function validateStrategy(
       `strategies[${index}].dte_days`,
     );
   }
-  const exactEconomics = deriveExactLegEconomics(structureType, legs);
-  if (exactEconomics) {
-    if (Math.abs(exactEconomics.credit - result.entry.minimum_net_credit) > 1e-6) {
-      fail(`strategies[${index}] entry credit must equal short bid minus long ask`);
+  const costs = result.entry.cost_breakdown;
+  const entryCosts = costs.entry_fees + costs.slippage_reserve + costs.legging_reserve;
+  const exactEconomics = deriveExactLegEconomics(structureType, legs, result.entry.minimum_net_credit - costs.settlement_reserve);
+  {
+    if (Math.abs(exactEconomics.credit - entryCosts - result.entry.minimum_net_credit) > 1e-6) {
+      fail(`strategies[${index}] net entry credit must deduct frozen entry costs from exact quotes`);
     }
     if (Math.abs(exactEconomics.maxLoss - result.risk.max_loss_per_unit) > 1e-6) {
-      fail(`strategies[${index}] max loss must match exact legs`);
+      fail(`strategies[${index}] modelled loss budget must match exact legs and frozen costs`);
+    }
+    if (result.risk.breakevens.length !== exactEconomics.breakevens.length
+      || result.risk.breakevens.some((value, i) => Math.abs(value - exactEconomics.breakevens[i]) > 1e-6)) {
+      fail(`strategies[${index}] breakevens must match exact legs and frozen costs`);
     }
     if (result.expiry_date !== exactEconomics.expiryDate) {
       fail(`strategies[${index}] expiry_date must match exact legs`);
@@ -982,6 +1031,9 @@ function validateStrategy(
   }
   if (result.entry.currency !== result.risk.currency) {
     fail(`strategies[${index}] entry and risk currency must match`);
+  }
+  if (result.entry.currency !== "USD" && result.entry.currency !== "USDC") {
+    fail(`strategies[${index}] linear strategy economics require USD or USDC quote currency`);
   }
   const expectedDirection = {
     BEAR_CALL_CREDIT_SPREAD: "BEARISH",
@@ -1224,7 +1276,7 @@ export function detectStrategyBriefSuppression(
     reasons.push(reasonText("SURFACE_PROVENANCE_NOT_LIVE"));
   }
   if (hasExpired(brief.market.expires_at, state.now_ms)) {
-    reasons.push(reasonText("STALE_MARKET_DATA"));
+    reasons.push("策略简报的有效期已过，等待重新计算。");
   }
   return {
     suppress_cards: reasons.length > 0,

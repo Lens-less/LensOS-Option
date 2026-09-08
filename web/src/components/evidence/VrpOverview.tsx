@@ -49,7 +49,7 @@ function bandTone(band: string | null | undefined): "danger" | "warning" | "safe
   return "safe";
 }
 
-function isValidatedVrpStatus(status: string | undefined): boolean {
+function isValidatedVrpStatus(status: string | null | undefined): boolean {
   return status === "validated" || status === "available";
 }
 
@@ -183,14 +183,15 @@ export function VrpOverview({
           VRP 为正不等于机会。它同样可能反映一段即将到来的高波动，事后看是买方的钱。
         </p>
       </header>
-      {state === "stale" ? (
+      {state === "stale" || (state !== "available" && isValidatedVrpStatus(vrp?.status)) ? (
         <div className="section-empty published-stop-state" role="status">
-          <strong>发布已停摆</strong>
+          <strong>{state === "stale"
+            ? report.runtime_context?.mode === "published" ? "发布已停摆" : "市场证据已失效"
+            : "市场证据不可用"}</strong>
           <p>
-            这版公开稿已超过发布时效上限；VRP、DVOL、曲面与候选数字全部收起，
-            直到下一版发布。
+            VRP 与 DVOL 当前读数已收起；取得时效与质量均有效的新快照后重新评估。
           </p>
-          <small>{formatPublishedAge(freshness.ageSec)}</small>
+          {freshness.mode === "published" ? <small>{formatPublishedAge(freshness.ageSec)}</small> : null}
         </div>
       ) : isValidatedVrpStatus(vrp?.status) && currentVrp !== null ? (
         <div className="vrp-layout">

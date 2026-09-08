@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { ResearchReport } from "../../contracts";
+import { isInformationalReason } from "../../reasonCodes/catalog";
 import { Masthead } from "../evidence/Shell";
 import {
   finiteNumber,
@@ -11,7 +12,6 @@ import {
 import { CandidateDetailPanel } from "./CandidateDetailPanel";
 import { CandidateScreenerTable } from "./CandidateScreenerTable";
 import {
-  candidateById,
   candidateRows,
   evCandidateScannerOf,
   researchRankingValueLabel,
@@ -112,16 +112,23 @@ export function ResearchWorkbench({
 
   const lastFocusedRef = useRef<HTMLElement | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const mainHeadingRef = useRef<HTMLHeadingElement>(null);
+  const previousSelectionRef = useRef<string | null>(null);
 
   const status = scannerStatus(report);
   const scanner = evCandidateScannerOf(report);
   const freshness = reportFreshness(report, receivedAtMs, nowMs);
   const displayState = marketDisplayState(report, freshness);
+  const isBlockedStatus =
+    displayState !== "available" || status === "unavailable" || status === "blocked";
   const isPublished = report.runtime_context?.mode === "published";
   const source = friendlySource(report.data_status?.source);
   const spotUsdc = finiteNumber(report.strategy_research?.analysis?.market?.spot_usd);
 
-  const allRows = useMemo(() => candidateRows(report), [report]);
+  const allRows = useMemo(
+    () => isBlockedStatus ? [] : candidateRows(report),
+    [report, isBlockedStatus],
+  );
   const structureOptions = useMemo(
     () => structureTypeOptions(allRows),
     [allRows],
@@ -135,11 +142,22 @@ export function ResearchWorkbench({
     [filteredRows, sort],
   );
 
-  const selectedRow = selectedId ? candidateById(report, selectedId) : null;
+  const selectedRow = filteredRows.find((row) => row.id === selectedId) ?? null;
+  const visibleSelectedId = selectedRow?.id ?? null;
 
   useEffect(() => {
-    writeUrlState(filters, selectedId);
-  }, [filters, selectedId]);
+    const handlePopState = () => {
+      const next = readUrlState();
+      setFilters(next.filters);
+      setSelectedId(next.selectedId);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    writeUrlState(filters, visibleSelectedId);
+  }, [filters, visibleSelectedId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -153,22 +171,31 @@ export function ResearchWorkbench({
   }, [filteredRows.length, allRows.length]);
 
   useEffect(() => {
-    if (selectedRow && headingRef.current) {
-      headingRef.current.focus();
-    } else if (!selectedRow && lastFocusedRef.current) {
-      lastFocusedRef.current.focus();
+    const previousSelection = previousSelectionRef.current;
+    previousSelectionRef.current = visibleSelectedId;
+    if (visibleSelectedId) {
+      headingRef.current?.focus();
+    } else if (previousSelection) {
+      // A removed detail leaves focus on body. Preserve a user's focus in
+      // filters or navigation, and fall back when its original row is gone.
+      if (document.activeElement === document.body) {
+        const returnTarget = lastFocusedRef.current?.isConnected
+          ? lastFocusedRef.current
+          : mainHeadingRef.current;
+        returnTarget?.focus();
+      }
       lastFocusedRef.current = null;
     }
-  }, [selectedRow]);
+  }, [visibleSelectedId]);
 
   useEffect(() => {
-    if (selectedId && !candidateById(report, selectedId)) {
+    if (selectedId && !visibleSelectedId) {
       setSelectedId(null);
     }
-  }, [report, selectedId]);
+  }, [selectedId, visibleSelectedId]);
 
-  const handleSelect = (id: string) => {
-    lastFocusedRef.current = document.activeElement as HTMLElement | null;
+  const handleSelect = (id: string, source: HTMLElement) => {
+    lastFocusedRef.current = source;
     setSelectedId(id);
   };
 
@@ -192,14 +219,30 @@ export function ResearchWorkbench({
     setFilters(defaultFilters());
   };
 
-  const isBlockedStatus =
-    displayState === "stale" || status === "unavailable" || status === "blocked";
   const blockedScannerStatus: "blocked" | "unavailable" =
     status === "blocked" ? "blocked" : "unavailable";
+  const staleReasonCode = isPublished
+    ? "PUBLISHED_EDITION_STALE"
+    : "MARKET_DATA_AGE_EXCEEDED";
+  const marketBlockingReasonCode = displayState === "stale"
+    ? staleReasonCode
+    : displayState === "quality_blocked"
+      ? (report.data_status?.reason_code || "MISSING_VALIDATED_MARKET_DATA")
+      : null;
 
   const hiddenByTier = allRows.filter(
     (row) => !filters.actionTiers.includes(row.action),
   ).length;
+
+  const reasonCodes = Array.from(
+    new Set([
+      ...(marketBlockingReasonCode ? [marketBlockingReasonCode] : []),
+      ...(report.data_status?.reason_code ? [report.data_status.reason_code] : []),
+      ...(scanner?.reason_code ? [scanner.reason_code] : []),
+      ...(report.reason_codes ?? []),
+    ].filter(Boolean)),
+  );
+  const informationalCodes = reasonCodes.filter(isInformationalReason);
 
   const body = (
     <main className="workbench-console" id={embedded ? "surface-main" : "workbench-main"}>
@@ -210,7 +253,7 @@ export function ResearchWorkbench({
       <div className="workbench-bar">
         <div>
           <p className="section-kicker">EV candidate scanner / 候选工作台</p>
-          <h1>候选筛选</h1>
+          <h1 ref={mainHeadingRef} tabIndex={-1}>候选筛选</h1>
         </div>
         <p className="workbench-bar-note">
           分层由服务端判定；筛选只缩小范围，不改变分层。排序先看前沿位置，再按支配轴细排。
@@ -227,21 +270,25 @@ export function ResearchWorkbench({
             structureOptions={structureOptions}
           />
           <ScreenerBlockedState
-            reasonCode={
-              displayState === "stale"
-                ? "PUBLISHED_EDITION_STALE"
-                : (scanner?.reason_code ?? null)
-            }
-            status={displayState === "stale" ? "blocked" : blockedScannerStatus}
+            reasonCode={marketBlockingReasonCode ?? scanner?.reason_code ?? null}
+            status={displayState !== "available" ? "blocked" : blockedScannerStatus}
           />
+          {freshness.phase === "unavailable" ? (
+            <p>
+              无法核验行情时效：本次报告未提供有效的行情年龄。请重新获取完整报告；无法确定时效的快照不会用于候选展示。
+            </p>
+          ) : null}
           <ReasonCodeNotice
-            codes={[
-              ...(displayState === "stale" ? ["PUBLISHED_EDITION_STALE"] : []),
-              ...(scanner?.reason_code ? [scanner.reason_code] : []),
-              ...(report.reason_codes ?? []),
-            ]}
+            codes={reasonCodes.filter((code) => !isInformationalReason(code))}
             heading="需要补齐什么"
+            showNextSteps
           />
+          {informationalCodes.length > 0 ? (
+            <details>
+              <summary>正常状态（{informationalCodes.length} 项）</summary>
+              <ReasonCodeNotice codes={informationalCodes} heading="正常状态说明" />
+            </details>
+          ) : null}
         </>
       ) : (
         <>
