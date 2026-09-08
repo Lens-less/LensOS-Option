@@ -1,8 +1,8 @@
 # v0.5.0 期权决策研究平台交付记录
 
-日期：2026-09-08。本文记录本轮范围、验收方式和交付证据。本轮本地 Python、Web、三种构建、
-公开包边界、独立 wheel 消费者与 36 项浏览器检查已通过。最终发布提交的远端 CI 与交付仍待执行。
-未完成的项不视为通过，历史本地测试与旧版本 CI 不代替本轮证据。
+日期：2026-09-08。v0.5.0 功能已合并至公开仓库，PR 与功能合并提交 CI、Release 工作流、
+公开下载资产校验和独立安装均已通过。本轮也完成了本地 Python、Web、三种构建、公开包边界、
+独立 wheel 消费者与 36 项浏览器检查。以下按验证层级记录范围、结果和对应证据。
 
 ## 交付目标
 
@@ -28,7 +28,7 @@
 | 验收项 | 状态 | 本轮证据 |
 | --- | --- | --- |
 | Python lint、语法与静态类型 | 通过 | `tools/verify.py` 中 Ruff、compileall 与 mypy 通过；12 个严格类型检查文件无错误 |
-| Python 全量测试 | 通过，含 1 项跳过 | `1424 passed, 1 skipped, 1685 subtests passed`；唯一跳过项为 Windows 上不具权威性的 POSIX 权限位检查，未作为通过计入 |
+| 本地阶段 Python 全量测试 | 通过，含 1 项跳过 | `1424 passed, 1 skipped, 1685 subtests passed`；唯一跳过项为 Windows 上不具权威性的 POSIX 权限位检查，未作为通过计入 |
 | 后续时钟修复定向回归 | 通过 | 新增时钟边界检查 `3 passed`；与前述完整 Python 测试分别记录，不合并成新的全量计数 |
 | 跨平台边界定向回归 | 通过 | 非法 runbook 路径、读取失败与深层 JSON 的组合回归 `64 passed, 12 subtests passed`；路径仍返回缺失/无效证据，JSON 接受解码层 400 或字段校验层 422 的精确错误，并检查后续服务正常 |
 | API smoke | 通过 | `python -m crypto_options_report.api --smoke` 通过 |
@@ -38,26 +38,73 @@
 | Web 全量测试 | 通过 | 43 个测试文件、480 项测试通过，包含真实扩展消息链路与缓存拒绝计数回归 |
 | 三种 Web 构建与公开边界 | 通过 | 内部、公开、Chrome 扩展构建通过；公开 bundle 边界与扩展产物检查通过 |
 | 独立 wheel 安装、版本与依赖 | 通过 | `0.5.0` wheel 干净安装；6 个 console launcher、包内资源、依赖与 API smoke 消费者检查通过 |
-| 桌面、窄屏、键盘与故障恢复浏览器验收 | 通过 | 安装后 wheel 的 36 项检查通过，`passed=true`、0 个控制台/未处理错误、0 个外部页面请求；包含公开版恢复与真实原生 Chrome 侧栏连接、断线撤回、重试 |
-| 跨平台 CI 与容器 | 待执行 | 仅记录本轮远端执行链接与结论 |
+| 桌面、窄屏、键盘与故障恢复功能验收 | 通过 | 安装后 wheel 与 Release 浏览器流程的 36 项功能检查通过，`passed=true`、0 个控制台/未处理错误、0 个外部页面请求；包含公开版恢复与真实原生 Chrome 侧栏连接、断线撤回、重试 |
+| 中文视觉复核 | Windows 通过 | 本地 Windows 的桌面/窄屏简报、公开版与原生侧栏截图已目视检查；Linux CI 字体环境与功能结果分别说明 |
+| 公开 PR 跨平台 CI 与容器 | 通过 | [CI 34180532675](https://github.com/Lens-less/LensOS-Option/actions/runs/34180532675) 的 Web、容器、Windows/Ubuntu × Python 3.12/3.13/3.14 共 8 个作业全部 `success` |
+| Windows 最终 PR Python 全量测试 | 通过，含平台跳过 | Python 3.12、3.13、3.14 每个作业均为 `1429 passed, 1 skipped, 1693 subtests passed` |
+| Ubuntu 最终 PR Python 全量测试 | 通过，含平台跳过 | Python 3.12、3.13、3.14 每个作业均为 `1428 passed, 2 skipped, 1688 subtests passed` |
+| 合并提交 CI | 通过 | [main CI 34181013524](https://github.com/Lens-less/LensOS-Option/actions/runs/34181013524) 在功能合并提交 `0bac2f6` 上完成，结论为 `success` |
 | 开源文档与命令 | 已核对 | 20 份文档、212 个仓库链接/锚点无错误；Release 说明中的 5 个文档链接使用绝对 GitHub URL 并核对目标路径/锚点；6 个 CLI/API 示例经当前 argparse 校验；文档 diff whitespace 检查通过；公开/私有历史隔离文档回归 1 项通过 |
-| 公开分支整合、提交与 GitHub 推送 | 待执行 | 待记录公开提交和远端一致性 |
-| v0.5.0 发布资产 | 待执行 | 若实际发布，填写 tag、Release 与校验和证据 |
+| 公开分支整合、提交与 GitHub 推送 | 完成 | [PR #17](https://github.com/Lens-less/LensOS-Option/pull/17) 已 squash 合并；功能合并提交为 [`0bac2f6`](https://github.com/Lens-less/LensOS-Option/commit/0bac2f64704e50732842de49e4e72ed09e918c16)，与全绿 PR head 的 Git tree 相同 |
+| v0.5.0 标签 | 已确认 | 远端 annotated tag 解引用为功能合并提交 `0bac2f64704e50732842de49e4e72ed09e918c16` |
+| v0.5.0 发布工作流 | 通过并已发布 | [Release 34181058655](https://github.com/Lens-less/LensOS-Option/actions/runs/34181058655) 的 8 个验证作业、构建与发布共 10 个作业全部成功；[v0.5.0 Release](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.5.0) 于 `2026-09-08T02:53:54Z` 正式发布，非草稿、非预发布 |
+| 公开下载资产独立验收 | 通过 | 实际下载的 wheel 与扩展 ZIP 均逐项匹配 `SHA256SUMS`；标签/源码/wheel/ZIP 版本均为 `0.5.0`；新建无运行依赖环境的安装、6 个启动入口、资源、依赖与 API smoke 通过 |
+| 发布包源码身份 | 通过 | wheel 内嵌功能合并提交 `0bac2f6`、`git_state=clean`；源码摘要与干净公开 `v0.5.0` 标签检出的 239 个声明源文件一致 |
+| 发布包边界独立复核 | 通过 | wheel 90 个文件、89 个 RECORD 条目校验通过，82 个标签受控文件比对一致；扩展 ZIP 11 个文件、manifest 引用完整；包内敏感内容扫描 0 发现 |
 
 本地证据分两阶段记录：先完成完整 Python 与基础检查；修复随后发现的时钟边界和真实侧栏
 投影问题、缓存重投影丢失拒绝计数后，重新通过完整 Web、三种构建、独立 wheel 与 36 项浏览器流程。公开恢复脚本原先
 错误等待折叠区域，现已校正，并通过实际公开构建的键盘展开与故障恢复重新验证。
 
 浏览器覆盖离线导览在研究故障时仍可完成、快照到期撤回当前资格、公开版无效响应撤回与重试、
-原生侧栏端到端连接恢复；桌面/窄屏简报、公开版与侧栏截图也已目视检查。后续小改动仍需对应
-回归；最终发布提交以该提交自己的完整 CI 为准，不能把本地阶段记录当作尚未执行的远端结果。
+原生侧栏端到端连接恢复。中文视觉复核采用本地 Windows 截图。
+本地阶段和最终 PR CI 的计数分别列示；功能合并提交 CI 与 Release 工作流均已独立通过。
 
-唯一跳过项位于 `tests/test_review_transport_security.py:89`，原因是
-`POSIX permission bits are not authoritative on Windows`。该文件定向复核结果为
-`27 passed, 1 skipped, 6 subtests passed`。本地安装检查通过不代表 GitHub 发布资产或跨平台 CI 已完成。
+已发布 Release 的 Ubuntu 浏览器流程通过 36 项功能检查，其原始截图因缺少 CJK 字库而出现中文方框，
+不作为中文视觉通过证据。[Linux CI](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml)
+与发布工作流已补充 Noto CJK 安装和字体解析检查，后续截图与执行证据由维护 CI 记录。
+此项环境与文档维护不修改应用源码、资源、版本或已发布资产。
 
-[v0.5.0 离线教学截图](../assets/lensos-option-demo.png) 已从本轮安装包浏览器检查保存；
+跳过项均有平台范围：Windows 不执行 `test_remote_bearer_token_file_rejects_broad_posix_permissions`，
+因为 POSIX 权限位在 Windows 上不具权威性；Ubuntu 不执行 `test_capture_daily_script.py` 中
+`test_evidence_sync_pushes_versioned_artifacts_to_local_bare_remote` 与
+`test_evidence_sync_rejects_matching_product_fetch_or_push_identity`，因为它们属于 Windows PowerShell 采集车道。
+CI 日志给出跳过总数，跳过原因依据受测源码的平台条件核对。
+本地权限测试文件另外通过 `27 passed, 1 skipped, 6 subtests passed` 的定向复核。
+
+[v0.5.0 离线教学截图](../assets/lensos-option-demo.png) 已从本轮 Windows 安装包浏览器检查保存；
 截图仅说明界面外观，不充当研究证据或浏览器总门禁的通过记录。
+
+## 公开整合与版本身份
+
+[PR #17](https://github.com/Lens-less/LensOS-Option/pull/17) 于 `2026-09-08T02:43:00Z` 实际 squash 合并。
+完整 PR CI 检查的 head 为 `b7a363d9e842f5a96fd99e76cd299798f0a40456`，功能合并提交为
+`0bac2f64704e50732842de49e4e72ed09e918c16`；两者的 tree 均为
+`127e954999e886785fff036c3687513b7b3cd618`。提交身份不同，代码内容相同。
+
+`setuptools==84.0.0` 与 `@types/node==26.4.1` 已纳入公开 `main`。
+[PR #15](https://github.com/Lens-less/LensOS-Option/pull/15) 和
+[PR #16](https://github.com/Lens-less/LensOS-Option/pull/16) 以被本轮整合替代的原因关闭，状态为
+`CLOSED`，不计作已合并 PR。私有 archive 历史不属于此次公开整合。
+
+## 发布资产与独立安装
+
+[v0.5.0 Release](https://github.com/Lens-less/LensOS-Option/releases/tag/v0.5.0) 的三个资产均已上传。
+实际下载后的两个构建产物与发布的
+[SHA256SUMS](https://github.com/Lens-less/LensOS-Option/releases/download/v0.5.0/SHA256SUMS) 逐项匹配：
+
+| 资产 | 大小（字节） | SHA-256 |
+| --- | --- | --- |
+| [Python wheel](https://github.com/Lens-less/LensOS-Option/releases/download/v0.5.0/crypto_options_research_console-0.5.0-py3-none-any.whl) | 619893 | `968318b12b24cb44f404f714032fac5536ffb70cdfa794e0ab7226b9759622a3` |
+| [Chrome 扩展 ZIP](https://github.com/Lens-less/LensOS-Option/releases/download/v0.5.0/lensos-option-chrome-extension-v0.5.0.zip) | 96608 | `825865a075968a38610194bc3aa6a68193e28ccd39d35813112df0be29f9b2c4` |
+
+下载的 wheel 在新建虚拟环境中使用 `--no-index --no-deps` 安装，随后由
+`tools/check_installed_wheel.py` 检查 6 个 console launcher、包内资源、运行依赖和 API smoke，全部通过。
+`tools/check_release_versions.py` 同时核对标签、源码、wheel 与扩展 ZIP 的版本为 `0.5.0`。
+
+包内源码摘要为 `sha256:5e720738782a5239c5cd7d98d28468f22782e1e3efbf410948de8c1b749a4cbf`，
+以干净公开标签检出核对源码摘要，确认与该版本声明的源文件一致。构建身份指向功能合并提交
+`0bac2f64704e50732842de49e4e72ed09e918c16`，Git 状态为 `clean`。
 
 ## 本机公开数据实测
 

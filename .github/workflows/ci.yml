@@ -126,6 +126,14 @@ jobs:
           python -m venv browser-venv
           browser-venv/bin/python -m pip install --no-index --no-deps browser-wheel/*.whl
           python tools/check_installed_wheel.py --python browser-venv/bin/python
+      - name: Install and verify Chinese fonts for browser acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends fonts-noto-cjk fontconfig
+          fc-match 'sans-serif:lang=zh-cn'
+          fc-match --format='%{family}' 'sans-serif:lang=zh-cn' | grep --quiet 'Noto Sans CJK'
       - name: Verify installed wheel in isolated Chrome
         run: node tools/browser-smoke.mjs --python "${{ github.workspace }}/browser-venv/bin/python" --extension-dir web/dist/chrome-extension --public-build-dir web/dist-public --output-dir browser-artifacts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
