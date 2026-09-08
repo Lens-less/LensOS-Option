@@ -186,8 +186,8 @@ def test_core_and_brief_do_not_read_compatibility_runbook_paths():
     )
     assert record.trust_verdict == "missing"
     assert record.project_strategy_brief_v1()["action"] == "NO_TRADE"
-    # pathlib treats this malformed path as unavailable on supported runtimes;
-    # requesting the compatibility view retains that fail-closed result.
+    # Invalid configured paths are unavailable evidence on every supported
+    # runtime; requesting the compatibility view retains that fail-closed result.
     report = record.project_research_report_v1()
     assert report["paper_proposal_ledger"]["manual_approval_runbook"]["status"] == "missing"
 

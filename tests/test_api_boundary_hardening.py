@@ -264,9 +264,10 @@ def test_non_ascii_bearer_returns_controlled_authentication_error(authenticated_
         connection.close()
 
 
-def test_excessively_nested_json_returns_controlled_validation_error(authenticated_server):
+@pytest.mark.parametrize("depth", [32, 3000])
+def test_nested_json_returns_controlled_validation_error(authenticated_server, depth):
     server, token = authenticated_server
-    body = '{"schema_version":"backtest_run_request.v1","generated_at":' + "[" * 3000 + "0" + "]" * 3000 + "}"
+    body = '{"schema_version":"backtest_run_request.v1","generated_at":' + "[" * depth + "0" + "]" * depth + "}"
     assert len(body) < 16 * 1024
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
     try:
@@ -280,10 +281,27 @@ def test_excessively_nested_json_returns_controlled_validation_error(authenticat
         )
         response = connection.getresponse()
         payload = json.loads(response.read())
-        assert response.status == 400
-        assert "JSON" in payload["error"]
+        # Decoder recursion limits differ by Python version and platform. If
+        # decoding succeeds, the array still violates the timestamp contract.
+        expected_errors = {
+            400: "request body must be valid UTF-8 JSON",
+            422: "generated_at must be an RFC3339 string",
+        }
+        assert response.status in expected_errors
+        assert payload == {"error": expected_errors[response.status]}
+        if depth == 32:
+            assert response.status == 422
     finally:
         connection.close()
+
+    health = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    try:
+        health.request("GET", "/health")
+        response = health.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read()) == {"status": "ok"}
+    finally:
+        health.close()
 
 
 def test_artifact_corruption_returns_error_instead_of_prior_output(tmp_path, authenticated_server):

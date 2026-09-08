@@ -30,6 +30,7 @@
 | Python lint、语法与静态类型 | 通过 | `tools/verify.py` 中 Ruff、compileall 与 mypy 通过；12 个严格类型检查文件无错误 |
 | Python 全量测试 | 通过，含 1 项跳过 | `1424 passed, 1 skipped, 1685 subtests passed`；唯一跳过项为 Windows 上不具权威性的 POSIX 权限位检查，未作为通过计入 |
 | 后续时钟修复定向回归 | 通过 | 新增时钟边界检查 `3 passed`；与前述完整 Python 测试分别记录，不合并成新的全量计数 |
+| 跨平台边界定向回归 | 通过 | 非法 runbook 路径、读取失败与深层 JSON 的组合回归 `64 passed, 12 subtests passed`；路径仍返回缺失/无效证据，JSON 接受解码层 400 或字段校验层 422 的精确错误，并检查后续服务正常 |
 | API smoke | 通过 | `python -m crypto_options_report.api --smoke` 通过 |
 | 源码版本一致性 | 通过 | Python、Web、lockfile、lockfile root、扩展均为 `0.5.0` |
 | 离线研究复现 | 通过 | 两次完整求值一致；实际输出 `untrusted`、`NO_TRADE`、`BLOCKED_BY_EVIDENCE`、`execution_allowed=false` |

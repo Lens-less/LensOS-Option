@@ -198,7 +198,6 @@ def manual_approval_runbook_evidence(
     """Validate a local policy document without treating it as approval."""
 
     candidate = Path(path) if path is not None else DEFAULT_MANUAL_APPROVAL_RUNBOOK_PATH
-    candidate = candidate.expanduser().resolve()
     base = {
         "schema_version": "manual_approval_runbook_evidence.v1",
         "path": _manual_approval_runbook_public_id(candidate),
@@ -208,12 +207,19 @@ def manual_approval_runbook_evidence(
         "external_approval_recorded": False,
         "reason_codes": ["MISSING_MANUAL_APPROVAL_RUNBOOK"],
     }
-    if not candidate.is_file():
+    try:
+        candidate = candidate.expanduser().resolve()
+        base["path"] = _manual_approval_runbook_public_id(candidate)
+        if not candidate.is_file():
+            return base
+    except (OSError, ValueError):
+        # Invalid paths (including NUL) may raise during resolution or stat,
+        # depending on the Python version and OS. No document was verified.
         return base
     try:
         raw = candidate.read_bytes()
         content = raw.decode("utf-8")
-    except (OSError, UnicodeDecodeError):
+    except (OSError, ValueError):
         return {
             **base,
             "status": "invalid",
