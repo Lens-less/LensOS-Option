@@ -1,0 +1,76 @@
+name: First-run feedback / 首次试用反馈
+description: Report an actual install, demo, or replay experience; success and failure are both welcome.
+title: "[First run] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Follow the [first-run guide](https://github.com/Lens-less/LensOS-Option/blob/main/docs/guides/first-run-review.en.md) / [中文](https://github.com/Lens-less/LensOS-Option/blob/main/docs/guides/first-run-review.md).
+        No funds, accounts, keys, stars, or positive review are required. This is a PUBLIC issue.
+        Do not upload raw logs, private snapshots, credentials, cookies, sessions, emails, wallet addresses, organization IDs, or local absolute paths.
+        Report vulnerabilities privately through [SECURITY.md](https://github.com/Lens-less/LensOS-Option/blob/main/SECURITY.md).
+  - type: input
+    id: revision
+    attributes:
+      label: Tested version or commit / 实际版本或提交
+      placeholder: "Example: v0.5.0 release wheel; for source, include git rev-parse HEAD"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS, Python, browser versions / 环境版本
+      description: Version numbers only; no username, machine name, email, or local paths.
+      placeholder: "Example: Windows 11; Python 3.13; Edge 140"
+    validations:
+      required: true
+  - type: dropdown
+    id: route
+    attributes:
+      label: Path actually attempted / 实际尝试路径
+      options:
+        - "A: released wheel and demo / 安装包演示"
+        - "B: source and fixed replay / 源码复现"
+        - "A and B / 两条都尝试"
+        - "Stopped before installation / 安装前已卡住"
+    validations:
+      required: true
+  - type: dropdown
+    id: relationship
+    attributes:
+      label: Report context / 反馈来源
+      description: Optional; this prevents maintainer or automated runs being counted as independent adoption.
+      options:
+        - "Prefer not to specify / 不说明"
+        - "Independent user, unassisted / 独立用户自行完成"
+        - "Independent user, assisted / 独立用户获得协助"
+        - "Maintainer or contributor self-check / 维护者或贡献者自测"
+        - "Automated or AI-assisted check / 自动化或 AI 辅助检查"
+  - type: textarea
+    id: results
+    attributes:
+      label: What actually happened / 实际结果
+      description: Mark each step success, failure, or not run. Blocked research is not automatically a defect.
+      value: |
+        - Checksum and installation / 校验和与安装:
+        - Demo opens / 演示打开:
+        - Teaching versus research is understandable / 能区分教学与研究:
+        - Snapshot time and blocking reason visible / 时间与阻断原因可见:
+        - Optional replay / 可选复现:
+        - Expected behavior and failing step / 期望行为与卡住步骤:
+    validations:
+      required: true
+  - type: textarea
+    id: excerpt
+    attributes:
+      label: Minimal sanitized excerpt / 最小脱敏摘要
+      description: Optional. Remove sensitive fields and absolute paths; do not attach raw logs or account data.
+  - type: checkboxes
+    id: accuracy
+    attributes:
+      label: Accuracy and privacy / 真实性与隐私
+      options:
+        - label: I describe only steps actually attempted, and mark anything not run. / 仅描述实际尝试，未运行步骤明确标注。
+          required: true
+        - label: I removed credentials, private data, identifying details, and local absolute paths. / 已移除凭证、私有数据、个人信息和本机绝对路径。
+          required: true
