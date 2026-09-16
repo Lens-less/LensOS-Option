@@ -17,6 +17,9 @@ a reproducible research record.
 - Historical and forecast rates appear only after their respective `VALIDATED` and `CALIBRATED` gates pass.
 - Missing, stale, or invalid evidence blocks. No orders or position sizing; `execution_allowed=false` is permanent.
 
+New here? Follow the [independent first-run guide](docs/guides/first-run-review.en.md); no accounts, keys, or funds are needed.
+For reviewable maintenance history and the limits of current adoption evidence, see [maintainer work and public value](docs/maintainer-impact.md).
+
 ## Demo
 
 The current source includes a three-step **offline learning tour**: choose an
@@ -121,9 +124,9 @@ Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 <a id="core-concepts"></a>
 <a id="current-status"></a>
 <a id="usage"></a>
+<a id="what-happens-if-you-combine-these"></a>
 <a id="finding-candidates-with-edge"></a>
 <a id="candidate-universe"></a>
-<a id="what-happens-if-you-combine-these"></a>
 <a id="was-this-strike-also-this-expensive-yesterday"></a>
 <a id="what-can-this-ranking-predict"></a>
 <a id="operator-capture-and-scheduled-task-windows-only"></a>
