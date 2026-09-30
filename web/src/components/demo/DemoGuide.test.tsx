@@ -29,8 +29,8 @@ describe("offline learning guide", () => {
     expect(within(evidence).getByText(/费用、滑点和提前平仓/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "完成导览" }));
     expect(screen.getByRole("heading", { name: "你已完成导览" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "查看真实快照" })).toHaveAttribute("href", "./index.html");
-    expect(screen.queryByRole("button", { name: /复制组合|提交订单/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "进入研究简报" })).toHaveAttribute("href", "./index.html");
+    expect(screen.queryByRole("button", { name: /复制研究复核|提交订单/ })).not.toBeInTheDocument();
   });
 
   it.each([

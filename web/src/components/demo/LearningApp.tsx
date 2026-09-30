@@ -21,6 +21,12 @@ export function LearningApp(): React.JSX.Element {
       <ResearchErrorBoundary label="离线教学导览">
         <DemoGuide />
       </ResearchErrorBoundary>
+      <details className="learning-current-start">
+        <summary>用当前公开行情开始研究</summary>
+        <p>若需要切换到当前公开行情，在终端按 Ctrl+C 结束现有服务，再运行下面一条命令。已经以当前模式启动时，直接返回研究简报即可。无需账户或密钥。</p>
+        <code>crypto-options-report start --current</code>
+        <p>数据与证据不足时会给出拒绝原因；有效快照会复用，过期后重新采集。研究结果最高为观察，不会提交订单。</p>
+      </details>
       <SiteFooter />
     </div>
   );

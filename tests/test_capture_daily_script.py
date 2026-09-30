@@ -2773,19 +2773,23 @@ class PublishWorkflowContractTests(unittest.TestCase):
         readme = (self.REPO_ROOT / "README.md").read_text(encoding="utf-8")
         readme_en = (self.REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
         quickstarts = (
-            readme.split("## 快速开始", 1)[1].split("## 操作者车道", 1)[0],
-            readme_en.split("## Quickstart", 1)[1].split("## Operator Lane", 1)[0],
+            readme.split("## 快速开始", 1)[1].split("## 验证", 1)[0],
+            readme_en.split("## Quickstart", 1)[1].split("## Verification", 1)[0],
         )
 
         for quickstart in quickstarts:
             with self.subTest(language="zh" if "演示" in quickstart else "en"):
-                self.assertIn("git clone", quickstart)
-                self.assertIn("python -m pip install .", quickstart)
+                installation = quickstart.split("```powershell", 1)[1].split("```", 1)[0]
+                self.assertIn("git clone", installation)
+                self.assertIn("python -m pip install .", installation)
+                self.assertIn("\ncrypto-options-report start\n", installation)
+                self.assertNotIn("--current", installation)
+                self.assertNotIn("--snapshot", installation)
                 self.assertIn("crypto-options-report demo", quickstart)
                 self.assertIn("127.0.0.1", quickstart)
                 self.assertNotIn("python -m pytest -q", quickstart)
                 self.assertNotIn("tests/fixtures/", quickstart)
-                self.assertNotIn("artifacts/", quickstart)
+                self.assertNotIn("artifacts/", installation)
 
     def test_capture_docs_distinguish_process_success_from_validation_usability(
         self,

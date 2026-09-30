@@ -90,7 +90,7 @@ describe("actual worker to runtime to side panel contract", () => {
   it("renders a canonical brief after compact messaging and withdraws its current evidence on expiry", async () => {
     const session = installWorker(researchReport());
     await act(async () => { render(<SidePanelApp />); });
-    expect(screen.getAllByRole("button", { name: "复制组合" })).toHaveLength(canonicalBrief.strategies.length);
+    expect(screen.getAllByRole("button", { name: "复制研究复核" })).toHaveLength(canonicalBrief.strategies.length);
     expect(screen.queryByText(/尚未提供 `strategy_brief/)).not.toBeInTheDocument();
     expect(screen.queryByText("当前研究证据不可用")).not.toBeInTheDocument();
     expect(screen.getByText("RESEARCH_ONLY")).toBeVisible();
@@ -105,7 +105,7 @@ describe("actual worker to runtime to side panel contract", () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(65_000); });
     expect(screen.getByText("当前研究证据已失效")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "复制组合" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制研究复核" })).not.toBeInTheDocument();
   });
 
   it("keeps an explicit quality failure blocked through the same real worker path", async () => {
@@ -114,7 +114,7 @@ describe("actual worker to runtime to side panel contract", () => {
     installWorker(report);
     await act(async () => { render(<SidePanelApp />); });
     expect(screen.getByText("当前研究证据不可用")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "复制组合" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制研究复核" })).not.toBeInTheDocument();
     expect(screen.queryByText(/尚未提供 `strategy_brief/)).not.toBeInTheDocument();
     const cached = await chromeSidePanelRuntime.getCachedReport(origin);
     expect(cached?.report.data_status?.quality_gate?.passed).toBe(false);
@@ -125,7 +125,7 @@ describe("actual worker to runtime to side panel contract", () => {
     const report = researchReport("published");
     installWorker(report);
     await act(async () => { render(<SidePanelApp />); });
-    expect(screen.getAllByRole("button", { name: "复制组合" })).toHaveLength(canonicalBrief.strategies.length);
+    expect(screen.getAllByRole("button", { name: "复制研究复核" })).toHaveLength(canonicalBrief.strategies.length);
     const loaded = await chromeSidePanelRuntime.getReport(false, origin);
     expect(loaded.report.publish_edition).toEqual(report.publish_edition);
     expect(loaded.report.full_system_surface?.release_gates).toEqual(report.full_system_surface?.release_gates?.slice(0, 2));

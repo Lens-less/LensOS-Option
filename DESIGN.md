@@ -18,11 +18,13 @@ tracks this iteration's scope and actual verification; the
 [decision workflow](docs/guides/decision-workflow.en.md) connects the product's
 learning, analysis, evidence, recovery, and reproducibility steps.
 
-The reading sequence is market context and evidence age, eligible strategy cards
-or an explicit “今日暂无可靠策略”, then supporting calculations and limitations.
-Cards identify exact one-unit legs, expiry, net credit, itemized costs, modeled
-loss budget, and cancellation conditions. Historical and forecast rates remain absent
-until their own `VALIDATED` and `CALIBRATED` evidence gates pass.
+The core journey is local start → declared data mode → research brief → copied
+research review. Primary navigation keeps learning and the brief; workbench,
+series, and signal views remain available under “深入研究”. Read source and data
+cutoff first, then strategy cards or “今日暂无可靠策略”, then supporting evidence.
+Cards identify exact one-unit legs, bid/ask quotes and units, expiry, net credit,
+itemized costs, modeled loss budget, and cancellation conditions. Historical and
+forecast rates remain absent until their own `VALIDATED` and `CALIBRATED` gates pass.
 
 Version 0.5.0 strengthens `strategy_brief.v1`: entry requires numeric
 `cost_breakdown`, `cost_model_id`, and `cost_config_hash`; risk identifies
@@ -44,10 +46,39 @@ contracts do not replace `strategy_brief.v1` as the primary brief.
 
 ## 2. First Use, State, And Recovery
 
+### One local entry, declared source
+
+`crypto-options-report start` serves the packaged platform on `127.0.0.1` and
+opens the offline learning tour by default. `--current` enables the existing
+approved public Deribit source through `allow_live_fetch`; `--snapshot <path>`
+replays a local snapshot at capture time. These source modes are mutually
+exclusive. Either research mode may receive `--underlying-history <path>`.
+`--no-open-browser` and `--port` support manual opening and occupied-port recovery.
+Existing `demo`, capture CLI, snapshot sidecar, and HTTP API entry points remain compatible.
+
+The research source bar states mode, cutoff, and freshness next to its update
+action. Current public mode uses “更新公开行情”: valid analysis records can be
+reused until the earliest trust, evidence, or decision deadline; expiry causes a
+new public fetch. A cache hit retains the original evaluation clock and analysis
+identity. Live age continues from that evaluation instant across cache receipts;
+an invalid or future evaluation clock cannot restore current status. Historical
+mode uses “重新读取快照” and only rereads local inputs, with a capture-bound replay window.
+Published editions use “重新载入本版” and cannot collect market data. No label
+may promise new quotes merely because the user clicked refresh.
+
+`NO_TRADE` also offers a copyable rejection review with the actual projected
+reasons, source, times, and immutable analysis identity. A paused review contains
+no cached strategy legs or credit instructions. Suggested review times require a
+manual update; the interface does not promise an automatic collection schedule.
+
+The launcher retains existing host/origin validation, bounded requests,
+single-flight analysis, and cache validity rules. It does not introduce account
+access, credentials, or another data service.
+
 ### Offline learning tour
 
-`crypto-options-report demo` opens
-`/index.html?view=demo`. The “离线学习导览” has three steps: choose an example,
+`start` defaults to `/index.html?view=demo`; `demo` remains compatible.
+The “离线学习导览” has three steps: choose an example,
 understand the risk, and inspect the evidence. It uses fictional normalized
 prices and linear expiry payoffs to explain finite-risk structures. Every step
 identifies the teaching context; the values are not Deribit quotes, historical
@@ -56,10 +87,24 @@ results, or probability estimates.
 The learning route renders independently of the research API: unavailable
 research data does not prevent completing the teaching steps. Teaching
 examples remain outside research JSON and evidence promotion. The
-“查看真实快照” action opens the evidence view of the bundled redacted snapshot,
-where normal research validation and freshness gates continue to apply. A
+“进入研究简报” action opens the research view using the source selected at
+startup. Default offline mode uses the bundled redacted historical snapshot;
+current and replay modes keep their declared input. Normal validation and
+freshness gates continue to apply. A
 teaching result cannot supply missing research data or acquire `VALIDATED` or
 `CALIBRATED` status.
+
+### Copy a research review
+
+“复制研究复核” is available on currently valid strategy cards. Its text binds
+complete legs, bid/ask, premium currency and unit, quote times, source, analysis
+and brief identities, evaluation time, contract expiry, frozen numeric costs,
+credit, modeled loss budget, validity, cancellation, and fresh-data recheck.
+One-unit leg ratios describe the structure; they are not recommended sizing.
+Copied text retains `WATCH / execution_allowed=false` and cannot serve as an order
+template or execution authorization. Expired or suppressed cards cannot supply a
+current copy action. Clipboard failure offers selectable text with an actionable
+status; changing the result clears the old copied state.
 
 ### One visible state across each report
 
@@ -181,9 +226,10 @@ Rules:
 
 ### Masthead
 
-- Brand left; current source/freshness and `READ-ONLY` boundary right.
-- Primary action is `刷新数据`; raw JSON remains a text link.
-- Refresh is a semantic button with 48px minimum height, busy state, press feedback, and brand focus ring.
+- Brand left; primary learning/brief navigation and a folded deeper-research menu.
+- Mode, cutoff, freshness, and the research-only boundary sit in the source bar.
+- The source bar uses the mode-specific update labels in section 2; raw JSON remains a text link.
+- Update is a semantic button with 48px minimum height, busy state, press feedback, and brand focus ring.
 - Do not display persistent “loaded successfully” text.
 
 ### Market brief

@@ -7,10 +7,10 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 面向 BTC 期权研究者的决策平台：从 Deribit 公开行情出发，解释市场、比较有限风险结构，
-再逐项复核成本、风险与证据。首页用一屏策略简报给出至多三张可复核的策略卡；证据不足时
-明确显示“今日暂无可靠策略”。你可以继续追到候选、历史与证据来源，并保存可复现的研究记录。
+再逐项复核成本、风险与证据。一条启动命令打开本地平台；先看懂结构，再读取公开行情，
+最后复制可复核的研究结论。研究简报至多显示三张策略卡；证据不足时明确显示“今日暂无可靠策略”。
 
-- 策略卡列明精确合约、到期日、最低净权利金、分项成本、模型损失预算和取消条件。
+- 策略卡列明精确合约、双边报价与单位、到期日、最低净权利金、分项成本、模型损失预算和取消条件。
 - 卡片最高为 `WATCH`：结构到期收益有界不代表实际含交割费损失有绝对上限；费用上界未经验证。
 - 历史与预测胜率只有在各自证据达到 `VALIDATED` / `CALIBRATED` 后才显示。
 - 缺失、过期或校验失败一律阻断；不下单、不推荐手数，`execution_allowed=false` 永久成立。
@@ -23,8 +23,9 @@
 当前源码内置三步**离线学习导览**：选择示例 → 理解风险 → 查看依据。虚构标准化价格和线性
 到期收益解释有限风险结构，拖动价格即可观察损益。教学数值不进入研究 JSON，不产生胜率或研究资格。
 
-“**查看真实快照**”进入包内脱敏快照的证据页。页面保留真实阻断和评估时刻；历史通过不代表当前
-可用。学习导览与研究结果分开，无需为了看懂产品先配置行情服务。
+“**进入研究简报**”读取启动时选择的数据来源；默认离线启动使用包内脱敏历史快照。
+页面保留真实阻断和评估时刻；历史通过不代表当前可用。主导航保留学习导览与研究简报，
+候选、时序和排序验证收在“深入研究”中。
 
 ![v0.5.0 离线学习导览：选择有限风险结构](docs/assets/lensos-option-demo.png)
 
@@ -38,18 +39,40 @@ _图为 v0.5.0 安装包的离线教学页面；示例点数用于理解结构�
 git clone https://github.com/Lens-less/LensOS-Option.git
 cd LensOS-Option
 python -m pip install .
-crypto-options-report demo
+crypto-options-report start
 ```
 
-打开命令输出的
-[离线学习导览](http://127.0.0.1:8000/index.html?view=demo)。安装后的演示零第三方运行依赖，
-不需要 Node、密钥、网络或采集产物。服务只监听 `127.0.0.1`；`Ctrl+C` 退出，端口冲突会明确报错。
+默认自动打开[离线学习导览](http://127.0.0.1:8000/index.html?view=demo)，也会在终端打印地址。
+安装后的演示零第三方运行依赖，不需要 Node、密钥、网络或采集产物。服务只监听
+`127.0.0.1`；`Ctrl+C` 退出，端口冲突时用 `--port 8001`。不自动打开浏览器可加 `--no-open-browser`。
+
+停止演示后，选择研究输入：
+
+```powershell
+# 当前公开行情：需要网络，无需账户或密钥
+crypto-options-report start --current
+
+# 历史回放：仅读取自己的本地快照
+crypto-options-report start --snapshot artifacts/snapshots/btc-chain.json
+```
+
+当前模式的“更新公开行情”通过已有 Deribit 公开数据源采集；仍在有效期内的分析会复用，
+过期后再取数。历史模式的“重新读取快照”只读本地文件，按采集时刻回放，不能恢复当前资格。
+两种模式不能同时启用；已有标的历史可用 `--underlying-history <path>` 接入。
+读取成功不代表证据通过：缺失或过期的报价、费用和模型证据仍会阻断。
 
 需要隔离安装或使用 wheel 时，见 [v0.5.0 安装与升级](docs/releases/v0.5.0.md#安装与升级)。
 下载包以 [GitHub Releases](https://github.com/Lens-less/LensOS-Option/releases) 的实际资产为准。
 
-导览之后，按 [完成一次期权决策研究](docs/guides/decision-workflow.md) 采集公开数据、启动研究界面、
-阅读阻断与到期状态，并保存复核记录。此流程不需要先配置账户。
+按 [完成一次期权决策研究](docs/guides/decision-workflow.md) 阅读简报、理解拒绝原因，并使用
+“复制研究复核”保存带报价、来源、分析标识与有效期的记录。复制前后都保留 `WATCH` 与执行禁令，
+复核前须重新取数。没有策略卡时可“复制拒绝原因”，保留 `NO_TRADE` 结论与证据标识。
+原有 `crypto-options-report demo`、采集 CLI 和 HTTP API 继续兼容。
+
+![本地研究简报：数据模式、拒绝原因与复核复制](docs/assets/lensos-option-research-brief.png)
+
+_图为源码中的包内历史快照，展示真实阻断；不代表当前行情或策略通过。
+[窄屏界面](docs/assets/lensos-option-research-brief-mobile.png)保留同一核心流程。_
 
 ## 验证
 

@@ -777,7 +777,7 @@ describe("EvidenceConsole", () => {
     );
 
     expect(
-      screen.getByLabelText(/市场来源 Deribit live，数据年龄 4 秒/),
+      screen.getByLabelText(/市场来源 Deribit live，数据年龄 8 秒/),
     ).toBeInTheDocument();
     expect(screen.getByText("当前且可信")).toBeInTheDocument();
     expect(
@@ -1231,14 +1231,14 @@ describe("EvidenceConsole", () => {
 
     render(<App loadReport={loadReport} />);
 
-    const refresh = await screen.findByRole("button", { name: "刷新" });
+    const refresh = await screen.findByRole("button", { name: "重新读取快照" });
     fireEvent.click(refresh);
 
     await waitFor(() => {
       expect(loadReport).toHaveBeenCalledTimes(2);
     });
     expect(
-      await screen.findByRole("button", { name: "刷新" }),
+      await screen.findByRole("button", { name: "重新读取快照" }),
     ).toHaveAttribute("aria-busy", "false");
   });
 
@@ -1425,6 +1425,7 @@ describe("EvidenceConsole", () => {
   it("derives the VRP window label from payload and leaves a null percentile blank", async () => {
     const noPercentileReport: ResearchReport = {
       ...liveResearchReport,
+      generated_at: "2026-08-02T09:00:00Z",
       vrp_status: {
         ...vrpStatusFixture,
         series: [...vrpStatusFixture.series],

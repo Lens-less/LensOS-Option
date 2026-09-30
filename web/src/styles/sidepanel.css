@@ -659,3 +659,32 @@ a {
 .strategy-brief-card button {
   width: fit-content;
 }
+
+.strategy-brief-review-details code,
+.strategy-brief-leg {
+  overflow-wrap: anywhere;
+}
+
+.strategy-brief-leg-quote,
+.strategy-brief-copy-status {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.strategy-brief-copy {
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  cursor: pointer;
+}
+
+.strategy-brief-copy-fallback textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  font: 12px/1.6 monospace;
+  resize: vertical;
+}

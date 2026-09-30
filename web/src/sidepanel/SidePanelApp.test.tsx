@@ -74,7 +74,8 @@ describe("SidePanelApp", () => {
     expect(screen.queryByText("完整两腿")).not.toBeInTheDocument();
     const brief = within(screen.getByRole("region", { name: "策略简报" }));
     expect(brief.getByRole("status", { name: "NO_TRADE" })).toBeInTheDocument();
-    expect(brief.queryByRole("button", { name: /复制/ })).not.toBeInTheDocument();
+    expect(brief.queryByRole("button", { name: "复制研究复核" })).not.toBeInTheDocument();
+    expect(brief.getByRole("button", { name: "复制拒绝原因" })).toBeVisible();
   });
 
   it("renders the read-only side panel composition from shared report data", async () => {

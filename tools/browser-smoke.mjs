@@ -225,7 +225,7 @@ try {
   const has = (selector) => evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].some((element) => element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}))`);
   const click = async (label) => {
     const point = await evaluate(`(() => {
-      const element = [...document.querySelectorAll('button, a')].find((item) => item.textContent.trim() === ${JSON.stringify(label)} && item.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}));
+      const element = [...document.querySelectorAll('button, a, summary')].find((item) => item.textContent.trim() === ${JSON.stringify(label)} && item.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}));
       if (!element || element.disabled) throw new Error('Missing enabled control: ' + ${JSON.stringify(label)});
       element.scrollIntoView({block: 'center', behavior: 'instant'});
       const box = element.getBoundingClientRect();
@@ -256,6 +256,9 @@ try {
       const label = await evaluate("document.querySelector('[data-testid=mobile-navigation-toggle]').textContent.trim()");
       await click(label);
       await until(() => has('[data-testid="mobile-navigation-toggle"][aria-expanded="true"]'), "expanded mobile navigation");
+    }
+    if (await has('.research-more-navigation:not([open])')) {
+      await click("深入研究");
     }
   };
   const inFirstViewport = async (selector, label) => {
@@ -308,7 +311,7 @@ try {
   report.checks.push("keyboard Tab and Enter complete the tour; arrow key adjusts payoff input");
   assert.equal(researchRequests, requestsBeforeLearning, "Independent learning must not request report, signal or series APIs");
   report.checks.push("research outage still allows a complete keyboard learning journey without research API requests");
-  await click("查看真实快照");
+  await click("进入研究简报");
   await until(() => evaluate("document.querySelector('[role=alert]')?.innerText.includes('研究数据不可用')"), "returning from learning preserves the real research outage");
   assert.equal(blockedResearchReports, 2, "Returning from learning must check the real research service again");
   await noOverflow("mobile research outage after learning");
@@ -326,7 +329,7 @@ try {
   assert(await has('[data-freshness="current"]'), "Snapshot must begin current before the controlled refresh failure");
   failNextReport = true;
   await openNavigation();
-  await click("刷新");
+  await click("重新读取快照");
   await until(() => evaluate(`[...document.querySelectorAll('[role="alert"]')].some((element) =>
     element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}) && element.innerText.includes('无法连接研究服务'))`), "visible connection failure after refresh");
   assert.equal(simulatedReportFailures, 1, "Exactly one loopback report request must be interrupted");

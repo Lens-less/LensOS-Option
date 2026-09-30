@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from "react";
 
 import type { ResearchReport } from "../../contracts";
 import { APP_INDEX_HREF, RAW_REPORT_HREF, VIEW_LINKS } from "../../publicPaths";
-import { SectionNavigation } from "../evidence/Shell";
 import type { Freshness } from "../evidence/reportModel";
 import { FRESHNESS_LABELS, formatCutoffTime } from "../evidence/reportModel";
 import { formatDurationHours } from "../../report/display";
 import { PublishedEditionBar } from "./PublishedEditionBar";
 import { ReplayBanner } from "./ReplayBanner";
 import { SiteFooter } from "./SiteFooter";
+import { ResearchSourceBar } from "./ResearchSourceBar";
 
 export type AppView = "evidence" | "workbench" | "series" | "signal" | "demo";
 
@@ -83,8 +83,6 @@ export function AppShell({
   const staleBoundaryLabel = publishedStale
     ? formatDurationHours(freshness?.maxAgeSec ?? Number.NaN)
     : null;
-  const refreshLabel =
-    report.runtime_context?.mode === "published" ? "重新载入本版" : "刷新";
   const isDemo = report.runtime_context?.demo_mode === true;
   const isLearning = isDemo && view === "demo";
 
@@ -101,7 +99,7 @@ export function AppShell({
           </span>
           <span>
             <strong>LensOS Option</strong>
-            <small>Research brief</small>
+            <small>期权决策研究</small>
           </span>
         </a>
 
@@ -122,7 +120,7 @@ export function AppShell({
           <a aria-current={activeView === "demo" ? "page" : undefined} href={`${APP_INDEX_HREF}?view=demo`}>
             学习导览
           </a>
-          {VIEW_LINKS.map((item) => (
+          {VIEW_LINKS.filter((item) => item.id === "evidence").map((item) => (
             <a
               aria-current={activeView === item.id ? "page" : undefined}
               href={item.href}
@@ -131,6 +129,12 @@ export function AppShell({
               {item.label}
             </a>
           ))}
+          <details className="research-more-navigation" open={view === "series" || view === "workbench" || view === "signal"}>
+            <summary>深入研究</summary>
+            <div>{VIEW_LINKS.filter((item) => item.id !== "evidence").map((item) => (
+              <a aria-current={activeView === item.id ? "page" : undefined} href={item.href} key={item.id}>{item.label}</a>
+            ))}</div>
+          </details>
         </nav>
 
         <div className="spine-actions">
@@ -153,29 +157,17 @@ export function AppShell({
           >
             原始 JSON
           </a> : <span className="source-indicator">离线教学</span>}
-          {onRefresh && !isLearning ? (
-            <button
-              aria-busy={refreshing}
-              className="refresh-button"
-              disabled={refreshing}
-              onClick={onRefresh}
-              type="button"
-            >
-              {refreshing ? `${refreshLabel}中…` : refreshLabel}
-            </button>
-          ) : null}
         </div>
-        {compact && view === "evidence" ? <SectionNavigation /> : null}
         </div>
       </header>
 
+      {!isLearning ? <ResearchSourceBar report={report} freshness={freshness} refreshing={refreshing} onRefresh={onRefresh} /> : null}
       {isLearning ? <p className="spine-learning-boundary" role="note"><strong>离线教学</strong><span>仅研究 · NO_TRADE</span></p> : (
-      <details className="spine-context" open={!compact || contextOpen}
-        onToggle={(event) => { if (compact) setContextOpen(event.currentTarget.open); }}>
-        <summary className="spine-context-summary" hidden={!compact}>
+      <details className="spine-context" open={contextOpen}
+        onToggle={(event) => { setContextOpen(event.currentTarget.open); }}>
+        <summary className="spine-context-summary">
           <strong>{isDemo ? "演示快照" : report.runtime_context?.replay ? "历史回放" : report.runtime_context?.mode === "published" ? "公开快照" : "市场研究"}</strong>
-          <span>仅研究 · NO_TRADE</span>
-          <span className="spine-context-action">数据详情</span>
+          <span className="spine-context-action">研究边界与来源</span>
         </summary>
         {compact && freshness ? <p className="spine-context-freshness">数据时效：{FRESHNESS_LABELS[freshness.phase]}{age ? ` · ${age}` : ""}</p> : null}
       {freshness && !isLearning ? <PublishedEditionBar freshness={freshness} report={report} /> : null}
@@ -195,8 +187,6 @@ export function AppShell({
       </div> : null}
       </details>
       )}
-      {!compact && view === "evidence" ? <SectionNavigation /> : null}
-
       {publishedStale ? (
         <main className="published-stop-main" id="surface-main">
           <section className="published-stop-card" role="alert">
