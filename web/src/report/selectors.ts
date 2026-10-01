@@ -174,7 +174,22 @@ export function selectReportFreshness(
     };
   }
 
-  const elapsedSec = (nowMs - receivedAtMs) / 1_000;
+  // Live report ages were measured at evaluation, not at the latest GET.
+  // Re-reading an immutable cached analysis must not restart its trust window.
+  // Replay deliberately keeps its historical clock relative to receipt; older
+  // reports without declared runtime context retain their compatibility model.
+  const evaluatedAtMs = report.runtime_context?.mode === "live"
+    ? Date.parse(report.runtime_context.evaluation_clock ?? report.generated_at ?? "")
+    : receivedAtMs;
+  if (!Number.isFinite(evaluatedAtMs) || evaluatedAtMs < 0 || evaluatedAtMs > receivedAtMs) {
+    return {
+      ageSec: null,
+      maxAgeSec,
+      phase: "unavailable",
+      mode: report.runtime_context?.mode ?? "live",
+    };
+  }
+  const elapsedSec = (nowMs - evaluatedAtMs) / 1_000;
   const ageSec = Math.floor(reportedAge + elapsedSec);
   const warningAgeSec = Math.min(45, maxAgeSec);
   const phase: FreshnessPhase =

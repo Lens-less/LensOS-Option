@@ -34,6 +34,10 @@ export type { ResearchWorkbenchProps } from "./components/workbench/ResearchWork
 
 export type LoadReport = () => Promise<LoadedReport>;
 
+// Public collection can span several bounded upstream requests. Keep one finite
+// UI deadline for both headers and body, without shortening it to a fixture read.
+const loadLocalReport: LoadReport = () => loadResearchReportHttp({ timeoutMs: 60_000 });
+
 function readViewFromLocation(): AppView {
   if (typeof window === "undefined") {
     return "evidence";
@@ -114,7 +118,7 @@ function validateLoadedReport(loaded: LoadedReport): LoadedReport {
 }
 
 export function App({
-  loadReport = loadResearchReportHttp,
+  loadReport = loadLocalReport,
 }: AppProps): React.JSX.Element {
   const [state, setState] = useState<AppState>({ status: "loading" });
   const [nowMs, setNowMs] = useState(() => Date.now());

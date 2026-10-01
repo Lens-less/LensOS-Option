@@ -296,6 +296,30 @@ def _selection_scope(
 
 
 class StrategyBriefContractTests(unittest.TestCase):
+    def test_copy_preserves_exact_quote_context_for_research_recheck(self) -> None:
+        candidate = _bear_call()
+        candidate["structure_legs"][0]["market_bid"] = 1200.00000001
+        brief = build_strategy_brief(
+            analysis_run_id="analysis:brief-contract",
+            generated_at="2026-08-30T14:30:05Z",
+            market=_market(),
+            candidates=[candidate],
+        )
+        recipe = brief["strategies"][0]["copy_recipe"]
+        for expected in (
+            "STATUS: WATCH / execution_allowed=false",
+            "ANALYSIS RUN: analysis:brief-contract",
+            "EVALUATED AT: 2026-08-30T14:30:05Z",
+            "CONTRACT EXPIRY: 2026-09-25",
+            "LEG QUOTE: BTC-25SEP26-128000-C / BID 1200.00000001 / ASK 1250 / USD (quote_currency) / OBSERVED AT 2026-08-30T14:30:01Z",
+            "LEG QUOTE: BTC-25SEP26-132000-C / BID 700 / ASK 800 / USD (quote_currency) / OBSERVED AT 2026-08-30T14:30:02Z",
+            "VALID UNTIL: 2026-08-30T14:34:55Z",
+            "do not reuse after VALID UNTIL",
+            "not an order or execution authorization",
+        ):
+            self.assertIn(expected, recipe)
+        self.assertEqual([], validate_strategy_brief(brief))
+
     def test_golden_contract_is_stable_and_valid(self) -> None:
         brief = build_strategy_brief(
             analysis_run_id="analysis:brief-contract",

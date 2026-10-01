@@ -44,6 +44,38 @@ const group = (keys: string, check: Check): Fields => Object.fromEntries(keys.sp
 const strings = list(text);
 const nullableNumber = nullable(number);
 const nullableText = nullable(text);
+const positiveInteger: Check = (value, field) => {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) reject(field);
+};
+const instrumentName: Check = (value, field) => {
+  text(value, field);
+  if (!(value as string).trim()) reject(field);
+};
+const orderBookScopeShape = object({
+  kind: member("research_sample"),
+  depth: positiveInteger,
+  sampled_instrument_count: positiveInteger,
+  selected_instrument_count: positiveInteger,
+  instrument_names: list(instrumentName),
+}, ["kind", "depth", "sampled_instrument_count", "selected_instrument_count", "instrument_names"]);
+const orderBookScope: Check = (value, field) => {
+  if (value === null || typeof value === "string") return;
+  orderBookScopeShape(value, field);
+  const scope = value as { sampled_instrument_count: number; selected_instrument_count: number; instrument_names: string[] };
+  if (scope.sampled_instrument_count > scope.selected_instrument_count ||
+      scope.sampled_instrument_count !== scope.instrument_names.length ||
+      new Set(scope.instrument_names).size !== scope.instrument_names.length) reject(field);
+};
+const feedCoverageEntry = nullable(object(group("freshness_status reason_code scope source_endpoint status", nullableText)));
+const orderBookCoverageEntry = nullable(object({
+  ...group("freshness_status reason_code source_endpoint status", nullableText), scope: orderBookScope,
+}));
+const feedCoverageEntries: Check = (value, field) => {
+  record(value, field);
+  for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
+    (name === "order_book" ? orderBookCoverageEntry : feedCoverageEntry)(entry, `${field}.${name}`);
+  }
+};
 
 function calendarDate(value: string): boolean {
   const [year, month, day] = value.slice(0, 10).split("-").map(Number);
@@ -114,7 +146,7 @@ const expiry = object({
 const qualityCounts = object(group("expiries_evaluated fetch_errors invalid_quotes total_quotes valid_quotes quality_passing_quotes", number));
 const dataStatus = object({
   ...sourceStatus, validated: flag, market_data_age_sec: nullableNumber,
-  feed_coverage: object({ feeds: dictionary(nullable(object(group("freshness_status reason_code scope source_endpoint status", nullableText)))) }),
+  feed_coverage: object({ feeds: feedCoverageEntries }),
   collection_scope: object({ ...group("selected_instrument_count upstream_instrument_count coverage_ratio", nullableNumber), scope: nullableText }),
   public_response_contract: object({ endpoints: object({ vol_index: object({
     ...group("status index_name", text), ...group("volatility age_sec max_age_sec", nullableNumber),

@@ -8,11 +8,11 @@ English · [中文](README.md) · [Documentation](docs/README.md) · [Contributi
 
 A decision research platform for BTC options. Start with public Deribit data,
 understand market conditions, compare finite-risk structures, and inspect costs,
-risk, and evidence. A one-screen brief presents up to three auditable cards or an
-explicit no-trade result. Follow candidates, history, and provenance to preserve
-a reproducible research record.
+risk, and evidence. One command opens the local platform: learn a structure,
+read public quotes, then copy a reviewable research conclusion. The brief presents
+up to three auditable cards or an explicit no-trade result.
 
-- Cards identify exact legs, expiry, minimum net credit, itemized costs, modeled loss budgets, and cancellation conditions.
+- Cards identify exact legs, bid/ask quotes and units, expiry, minimum net credit, itemized costs, modeled loss budgets, and cancellation conditions.
 - Cards remain at most `WATCH`: bounded expiry payoff does not establish an absolute loss cap including delivery fees.
 - Historical and forecast rates appear only after their respective `VALIDATED` and `CALIBRATED` gates pass.
 - Missing, stale, or invalid evidence blocks. No orders or position sizing; `execution_allowed=false` is permanent.
@@ -27,9 +27,12 @@ example, understand its risk, and inspect the evidence. Drag a fictional normali
 expiry price to explore a linear payoff. Teaching values never enter research
 JSON, generate a success rate, or acquire research eligibility.
 
-“**查看真实快照**” (View real snapshot) opens the bundled redacted snapshot's evidence
-page. Its actual blocking state and evaluation time remain visible; a historical
-pass does not imply current eligibility. No market-service setup is needed to learn the interface.
+“**进入研究简报**” (Open research brief) uses the source chosen at startup.
+Default offline startup reads the bundled redacted historical snapshot. Its
+actual blocking state and evaluation time remain visible; a historical pass does
+not imply current eligibility. Primary navigation keeps the learning tour and
+research brief; candidates, series, and ranking validation sit under “深入研究”
+(Deeper research).
 
 ![The v0.5.0 offline learning tour: choose a finite-risk structure](docs/assets/lensos-option-demo.png)
 
@@ -44,21 +47,50 @@ Requires Python 3.12+. Fetch and install the public source:
 git clone https://github.com/Lens-less/LensOS-Option.git
 cd LensOS-Option
 python -m pip install .
-crypto-options-report demo
+crypto-options-report start
 ```
 
-Open the printed
-[offline learning tour URL](http://127.0.0.1:8000/index.html?view=demo). Once installed,
-the demo needs no third-party runtime dependencies, Node.js, keys, network, or
-captured output. It binds to `127.0.0.1`; `Ctrl+C` stops it and a busy port produces a clear error.
+The [offline learning tour](http://127.0.0.1:8000/index.html?view=demo) opens
+automatically; the terminal also prints its address. Once installed, the demo
+needs no third-party runtime dependencies, Node.js, keys, network, or captured
+output. It binds to `127.0.0.1`; `Ctrl+C` stops it. Use `--port 8001` if the port
+is busy, or `--no-open-browser` to open the URL yourself.
+
+Stop the demo, then choose a research input:
+
+```powershell
+# Current public data: network required, no account or keys
+crypto-options-report start --current
+
+# Historical replay: reads your local snapshot only
+crypto-options-report start --snapshot artifacts/snapshots/btc-chain.json
+```
+
+In current mode, “更新公开行情” (Update public quotes) uses the existing public
+Deribit source. A still-valid analysis is reused; expired evidence triggers a
+new fetch. In historical mode, “重新读取快照” (Reread snapshot) only reads local
+files and evaluates at capture time; it cannot restore current eligibility.
+The modes are mutually exclusive. Add `--underlying-history <path>` to use local
+underlying history. A successful load does not pass evidence gates: missing or
+expired quotes, costs, and model evidence still block.
 
 For an isolated wheel installation, see the [v0.5.0 upgrade guide](docs/releases/v0.5.0.md#安装与升级).
 Published downloads are the assets actually listed on
 [GitHub Releases](https://github.com/Lens-less/LensOS-Option/releases).
 
-Continue with the [complete decision workflow](docs/guides/decision-workflow.en.md)
-to capture public data, inspect blocking and expiry states, and save a reproducible
-record. No account setup is required to follow that workflow.
+Follow the [complete decision workflow](docs/guides/decision-workflow.en.md) to
+read the brief, understand rejection reasons, and use “复制研究复核” (Copy research
+review). The record includes quotes, source, analysis identity, and validity;
+it retains `WATCH` and the execution prohibition. Obtain fresh data before
+reviewing it again. Without a strategy card, “复制拒绝原因” (Copy rejection reasons)
+retains the `NO_TRADE` conclusion and evidence identities.
+Existing `crypto-options-report demo`, capture CLI, and HTTP API workflows remain compatible.
+
+![Local research brief: source mode, rejection and review copy](docs/assets/lensos-option-research-brief.png)
+
+_The source build shows a bundled historical snapshot with real blocking; this is
+not current market data or strategy approval. The [narrow layout](docs/assets/lensos-option-research-brief-mobile.png)
+preserves the same core journey._
 
 ## Verification
 

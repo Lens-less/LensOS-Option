@@ -6,6 +6,18 @@ export interface EventFeedCoverage {
   status?: string | null;
 }
 
+export interface OrderBookFeedScope {
+  kind: "research_sample";
+  depth: number;
+  sampled_instrument_count: number;
+  selected_instrument_count: number;
+  instrument_names: string[];
+}
+
+export interface OrderBookFeedCoverage extends Omit<EventFeedCoverage, "scope"> {
+  scope?: OrderBookFeedScope | string | null;
+}
+
 export type ExchangeLockState = "unknown" | "normal" | "partial" | "full";
 
 export interface ExchangeEventStatus {
@@ -27,6 +39,7 @@ export interface EvidenceDataStatus {
   feed_coverage?: {
     feeds?: {
       events?: EventFeedCoverage | null;
+      order_book?: OrderBookFeedCoverage | null;
     };
   };
   collection_scope?: {

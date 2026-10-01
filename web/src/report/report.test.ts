@@ -541,6 +541,64 @@ describe("report selectors", () => {
     expect(expired.ageSec).toBe(70);
   });
 
+  it("does not renew a live analysis when the same cached report is received again", () => {
+    const evaluatedAtMs = Date.parse(safeResearchReport.generated_at!);
+    const report: ResearchReport = {
+      ...safeResearchReport,
+      runtime_context: { mode: "live", replay: false, evaluation_clock: null },
+    };
+    const nowMs = evaluatedAtMs + 50_000;
+    const firstReceipt = selectReportFreshness(report, evaluatedAtMs + 4_000, nowMs);
+    const cachedReceipt = selectReportFreshness(report, nowMs, nowMs);
+    expect(cachedReceipt).toEqual(firstReceipt);
+    expect(cachedReceipt).toMatchObject({ phase: "warning", ageSec: 54 });
+
+    const expiredAtMs = evaluatedAtMs + 65_000;
+    expect(selectReportFreshness(report, expiredAtMs, expiredAtMs)).toMatchObject({
+      phase: "expired", ageSec: 69,
+    });
+    expect(selectReportFreshness({
+      ...report,
+      generated_at: new Date(expiredAtMs).toISOString(),
+    }, expiredAtMs, expiredAtMs)).toMatchObject({ phase: "current", ageSec: 4 });
+  });
+
+  it.each([null, "invalid", "2026-07-24T10:25:05Z"])(
+    "withdraws live freshness for a missing, invalid or future evaluation instant (%s)",
+    (generatedAt) => {
+      const receivedAtMs = Date.parse("2026-07-24T10:25:04Z");
+      const report: ResearchReport = {
+        ...safeResearchReport,
+        generated_at: generatedAt,
+        runtime_context: { mode: "live", replay: false },
+      };
+      expect(selectReportFreshness(report, receivedAtMs, receivedAtMs)).toMatchObject({
+        phase: "unavailable", ageSec: null,
+      });
+      report.generated_at = safeResearchReport.generated_at;
+      report.runtime_context!.evaluation_clock = generatedAt === null ? "invalid" : generatedAt;
+      expect(selectReportFreshness(report, receivedAtMs, receivedAtMs)).toMatchObject({
+        phase: "unavailable", ageSec: null,
+      });
+    },
+  );
+
+  it("keeps historical replay age on its declared logical clock", () => {
+    const receivedAtMs = Date.parse("2026-09-30T10:00:00Z");
+    const report: ResearchReport = {
+      ...safeResearchReport,
+      runtime_context: {
+        mode: "replay", replay: true, evaluation_clock: safeResearchReport.generated_at,
+      },
+    };
+    expect(selectReportFreshness(report, receivedAtMs, receivedAtMs)).toMatchObject({
+      phase: "current", ageSec: 4,
+    });
+    expect(selectReportFreshness(report, receivedAtMs, receivedAtMs + 50_000)).toMatchObject({
+      phase: "warning", ageSec: 54,
+    });
+  });
+
   it("keeps full contract names and the complete decision loop in the side-panel view model", () => {
     const longSellLeg = "BTC-28SEP26-123456789-C-LONG-CONTRACT-WITH-NO-TRUNCATION";
     const longBuyLeg = "BTC-28SEP26-223456789-C-LONG-CONTRACT-WITH-NO-TRUNCATION";

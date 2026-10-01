@@ -63,7 +63,6 @@ export function EvidenceConsole({
 
   const body = (
     <>
-      {embedded ? null : <SectionNavigation />}
       <main
         className="console"
         id={embedded ? "surface-main" : "evidence-main"}
@@ -74,6 +73,7 @@ export function EvidenceConsole({
         />
         <details className="strategy-brief-details">
           <summary>查看依据</summary>
+          <SectionNavigation />
           <VrpOverview freshness={freshness} report={report} />
           <MarketBrief
             candidates={candidates}

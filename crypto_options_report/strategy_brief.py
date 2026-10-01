@@ -399,6 +399,8 @@ def _prepare_candidate(
             kill_conditions,
             _settlement_currency(candidate, legs),
             costs,
+            analysis_run_id=analysis_run_id,
+            evaluated_at=generated_at,
         ),
         "dte_days": expected_scope["dte_days"],
         "economics": {
@@ -931,12 +933,28 @@ def _copy_recipe(
     kill_conditions: Sequence[str],
     currency: str,
     costs: Mapping[str, float],
+    *,
+    analysis_run_id: str,
+    evaluated_at: datetime,
 ) -> str:
     label = STRUCTURE_LABELS[structure_type]
-    lines = [f"STRATEGY: {label}"]
+    lines = [
+        "RESEARCH_ONLY / MANUAL REVIEW REQUIRED",
+        "STATUS: WATCH / execution_allowed=false",
+        f"ANALYSIS RUN: {analysis_run_id}",
+        f"EVALUATED AT: {_format_timestamp(evaluated_at)}",
+        f"STRATEGY: {label}",
+        f"CONTRACT EXPIRY: {legs[0]['expiry_date']}",
+    ]
     for leg in legs:
         prefix = "SELL" if leg["side"] == "SELL" else "BUY "
         lines.append(f"{prefix} 1 {leg['instrument_name']}")
+        lines.append(
+            f"LEG QUOTE: {leg['instrument_name']} / "
+            f"BID {_format_quote(leg['bid'])} / ASK {_format_quote(leg['ask'])} / "
+            f"{leg['premium_currency']} ({leg['premium_unit']}) / "
+            f"OBSERVED AT {leg['observed_at']}"
+        )
     lines.append(f"MIN NET CREDIT: {_format_amount(minimum_net_credit)} {currency}")
     lines.append(f"MODELLED LOSS BUDGET PER UNIT: {_format_amount(max_loss)} {currency}")
     lines.append(
@@ -949,12 +967,23 @@ def _copy_recipe(
     lines.append("DELIVERY FEE UPPER BOUND: UNVERIFIED; ACTUAL LOSS MAY EXCEED BUDGET")
     lines.append(f"VALID UNTIL: {_format_timestamp(valid_until)}")
     lines.append(f"CANCEL IF: {'; '.join(kill_conditions)}; frozen costs or quoted prices change")
-    lines.append("RESEARCH_ONLY / MANUAL REVIEW REQUIRED")
+    lines.append(
+        "RECHECK: Obtain fresh positive, synchronized two-sided quotes and re-evaluate "
+        "all evidence and frozen costs before any further review; do not reuse after VALID UNTIL. "
+        "This record is not an order or execution authorization."
+    )
     return "\n".join(lines)
 
 
 def _format_amount(value: float) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _format_quote(value: float) -> str:
+    # Quotes are source evidence; preserve their precision rather than apply
+    # the six-decimal rounding used for modelled cost amounts.
+    text = str(value)
+    return text[:-2] if text.endswith(".0") else text
 
 
 def _recommendation_id(strategy: Mapping[str, Any]) -> str:

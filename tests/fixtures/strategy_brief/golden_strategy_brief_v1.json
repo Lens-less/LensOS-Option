@@ -1,7 +1,7 @@
 {
   "action": "WATCH",
   "analysis_run_id": "analysis:brief-contract",
-  "brief_id": "brief:8bbda8d3b0016cc2479d14beae274d09bba51bf35ac8d1f6d0ba4b8e8c371c6d",
+  "brief_id": "brief:7b32f06bdcb8b7c9ce0fb7ba7d2eb130f193fe0f00a0ba06179b831ba72c8c9c",
   "evidence_summary": {
     "as_of": "2026-08-30T14:30:05Z",
     "candidate_count": 2,
@@ -72,7 +72,7 @@
   "strategies": [
     {
       "as_of": "2026-08-30T14:30:02Z",
-      "copy_recipe": "STRATEGY: Bear Call Credit Spread\nSELL 1 BTC-25SEP26-128000-C\nBUY  1 BTC-25SEP26-132000-C\nMIN NET CREDIT: 298 USD\nMODELLED LOSS BUDGET PER UNIT: 3742 USD\nFROZEN COSTS: ENTRY FEES 72 USD / SLIPPAGE 20 USD / LEGGING 10 USD / SETTLEMENT RESERVE 40 USD\nDELIVERY FEE UPPER BOUND: UNVERIFIED; ACTUAL LOSS MAY EXCEED BUDGET\nVALID UNTIL: 2026-08-30T14:34:55Z\nCANCEL IF: 任一腿报价过期或不同步; 扣除成本后期望收益不再为正; frozen costs or quoted prices change\nRESEARCH_ONLY / MANUAL REVIEW REQUIRED",
+      "copy_recipe": "RESEARCH_ONLY / MANUAL REVIEW REQUIRED\nSTATUS: WATCH / execution_allowed=false\nANALYSIS RUN: analysis:brief-contract\nEVALUATED AT: 2026-08-30T14:30:05Z\nSTRATEGY: Bear Call Credit Spread\nCONTRACT EXPIRY: 2026-09-25\nSELL 1 BTC-25SEP26-128000-C\nLEG QUOTE: BTC-25SEP26-128000-C / BID 1200 / ASK 1250 / USD (quote_currency) / OBSERVED AT 2026-08-30T14:30:01Z\nBUY  1 BTC-25SEP26-132000-C\nLEG QUOTE: BTC-25SEP26-132000-C / BID 700 / ASK 800 / USD (quote_currency) / OBSERVED AT 2026-08-30T14:30:02Z\nMIN NET CREDIT: 298 USD\nMODELLED LOSS BUDGET PER UNIT: 3742 USD\nFROZEN COSTS: ENTRY FEES 72 USD / SLIPPAGE 20 USD / LEGGING 10 USD / SETTLEMENT RESERVE 40 USD\nDELIVERY FEE UPPER BOUND: UNVERIFIED; ACTUAL LOSS MAY EXCEED BUDGET\nVALID UNTIL: 2026-08-30T14:34:55Z\nCANCEL IF: 任一腿报价过期或不同步; 扣除成本后期望收益不再为正; frozen costs or quoted prices change\nRECHECK: Obtain fresh positive, synchronized two-sided quotes and re-evaluate all evidence and frozen costs before any further review; do not reuse after VALID UNTIL. This record is not an order or execution authorization.",
       "dte_days": 26.0,
       "economics": {
         "absolute_ev_status": "VALIDATED",
@@ -184,7 +184,7 @@
     },
     {
       "as_of": "2026-08-30T14:30:02Z",
-      "copy_recipe": "STRATEGY: Iron Condor\nSELL 1 BTC-25SEP26-130000-C\nSELL 1 BTC-25SEP26-110000-P\nBUY  1 BTC-25SEP26-135000-C\nBUY  1 BTC-25SEP26-105000-P\nMIN NET CREDIT: 346 USD\nMODELLED LOSS BUDGET PER UNIT: 4734 USD\nFROZEN COSTS: ENTRY FEES 144 USD / SLIPPAGE 40 USD / LEGGING 20 USD / SETTLEMENT RESERVE 80 USD\nDELIVERY FEE UPPER BOUND: UNVERIFIED; ACTUAL LOSS MAY EXCEED BUDGET\nVALID UNTIL: 2026-08-30T14:34:55Z\nCANCEL IF: 任一腿报价过期或不同步; 扣除成本后期望收益不再为正; frozen costs or quoted prices change\nRESEARCH_ONLY / MANUAL REVIEW REQUIRED",
+      "copy_recipe": "RESEARCH_ONLY / MANUAL REVIEW REQUIRED\nSTATUS: WATCH / execution_allowed=false\nANALYSIS RUN: analysis:brief-contract\nEVALUATED AT: 2026-08-30T14:30:05Z\nSTRATEGY: Iron Condor\nCONTRACT EXPIRY: 2026-09-25\nSELL 1 BTC-25SEP26-130000-C\nLEG QUOTE: BTC-25SEP26-130000-C / BID 1000 / ASK 1100 / USD (quote_currency) / OBSERVED AT 2026-08-30T14:30:01Z\nSELL 1 BTC-25SEP26-110000-P\nLEG QUOTE: BTC-25SEP26-110000-P / BID 800 / ASK 900 / USD (quote_currency) / OBSERVED AT 2026-08-30T14:30:01Z\nBUY  1 BTC-25SEP26-135000-C\nLEG QUOTE: BTC-25SEP26-135000-C / BID 650 / ASK 700 / USD (quote_currency) / OBSERVED AT 2026-08-30T14:30:02Z\nBUY  1 BTC-25SEP26-105000-P\nLEG QUOTE: BTC-25SEP26-105000-P / BID 500 / ASK 550 / USD (quote_currency) / OBSERVED AT 2026-08-30T14:30:02Z\nMIN NET CREDIT: 346 USD\nMODELLED LOSS BUDGET PER UNIT: 4734 USD\nFROZEN COSTS: ENTRY FEES 144 USD / SLIPPAGE 40 USD / LEGGING 20 USD / SETTLEMENT RESERVE 80 USD\nDELIVERY FEE UPPER BOUND: UNVERIFIED; ACTUAL LOSS MAY EXCEED BUDGET\nVALID UNTIL: 2026-08-30T14:34:55Z\nCANCEL IF: 任一腿报价过期或不同步; 扣除成本后期望收益不再为正; frozen costs or quoted prices change\nRECHECK: Obtain fresh positive, synchronized two-sided quotes and re-evaluate all evidence and frozen costs before any further review; do not reuse after VALID UNTIL. This record is not an order or execution authorization.",
       "dte_days": 26.0,
       "economics": {
         "absolute_ev_status": "VALIDATED",
