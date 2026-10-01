@@ -91,7 +91,7 @@ def test_current_start_stays_loopback_and_waits_for_a_browser_request() -> None:
     assert runtime.paper_ledger_path is None
     public_fetch.assert_not_called()
     server.server_close.assert_called_once_with()
-    assert "/index.html?view=evidence" in stdout.getvalue()
+    assert "/index.html?view=desk&mode=live" in stdout.getvalue()
     assert "Deribit public data" in stdout.getvalue()
     assert "execution_allowed=false" in stdout.getvalue()
 

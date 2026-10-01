@@ -1,43 +1,33 @@
-# LensOS Option · Options Decision Research Platform
+# LensOS Option · Options Decision Desk
 
-English · [中文](README.md) · [Documentation](docs/README.md) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.en.md)
+English · [中文](README.md) · [User guide](docs/decision-desk.md) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.en.md)
 
 [![CI](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml/badge.svg)](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Lens-less/LensOS-Option)](https://github.com/Lens-less/LensOS-Option/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-A decision research platform for BTC options. Start with public Deribit data,
-understand market conditions, compare finite-risk structures, and inspect costs,
-risk, and evidence. One command opens the local platform: learn a structure,
-read public quotes, then copy a reviewable research conclusion. The brief presents
-up to three auditable cards or an explicit no-trade result.
+A local research desk for Deribit BTC / ETH **linear USDC options**. Discover
+candidates, compare them under shared assumptions, then retain an observation
+for recheck. Every result identifies exact legs, bid/ask quotes, units, times,
+and screening reasons.
 
-- Cards identify exact legs, bid/ask quotes and units, expiry, minimum net credit, itemized costs, modeled loss budgets, and cancellation conditions.
-- Cards remain at most `WATCH`: bounded expiry payoff does not establish an absolute loss cap including delivery fees.
-- Historical and forecast rates appear only after their respective `VALIDATED` and `CALIBRATED` gates pass.
-- Missing, stale, or invalid evidence blocks. No orders or position sizing; `execution_allowed=false` is permanent.
+- **Discover:** filter direction, expiry, and structure; inspect coverage, comparable candidates, and exclusions.
+- **Compare / Decide:** choose 2–3 candidates and compare payoff, costs, and boundaries under the same price, time, and IV scenario.
+- **Observe:** retain exact legs and assumptions in this browser, then recheck the same structure against new data.
 
-New here? Follow the [independent first-run guide](docs/guides/first-run-review.en.md); no accounts, keys, or funds are needed.
-For reviewable maintenance history and the limits of current adoption evidence, see [maintainer work and public value](docs/maintainer-impact.md).
+Generation and ranking are deterministic, not AI predictions or proof of positive
+EV. Expiry payoff, modeled stress, and actual probabilities stay separate. A
+raw option payoff bound excludes trading and dynamic delivery fees; it is not a total loss cap.
+No accounts, orders, or position-size recommendations; `execution_allowed=false`
+is permanent.
 
 ## Demo
 
-The current source includes a three-step **offline learning tour**: choose an
-example, understand its risk, and inspect the evidence. Drag a fictional normalized
-expiry price to explore a linear payoff. Teaching values never enter research
-JSON, generate a success rate, or acquire research eligibility.
-
-“**进入研究简报**” (Open research brief) uses the source chosen at startup.
-Default offline startup reads the bundled redacted historical snapshot. Its
-actual blocking state and evaluation time remain visible; a historical pass does
-not imply current eligibility. Primary navigation keeps the learning tour and
-research brief; candidates, series, and ranking validation sit under “深入研究”
-(Deeper research).
-
-![The v0.5.0 offline learning tour: choose a finite-risk structure](docs/assets/lensos-option-demo.png)
-
-_The image shows the v0.5.0 installed package's offline learning page. Fictional
-points explain structure; they do not represent current quotes or research eligibility._
+Default startup provides a clearly labeled **offline synthetic demo**. Fictional
+BTC / ETH USDC contracts and quotes let you try discovery, comparison, and
+observation. They are not current Deribit data, historical results, or trusted
+evidence. The old learning tour and `research_report.v1` evidence interface remain
+available through `?view=legacy`; the new contract is `decision_desk.v1`.
 
 ## Quickstart
 
@@ -50,105 +40,91 @@ python -m pip install .
 crypto-options-report start
 ```
 
-The [offline learning tour](http://127.0.0.1:8000/index.html?view=demo) opens
-automatically; the terminal also prints its address. Once installed, the demo
-needs no third-party runtime dependencies, Node.js, keys, network, or captured
-output. It binds to `127.0.0.1`; `Ctrl+C` stops it. Use `--port 8001` if the port
-is busy, or `--no-open-browser` to open the URL yourself.
+The [local desk](http://127.0.0.1:8000/index.html) opens automatically; the terminal
+also prints its address. The offline demo needs no Node.js, network, account, or
+keys. Python has zero third-party runtime dependencies. The server binds only
+to `127.0.0.1`; `Ctrl+C` stops it. Add `--port 8001` if occupied, or
+`--no-open-browser` to open the URL yourself.
 
-Stop the demo, then choose a research input:
+Choose “读取公开行情” in the desk to switch; only that step requires a network,
+with no server restart. Alternatively, stop the running service and start directly
+in public-data mode:
 
 ```powershell
-# Current public data: network required, no account or keys
 crypto-options-report start --current
+```
 
-# Historical replay: reads your local snapshot only
+Network access is required. A full instrument registry and chain summary support
+the scan; only a bounded shortlist receives deeper bid/ask quotes. Scan coverage
+and deep-quote coverage are reported separately. Current mode identifies the
+source, not a guarantee of comparable structures or validated edge. Valid
+snapshots may be reused; check the actual data cutoff after refresh.
+
+Replay an existing legacy-report capture through the compatibility interface:
+
+```powershell
 crypto-options-report start --snapshot artifacts/snapshots/btc-chain.json
 ```
 
-In current mode, “更新公开行情” (Update public quotes) uses the existing public
-Deribit source. A still-valid analysis is reused; expired evidence triggers a
-new fetch. In historical mode, “重新读取快照” (Reread snapshot) only reads local
-files and evaluates at capture time; it cannot restore current eligibility.
-The modes are mutually exclusive. Add `--underlying-history <path>` to use local
-underlying history. A successful load does not pass evidence gates: missing or
-expired quotes, costs, and model evidence still block.
+`--snapshot` opens the old report interface and reads its original market-snapshot
+format. It is not a historical mode for the new desk and does not read
+`desk_market.v1`. Refresh only rereads local inputs; it cannot collect current
+data or promote legacy gates. `--current` and `--snapshot` are mutually exclusive.
+Existing `crypto-options-report demo`, capture CLI, and HTTP API remain compatible;
+see the [legacy workflow](docs/guides/decision-workflow.en.md).
 
-For an isolated wheel installation, see the [v0.5.0 upgrade guide](docs/releases/v0.5.0.md#安装与升级).
-Published downloads are the assets actually listed on
-[GitHub Releases](https://github.com/Lens-less/LensOS-Option/releases).
-
-Follow the [complete decision workflow](docs/guides/decision-workflow.en.md) to
-read the brief, understand rejection reasons, and use “复制研究复核” (Copy research
-review). The record includes quotes, source, analysis identity, and validity;
-it retains `WATCH` and the execution prohibition. Obtain fresh data before
-reviewing it again. Without a strategy card, “复制拒绝原因” (Copy rejection reasons)
-retains the `NO_TRADE` conclusion and evidence identities.
-Existing `crypto-options-report demo`, capture CLI, and HTTP API workflows remain compatible.
-
-![Local research brief: source mode, rejection and review copy](docs/assets/lensos-option-research-brief.png)
-
-_The source build shows a bundled historical snapshot with real blocking; this is
-not current market data or strategy approval. The [narrow layout](docs/assets/lensos-option-research-brief-mobile.png)
-preserves the same core journey._
+Follow the [desk guide](docs/decision-desk.md) for discovery, shared scenarios,
+and exact-leg observations. Browser observations do not monitor automatically
+or record trading P&L; copied research does not create an order. Current usage
+is local. No hosted service address is provided or promised here.
 
 ## Verification
 
-After setting up the development environment, run from the repository root:
+After setting up development dependencies, run from the repository root:
 
 ```powershell
 python tools/verify.py
 ```
 
-This checks Python, Web, public and extension artifacts, then launches a browser
-journey from the final wheel. An installed Chrome, Chromium, or Edge is required;
-`BROWSER_PATH` selects it. `--quick` explicitly skips builds and the browser;
-`--list` lists steps. See [Contributing](CONTRIBUTING.md#环境准备) for setup.
+It checks Python, Web, static and extension builds, and the installed browser
+journey. An installed Chrome, Chromium, or Edge is required; `BROWSER_PATH`
+selects it. `--quick` skips builds and browser checks; `--list` lists steps.
+See [Contributing](CONTRIBUTING.md#环境准备) for setup and build synchronization.
+Local success does not replace platform CI or evidence about live markets.
 
-Reproduce a fixed research case without network access:
+The old report's fixed offline reproduction remains available:
 
 ```powershell
 python tools/reproduce_research.py --check
 ```
 
-It reports actual trust, gates, reason codes, missing evidence, and reproducible
-hashes. **A matching replay does not establish trusted data or strategy performance.**
-See the [offline case guide](docs/guides/reproducible-case.md) for saving and comparing output.
+It checks legacy inputs, gates, and identities. It does not validate the new
+desk's market edge or demonstrate profitability.
 
-## Guides
+## Guides And Boundaries
 
 | Your task | Start here |
 | --- | --- |
-| Move from learning to public-data research and a saved record | [Complete decision workflow](docs/guides/decision-workflow.en.md) |
-| Understand relative value, EV, risk, and sample size | [Research workflows](docs/guides/research-workflows.en.md) |
-| Use the CLI, HTTP API, or Chrome panel | [Local tools](docs/guides/local-tools.en.md) · [API reference](docs/api-reference.md) |
-| Reproduce the packaged case | [Inputs, gates, and replay](docs/guides/reproducible-case.md) |
-| Configure capture, scheduling, and publication | [Operator guide](docs/guides/operator-guide.en.md) |
-| Make a bounded first contribution | [Starter tasks](CONTRIBUTING.md#首次贡献任务) |
-| Understand modules and trust boundaries | [Architecture](docs/architecture.md) · [Current design](DESIGN.md#1-current-product-contract) |
-| Check release and security policies | [v0.5.0 notes](docs/releases/v0.5.0.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md) |
+| Complete Discover → Compare / Decide → Observe | [Desk guide](docs/decision-desk.md) |
+| Understand the new contract and compatibility | [Current design](DESIGN.md#1-current-product-contract) |
+| Inspect legacy evidence and model gates | [Legacy workflow](docs/guides/decision-workflow.en.md) · [Offline case](docs/guides/reproducible-case.md) |
+| Use existing capture CLI, API, and extension | [Local tools](docs/guides/local-tools.en.md) · [API reference](docs/api-reference.md) |
+| Develop and verify changes | [Contributing](CONTRIBUTING.md) · [Architecture](docs/architecture.md) |
+| Check existing releases and security policy | [Release notes](docs/releases/v0.5.0.md) · [Security](SECURITY.md) |
 
-## Operator Lane (Windows-only, optional)
+This README describes current source; published assets are those actually listed
+on [GitHub Releases](https://github.com/Lens-less/LensOS-Option/releases). Code
+uses [Apache-2.0](LICENSE). The repository's [data license](LICENSE-DATA) does not
+replace provider permissions. Deribit limits market and derived data to personal
+use; other publication or forwarding needs prior written approval. Public code
+does not grant data redistribution rights. [Deribit Terms §2.10](https://support.deribit.com/hc/en-us/articles/25944532191645-Deribit-Exchange-Membership-Terms-Deribit-FZE)
 
-Continuous capture and scheduling have moved to the [operator guide](docs/guides/operator-guide.en.md).
-They are not newcomer prerequisites. Process success does not imply usable
-validation observations; a public instance must check evidence availability separately.
-
-## Version and public release
-
-This source version is v0.5.0. See the [release notes](docs/releases/v0.5.0.md) for
-changes and upgrades, and the [delivery record](docs/product/2026-09-08-open-source-decision-platform.md)
-for this iteration's verification evidence. Published versions and assets are listed on
-[GitHub Releases](https://github.com/Lens-less/LensOS-Option/releases).
-Code uses [Apache-2.0](LICENSE); public data artifacts use [CC BY 4.0](LICENSE-DATA).
-Research publication does not change the permanent `NO-GO` for execution.
-
-## Safety Boundary
-
-Missing evidence never becomes a pass; teaching values never become real research.
-There is no live-order adapter, order template, or position sizing. Historical
-protocols and model state machines do not imply sufficient real cohorts or calibrated rates.
-Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
+Comparable candidates in `decision_desk.v1` do not promote legacy
+`strategy_brief.v1`, `EntryAdmissionDecision`, historical `VALIDATED`, or forecast
+`CALIBRATED` gates. Missing, stale, or crossed quotes cannot produce current
+comparability. No mixed inverse payoff assumptions, account data, order templates,
+live execution, or paper/manual execution controls. Report vulnerabilities
+privately through [SECURITY.md](SECURITY.md).
 
 <a id="one-screen-strategy-brief"></a>
 <a id="two-ways-to-use-it"></a>
@@ -170,5 +146,3 @@ Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 <a id="development"></a>
 <a id="project-map"></a>
 <a id="license"></a>
-
-Previous sections now live in the guides above: [research](docs/guides/research-workflows.en.md), [capture and deployment](docs/guides/operator-guide.en.md), [CLI / API / extension](docs/guides/local-tools.en.md), and [development](CONTRIBUTING.md).

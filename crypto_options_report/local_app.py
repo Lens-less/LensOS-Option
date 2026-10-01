@@ -6,14 +6,16 @@ import sys
 import webbrowser
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import TextIO
 
 from .api import ResearchReportHandler, RuntimeConfig
 from .demo import DEMO_HOST, DemoHTTPServer, _is_address_in_use, demo_runtime
 
-RESEARCH_URL_PATH = "/index.html?view=evidence"
-DEMO_URL_PATH = "/index.html?view=demo"
+RESEARCH_URL_PATH = "/index.html?view=desk&mode=live"
+DEMO_URL_PATH = "/index.html?view=desk&mode=demo"
+HISTORY_URL_PATH = "/index.html?view=legacy"
 
 
 @contextmanager
@@ -30,7 +32,7 @@ def local_runtime(
         raise ValueError("--underlying-history requires --current or --snapshot")
     if not current and not snapshot:
         with demo_runtime() as runtime:
-            yield runtime
+            yield replace(runtime, allow_desk_live_fetch=True)
         return
 
     yield RuntimeConfig(
@@ -38,6 +40,7 @@ def local_runtime(
         snapshot_fixture=_local_input_path(snapshot),
         underlying_history_fixture=_local_input_path(underlying_history),
         allow_live_fetch=current,
+        allow_desk_live_fetch=current,
         replay=bool(snapshot),
         access_log=False,
     ).validate()
@@ -80,7 +83,7 @@ def run_start(
             )
             return 1
 
-        path = DEMO_URL_PATH if runtime.demo_mode else RESEARCH_URL_PATH
+        path = DEMO_URL_PATH if runtime.demo_mode else HISTORY_URL_PATH if runtime.replay else RESEARCH_URL_PATH
         url = f"http://{DEMO_HOST}:{server.server_port}{path}"
         print(f"LensOS Option ready at {url}", file=stdout, flush=True)
         print(_source_notice(runtime), file=stdout, flush=True)
@@ -104,8 +107,9 @@ def run_start(
 def _source_notice(runtime: RuntimeConfig) -> str:
     if runtime.demo_mode:
         return (
-            "Mode: offline demo. Bundled teaching and snapshot data; no network. "
-            "Use --snapshot <path> for recorded research or --current for public market data."
+            "Mode: synthetic decision demo. No collection until you select current data. "
+            "The current-data button uses bounded Deribit public reads; no account or credentials. "
+            "Use --snapshot <path> for the legacy recorded report."
         )
     if runtime.replay:
         return (

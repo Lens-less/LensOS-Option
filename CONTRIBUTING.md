@@ -1,25 +1,32 @@
 # 贡献指南
 
-从 [README 的快速开始](README.md#快速开始) 体验离线学习导览，再阅读下面的产品边界和
-检查方法。当前交互契约在 [DESIGN.md](DESIGN.md)，研究数据合同在
-[策略简报规格](docs/product/2026-08-30-actionable-strategy-brief-v0.2-v0.4-spec.md)。
-完整用户流程见 [决策研究指南](docs/guides/decision-workflow.md)，当前版本的验收证据见
-[v0.5.0 交付记录](docs/product/2026-09-08-open-source-decision-platform.md)。
-旧策略简报规格是基线；v0.5.0 的数字成本、风险口径与工件收紧以
-[升级说明](docs/releases/v0.5.0.md#v040-用户必须重新生成报告) 为准。
+从 [README 的快速开始](README.md#快速开始) 体验离线合成研究台，再阅读下面的产品边界和
+检查方法。新默认流程是发现 → 对比 / 决定 → 观察，当前合同在 [DESIGN.md](DESIGN.md)，
+用户流程见 [研究台指南](docs/decision-desk.md)。`decision_desk.v1` 与旧报告的证据准入分开。
+旧 `research_report.v1`、`strategy_brief.v1` 与 `EntryAdmissionDecision` 保持兼容；其合同见
+[策略简报规格](docs/product/2026-08-30-actionable-strategy-brief-v0.2-v0.4-spec.md) 和
+[升级说明](docs/releases/v0.5.0.md#v040-用户必须重新生成报告)。既有
+[v0.5.0 交付记录](docs/product/2026-09-08-open-source-decision-platform.md) 不是新研究台的验收证据。
 
 ## 设计红线
 
-这是一个**入场前研究**工具，不是交易系统。
+这是一个**期权研究**工具。可比较真实市场结构并保存观察；研究结果不产生交易授权。
 
-- 可信输出上限是不可变的 `EntryAdmissionDecision`，且恒有 `execution_allowed=false`。
+- 新 `decision_desk.v1` 候选按公开的确定性规则生成和排序，不能声称 AI 优势、正 EV 或实证胜率。
+- 新研究可比状态不提升旧信任、历史或预测门禁；旧可信输出上限仍为不可变的 `EntryAdmissionDecision`。
+- 新旧合同恒有 `execution_allowed=false`；原有 `strategy_brief.v1` 卡片最高为 `WATCH`。
 - 仓库中**没有**实盘下单适配器，这是刻意的设计，不是待办事项。
 - 不接受新增：下单路径、订单模板、手数/仓位 sizing 输出、paper/manual 下单控件。
-- 所有门禁都是 fail-closed：证据缺失时必须降级为「阻断」，不得默认放行。
-- 离线教学示例独立于真实研究报告；虚构价格不能进入研究 JSON 或成为已验证证据。
+- 当前候选缺少有效双边报价、明确单位或必要费用时不能标成可比；缺失证据不得晋升可信准入。
+- 本轮只支持 BTC / ETH `LINEAR_USDC`；inverse 合约必须明确排除，不混用币本位和线性收益公式。
+- 分开原始期权收益边界、入场费与动态交割费；情景收益不能写成发生概率或绝对含费损失上限。
+- 离线合成数据只存在于明确标注的 demo 模式；不得成为 live 来源、真实历史或旧报告的可信证据。
+- 观察仅存当前浏览器，精确腿重核不自动替换结构；不读取账户、凭证或私有证据目录。
 
-如果你认为某个门禁过严，请先开 issue 讨论，并在其中给出支持放宽的证据，不要直接
-在 PR 中改门禁。
+研究筛选可以改进，但不能绕过旧准入门禁。放宽可信门禁需先说明证据并讨论合同变更。
+公开代码不授予行情再分发权；Deribit 行情及派生数据的非个人发布需事先书面许可。
+公开截图、fixture 和演示使用合成或已有授权的输入，不提交原始行情、凭证或私有资料。
+[Deribit 条款 §2.10](https://support.deribit.com/hc/en-us/articles/25944532191645-Deribit-Exchange-Membership-Terms-Deribit-FZE)
 
 ## 环境准备
 
@@ -111,8 +118,10 @@ CI 通过 `git diff --exit-code -- crypto_options_report/static/evidence` 校验
 
 不要在测试中访问真实的 Deribit 接口。
 
-界面变更还应覆盖用户看到的状态：过期后不再显示当前资格，历史判定带评估时间，加载失败
-撤下旧结果且重试能恢复。教学导览验证交互与收益示例，真实报告验证证据门禁，两者分开断言。
+界面变更还应覆盖用户看到的状态：过期后不再显示当前可比状态，历史判定带评估时间，加载失败
+撤下旧结果且重试能恢复。新研究台验证完整扫描与深报价覆盖的区分、候选确定性、共同情景假设、
+精确腿重核及浏览器观察。到期收益、压力模型、实证概率分别断言；合成 demo 与 live/replay 来源
+不能混淆。旧学习导览和报告的证据门禁仍须通过既有检查。
 
 ## 代码风格
 
@@ -157,9 +166,17 @@ CI 通过 `git diff --exit-code -- crypto_options_report/static/evidence` 校验
 
 ## English contributor summary
 
-This is a pre-entry research tool, not a trading system. Contributions must
-preserve `execution_allowed=false`, keep every gate fail-closed, and must not add
-order placement, position sizing, or paper/manual execution controls.
+The default product is a BTC / ETH linear USDC research desk: Discover → Compare /
+Decide → Observe. Deterministic comparable candidates in `decision_desk.v1` do not
+promote legacy trust, historical, forecast, or entry-admission gates. Every
+contract retains `execution_allowed=false`. Do not add accounts, credentials,
+orders, position sizing, or paper/manual execution controls.
+
+Exclude inverse contracts explicitly. Distinguish raw option payoff bounds from
+fees and dynamic settlement costs, and hypothetical scenarios from probabilities.
+Browser observations retain exact legs and assumptions; a recheck cannot silently
+replace instruments. No AI-edge, positive-EV, or empirical-performance claim is
+created by deterministic ranking.
 
 Use Python 3.12+ and a Node version accepted by `web/package.json`. After installing
 the development dependencies and running `npm --prefix web ci`, run
@@ -187,10 +204,13 @@ Tests must use deterministic fixtures and explicit clocks; do not call the live
 Deribit API. Changes to `web/` must include the synchronized
 `crypto_options_report/static/evidence/` build output.
 
-Keep fictional teaching examples outside research JSON and evidence promotion.
-Test stale-state labeling and recovery after failed loads at the visible UI
-boundary. Update the current product or architecture documentation when changing
-those contracts, while identifying compatibility behavior that still exists.
+Keep synthetic data explicitly in demo mode, outside live provenance and legacy
+evidence promotion. Test scan/deep-quote coverage, shared comparison assumptions,
+exact-leg recheck, stale states, and failed-load recovery at the visible boundary.
+Preserve legacy teaching and evidence checks. Update product documentation when
+changing contracts and identify compatibility behavior. Public screenshots and
+fixtures need synthetic or independently authorized data; a repository license
+does not override Deribit's personal-use market-data terms.
 
 Keep each pull request focused, explain why the change is needed, and report
 security or conduct issues privately through GitHub Security Advisories rather

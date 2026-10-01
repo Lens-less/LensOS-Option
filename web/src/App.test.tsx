@@ -1500,7 +1500,7 @@ describe("EvidenceConsole", () => {
     });
     expect(within(navigation).getByRole("link", { name: "① 研究简报" })).toHaveAttribute(
       "href",
-      "./index.html",
+      "./index.html?view=legacy",
     );
     expect(within(navigation).getByRole("link", { name: "② 波动时序" })).toHaveAttribute(
       "href",
