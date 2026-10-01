@@ -15,4 +15,4 @@ mypy_extensions==1.1.0
 typing_extensions==4.15.0
 pathspec==1.1.1
 librt==0.15.0
-ast-serialize==0.9.0
+ast-serialize==0.11.2
