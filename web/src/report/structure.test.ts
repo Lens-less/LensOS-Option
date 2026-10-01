@@ -21,6 +21,41 @@ function mutated(path: string, value: unknown): unknown {
 }
 
 describe("validateResearchReport structural boundary", () => {
+  const orderBookScope = {
+    kind: "research_sample",
+    depth: 5,
+    sampled_instrument_count: 1,
+    selected_instrument_count: 88,
+    instrument_names: ["BTC-9OCT26-92000-C"],
+  };
+
+  it.each([orderBookScope, "research_sample", null])("preserves the existing order-book scope %j", (scope) => {
+    const report = mutated("data_status.feed_coverage.feeds.order_book.scope", scope);
+    expect(validateResearchReport(report)).toBe(report);
+    expect((report as typeof safeResearchReport).data_status?.feed_coverage?.feeds?.order_book?.scope).toEqual(scope);
+  });
+
+  it.each([
+    { ...orderBookScope, kind: "full_chain" },
+    { ...orderBookScope, depth: 0 },
+    { ...orderBookScope, depth: 1.5 },
+    { ...orderBookScope, depth: Infinity },
+    { ...orderBookScope, sampled_instrument_count: 0 },
+    { ...orderBookScope, selected_instrument_count: 0 },
+    { ...orderBookScope, sampled_instrument_count: 2 },
+    { ...orderBookScope, sampled_instrument_count: 2, selected_instrument_count: 1, instrument_names: ["BTC-9OCT26-92000-C", "BTC-9OCT26-93000-C"] },
+    { ...orderBookScope, instrument_names: [""] },
+    { ...orderBookScope, instrument_names: [17] },
+    { ...orderBookScope, instrument_names: undefined },
+    { ...orderBookScope, sampled_instrument_count: 2, instrument_names: ["BTC-9OCT26-92000-C", "BTC-9OCT26-92000-C"] },
+  ])("rejects malformed order-book scope %j", (scope) => {
+    expect(() => validateResearchReport(mutated("data_status.feed_coverage.feeds.order_book.scope", scope))).toThrow(/order_book.scope/);
+  });
+
+  it("keeps object scopes limited to order-book evidence", () => {
+    expect(() => validateResearchReport(mutated("data_status.feed_coverage.feeds.events.scope", orderBookScope))).toThrow(/events.scope/);
+  });
+
   it.each([
     ["data_status", []],
     ["data_status.source", {}],
