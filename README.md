@@ -1,107 +1,109 @@
-# LensOS Option · 期权决策研究平台
+# LensOS Option · 期权决策研究台
 
-[English](README.en.md) · [文档](docs/README.md) · [贡献](CONTRIBUTING.md) · [变更记录](CHANGELOG.md)
+[English](README.en.md) · [使用指南](docs/decision-desk.md) · [贡献](CONTRIBUTING.md) · [变更记录](CHANGELOG.md)
 
 [![CI](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml/badge.svg)](https://github.com/Lens-less/LensOS-Option/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Lens-less/LensOS-Option)](https://github.com/Lens-less/LensOS-Option/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-面向 BTC 期权研究者的决策平台：从 Deribit 公开行情出发，解释市场、比较有限风险结构，
-再逐项复核成本、风险与证据。首页用一屏策略简报给出至多三张可复核的策略卡；证据不足时
-明确显示“今日暂无可靠策略”。你可以继续追到候选、历史与证据来源，并保存可复现的研究记录。
+面向 Deribit BTC / ETH **USDC 线性期权**的本地研究台：发现候选，在同一组假设下对比，
+再保存观察与复核。每个结果都能追到精确合约、双边报价、单位、时间和筛选原因。
 
-- 策略卡列明精确合约、到期日、最低净权利金、分项成本、模型损失预算和取消条件。
-- 卡片最高为 `WATCH`：结构到期收益有界不代表实际含交割费损失有绝对上限；费用上界未经验证。
-- 历史与预测胜率只有在各自证据达到 `VALIDATED` / `CALIBRATED` 后才显示。
-- 缺失、过期或校验失败一律阻断；不下单、不推荐手数，`execution_allowed=false` 永久成立。
+- **发现**：按方向、到期和结构筛选；显示扫描覆盖、可比候选与排除原因。
+- **对比 / 决定**：选择 2–3 个候选，使用共同的价格、时间与 IV 情景比较收益图、费用和边界。
+- **观察**：将精确腿与研究假设保存在当前浏览器，重新取数时复核同一结构。
 
-首次体验请看 [安装包试用与反馈](docs/guides/first-run-review.md)；无需账户、密钥或资金。
-评估项目的维护与公开价值，请看 [证据说明](docs/maintainer-impact.md)，其中明确区分已有交付与尚未验证的采用度。
+候选由确定性规则产生和排序，不是 AI 预测或正 EV 证明。到期收益、模型压力情景与真实概率
+分开；原始期权收益边界不含手续费或动态交割费，不是最终损失上限。全过程仅研究，无账户连接、下单或
+手数建议，`execution_allowed=false` 恒成立。
 
 ## 演示
 
-当前源码内置三步**离线学习导览**：选择示例 → 理解风险 → 查看依据。虚构标准化价格和线性
-到期收益解释有限风险结构，拖动价格即可观察损益。教学数值不进入研究 JSON，不产生胜率或研究资格。
-
-“**查看真实快照**”进入包内脱敏快照的证据页。页面保留真实阻断和评估时刻；历史通过不代表当前
-可用。学习导览与研究结果分开，无需为了看懂产品先配置行情服务。
-
-![v0.5.0 离线学习导览：选择有限风险结构](docs/assets/lensos-option-demo.png)
-
-_图为 v0.5.0 安装包的离线教学页面；示例点数用于理解结构，不代表当前行情或策略资格。_
+默认启动提供明确标注的**离线合成演示**。用虚构的 BTC / ETH USDC 合约和报价体验
+发现、对比和观察；它们不是 Deribit 当前行情、历史实绩或可信证据。旧版学习导览与
+`research_report.v1` 证据界面保留在 `?view=legacy` 兼容入口，新研究合同为 `decision_desk.v1`。
 
 ## 快速开始
 
-需要 Python ≥ 3.12。首次获取公开源码：
+需要 Python ≥ 3.12。获取并安装公开源码：
 
 ```powershell
 git clone https://github.com/Lens-less/LensOS-Option.git
 cd LensOS-Option
 python -m pip install .
-crypto-options-report demo
+crypto-options-report start
 ```
 
-打开命令输出的
-[离线学习导览](http://127.0.0.1:8000/index.html?view=demo)。安装后的演示零第三方运行依赖，
-不需要 Node、密钥、网络或采集产物。服务只监听 `127.0.0.1`；`Ctrl+C` 退出，端口冲突会明确报错。
+默认自动打开[本地研究台](http://127.0.0.1:8000/index.html)，终端也会打印地址。离线演示不需要
+Node、网络、账户或密钥；Python 侧零第三方运行依赖。服务只监听 `127.0.0.1`。
+`Ctrl+C` 停止；端口冲突时加 `--port 8001`，不自动打开浏览器时加 `--no-open-browser`。
 
-需要隔离安装或使用 wheel 时，见 [v0.5.0 安装与升级](docs/releases/v0.5.0.md#安装与升级)。
-下载包以 [GitHub Releases](https://github.com/Lens-less/LensOS-Option/releases) 的实际资产为准。
+在研究台点击“读取公开行情”即可切换；这一步才需要网络，无需重启服务。
+也可停止当前服务后，直接启动公开行情模式：
 
-导览之后，按 [完成一次期权决策研究](docs/guides/decision-workflow.md) 采集公开数据、启动研究界面、
-阅读阻断与到期状态，并保存复核记录。此流程不需要先配置账户。
+```powershell
+crypto-options-report start --current
+```
+
+这需要网络。完整合约登记与全链摘要用于扫描，只有受限短名单进一步读取双边报价；页面
+分别显示扫描覆盖和深报价覆盖。“当前”描述数据来源，不保证有可比结构或已验证优势。
+有效快照可能复用；重新取数须以实际数据截止时间为准。
+
+已有旧报告采集文件，可在兼容界面回放：
+
+```powershell
+crypto-options-report start --snapshot artifacts/snapshots/btc-chain.json
+```
+
+`--snapshot` 打开旧版报告界面，读取原有市场快照格式；它不是新研究台的历史模式，
+也不读取 `desk_market.v1`。刷新只重读本地文件，不能取得当前行情或提升旧报告门禁。
+`--current` 与 `--snapshot` 不能同时使用。原有 `crypto-options-report demo`、采集 CLI
+与 HTTP API 保持兼容；旧报告见 [历史研究流程](docs/guides/decision-workflow.md)。
+
+按 [研究台使用指南](docs/decision-desk.md) 完成候选发现、共同情景对比和精确腿观察。
+浏览器观察不自动监控、不记交易盈亏；复制记录也不构成订单。当前使用方式为本地运行，
+这里不提供或承诺在线服务地址。
 
 ## 验证
 
-开发环境安装后，仓库根目录运行：
+配置开发环境后，在仓库根目录运行：
 
 ```powershell
 python tools/verify.py
 ```
 
-它验证 Python、Web、公开包和扩展产物，再从最终 wheel 启动浏览器流程。需要已安装的
-Chrome、Chromium 或 Edge，可用 `BROWSER_PATH` 指定。`--quick` 明确跳过构建和浏览器，
-`--list` 只列步骤；前置条件见 [贡献指南](CONTRIBUTING.md#环境准备)。
+它检查 Python、Web、静态包与扩展构建，并验证安装后浏览器流程。需要已安装的 Chrome、
+Chromium 或 Edge，可用 `BROWSER_PATH` 指定。`--quick` 跳过构建和浏览器；`--list` 只列步骤。
+环境与产物同步要求见 [贡献指南](CONTRIBUTING.md#环境准备)。本地通过不替代跨平台 CI 或真实行情证据。
 
-想先复核研究结果，运行无需网络的固定案例：
+旧报告的离线固定复核入口仍可使用：
 
 ```powershell
 python tools/reproduce_research.py --check
 ```
 
-输出实际 trust、门禁、原因码、证据缺口和可复核摘要；**复现成功不等于证据可信或策略有效**。
-保存与比较方法见 [离线研究案例](docs/guides/reproducible-case.md)。
+它复核旧合同的输入、门禁与标识；不验证新研究台的市场优势，也不证明盈利。
 
-## 专题入口
+## 文档与边界
 
 | 你要做什么 | 从这里开始 |
 | --- | --- |
-| 从学习导览走到真实数据研究与记录 | [完整决策研究流程](docs/guides/decision-workflow.md) |
-| 理解相对价值、EV、风险与样本量 | [研究方法与工作流](docs/guides/research-workflows.md) |
-| 使用 CLI、HTTP API 或 Chrome 侧栏 | [本地工具](docs/guides/local-tools.md) · [API 参考](docs/api-reference.md) |
-| 复核包内固定研究案例 | [输入、门禁与复现](docs/guides/reproducible-case.md) |
-| 配置采集、计划任务和静态发布 | [操作者指南](docs/guides/operator-guide.md) |
-| 贡献一个范围清楚的小改动 | [首次贡献任务](CONTRIBUTING.md#首次贡献任务) |
-| 了解模块和信任边界 | [架构](docs/architecture.md) · [当前设计](DESIGN.md#1-current-product-contract) |
-| 查阅版本和安全政策 | [v0.5.0 说明](docs/releases/v0.5.0.md) · [安全政策](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md) |
+| 完成发现 → 对比 / 决定 → 观察 | [研究台使用指南](docs/decision-desk.md) |
+| 了解新合同与兼容边界 | [当前设计](DESIGN.md#1-current-product-contract) |
+| 复核旧报告、证据与模型门禁 | [历史研究流程](docs/guides/decision-workflow.md) · [离线案例](docs/guides/reproducible-case.md) |
+| 使用既有采集 CLI、API 与扩展 | [本地工具](docs/guides/local-tools.md) · [API 参考](docs/api-reference.md) |
+| 参与开发与验收 | [贡献指南](CONTRIBUTING.md) · [架构](docs/architecture.md) |
+| 查阅既有版本和安全政策 | [发布说明](docs/releases/v0.5.0.md) · [安全政策](SECURITY.md) |
 
-## 操作者车道（Windows-only，可选）
+本 README 描述当前源码，下载版本以 [GitHub Releases](https://github.com/Lens-less/LensOS-Option/releases)
+的实际资产为准。代码采用 [Apache-2.0](LICENSE)；仓库的 [数据许可](LICENSE-DATA) 不替代数据提供者的授权。
+Deribit 将行情及派生数据限定为个人用途，其他发布或转发需事先书面许可；本工具的公开代码
+不授予行情再分发权。[Deribit 条款 §2.10](https://support.deribit.com/hc/en-us/articles/25944532191645-Deribit-Exchange-Membership-Terms-Deribit-FZE)
 
-采集、计划任务与静态发布已迁至 [操作者指南](docs/guides/operator-guide.md)，不属于首次使用
-前置条件。进程成功不等于产生了可用于验证的观测；公开实例需独立检查证据可用性。
-
-## 版本与公开发布
-
-本版源码为 v0.5.0；改动与升级方法见 [发布说明](docs/releases/v0.5.0.md)，本轮检查与交付证据见
-[验收记录](docs/product/2026-09-08-open-source-decision-platform.md)。已发布版本与下载资产以
-[GitHub Releases](https://github.com/Lens-less/LensOS-Option/releases) 为准。代码按 [Apache-2.0](LICENSE)，公开数据产物按
-[CC BY 4.0](LICENSE-DATA) 发布。研究发布与交易执行授权分开；后者永久 `NO-GO`。
-
-## 安全边界
-
-缺失证据不会变成通过；教学数据不会变成真实研究。系统不提供实盘适配器、订单模板或推荐手数。
-历史协议和模型状态机存在，不代表当前已有足够的真实 cohort 或已校准的胜率。
-漏洞请按 [SECURITY.md](SECURITY.md) 私下报告。
+`decision_desk.v1` 中的可比候选只是结构研究结果，不提升旧 `strategy_brief.v1`、
+`EntryAdmissionDecision`、历史 `VALIDATED` 或预测 `CALIBRATED` 门禁。
+缺失、过期或交叉报价不能生成当前可比结果；不支持 inverse 收益混算、账户资料、订单模板、
+实盘或 paper/manual 执行控件。漏洞请按 [SECURITY.md](SECURITY.md) 私下报告。
 
 <a id="一屏策略简报"></a>
 <a id="两种使用形态"></a>
@@ -123,5 +125,3 @@ python tools/reproduce_research.py --check
 <a id="开发"></a>
 <a id="项目地图"></a>
 <a id="许可"></a>
-
-旧章节已迁至上方专题入口：[研究方法](docs/guides/research-workflows.md)、[采集与部署](docs/guides/operator-guide.md)、[CLI / API / 扩展](docs/guides/local-tools.md)、[开发与模块](CONTRIBUTING.md)。

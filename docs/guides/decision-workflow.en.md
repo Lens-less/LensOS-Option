@@ -2,36 +2,133 @@
 
 [Project home](../../README.en.md) · [中文](decision-workflow.md) · [Research methods](research-workflows.en.md)
 
-This guide connects first use, public-data analysis, evidence inspection, and a
-reproducible record. The current focus is BTC options using public Deribit data.
-“Insufficient evidence; no strategy” is a valid research outcome.
-`research_only=true` and `execution_allowed=false` hold under every outcome.
+One local entry connects learning, public-data research, and a copied review.
+The current focus is BTC options using public Deribit data. “Insufficient evidence;
+no strategy” is a complete research outcome. `research_only=true` and
+`execution_allowed=false` hold under every outcome.
 
-## 1. Learn With The Offline Tour
+## 1. Open The Platform And Learn A Structure
 
-Install using the [quickstart](../../README.en.md#quickstart), run
-`crypto-options-report demo`, and open the printed `/index.html?view=demo` URL.
-Choose a structure, move the expiry-price slider, and compare profit and loss.
-These fictional points describe linear expiry payoffs; they do not model real
-fills, fees, or changes before expiry.
-
-Select “查看真实快照” (View real snapshot) to inspect the bundled redacted
-research snapshot. Check its evaluation time, evidence state, and blocking
-reasons. An empty set of reliable strategy cards is expected here. From the
-source repository, inspect the corresponding machine-readable case with:
+Install using the [quickstart](../../README.en.md#quickstart), then run:
 
 ```powershell
-python tools/reproduce_research.py --check
+crypto-options-report start
 ```
 
-This compares complete outputs for one build, input set, and explicit clock.
-See the [offline case](reproducible-case.md) for fields and saved-case comparison.
+The offline learning tour opens automatically. Choose a structure, move the
+expiry-price slider, then inspect its evidence. Fictional points describe linear
+expiry payoffs, excluding real fills, fees, and changes before expiry. Select
+“进入研究简报” (Open research brief) to read the source chosen at startup.
+Default offline startup reads the bundled redacted historical snapshot's
+evaluation time and blocking reasons. An empty set of reliable strategy cards
+is expected; teaching output cannot supply research evidence.
 
-## 2. Capture Public Market Inputs
+The server binds only to `127.0.0.1`. `Ctrl+C` stops it. Add `--port 8001` if the
+port is busy, or `--no-open-browser` to open the printed URL yourself.
 
-These commands need network access, but no Deribit account or API key. Run them
-from the repository root; output stays under local `artifacts/`. Do not commit
-raw captures, runtime logs, or any later account data to the public repository.
+## 2. Choose A Declared Data Mode
+
+Stop the demo, choose one input, then open the research brief:
+
+```powershell
+# Network required; existing public Deribit source, no account or keys
+crypto-options-report start --current
+
+# Historical replay; reads your local input only
+crypto-options-report start --snapshot artifacts/snapshots/btc-chain.json
+```
+
+Add `--underlying-history artifacts/history/btc-daily.json` for local underlying
+history. This supplies historical input; it does not create a historical options
+chain or a validated strategy. `--current` and `--snapshot` are mutually exclusive.
+
+| Visible mode | What the update does | Research boundary |
+| --- | --- | --- |
+| Deribit public data | “更新公开行情” (Update public quotes) requests research; a valid analysis is reused, expired evidence triggers collection | Collection must still pass quality, trust, cost, and model gates |
+| Historical snapshot replay | “重新读取快照” (Reread snapshot) reads configured local files and evaluates at capture time | The replay window continues counting from that historical age; a historical pass cannot restore current eligibility |
+| Bundled historical snapshot | Rereads the redacted bundled case, without network collection | Explains real blocking, not current market conditions |
+| Published research snapshot | “重新载入本版” (Reload edition) reads a precomputed edition | The browser cannot collect quotes; the edition's validity applies |
+
+Check mode, data cutoff, and validity first. Repeated clicks do not guarantee
+new quotes or a new analysis identity; a cache hit retains its evaluation time.
+Refresh cannot turn missing, stale, unsynchronized, or crossed quotes, or
+incomplete costs, into a usable strategy.
+
+## 3. Read The Conclusion, Then Its Evidence
+
+Primary navigation keeps the learning tour and research brief. Candidates,
+volatility series, and ranking validation sit under “深入研究” (Deeper research).
+The brief explains market conditions, whether a reliable strategy exists, and why.
+
+| Check | Meaning |
+| --- | --- |
+| Source, capture time, evaluation time, validity | Historical calculation and current availability are separate |
+| Strategy cards or rejection reasons | None passing means `NO_TRADE`; cards remain at most `WATCH` |
+| Exact legs, expiry, bid/ask, currency and units | Quotes describe that instant; one unit expresses structure ratios, not a recommended position size |
+| Minimum net credit, itemized costs, modeled loss budget, cancellation | Missing numeric costs prevent cards; a budget is not an absolute fee-inclusive loss cap |
+| `data_status`, `data_trust`, reason codes, history and forecast states | Quality does not authenticate provenance; ranks are not probabilities |
+| Analysis and brief identities, clock and source | These support explanation and reproduction, not execution |
+
+`entry.cost_breakdown` lists entry fees, slippage, legging, and settlement reserves
+in `entry.currency`. Minimum net credit deducts the first three; the loss budget
+also includes settlement reserves. `risk.max_loss_basis=PAYOFF_BOUND_PLUS_FROZEN_COST_BUDGET`
+and `delivery_fee_upper_bound_verified=false` explicitly leave the actual delivery
+fee upper bound unverified. Boolean “fees included” labels or inserted zeroes do
+not establish cost coverage.
+
+Historical rates require `VALIDATED`; forecast intervals require `CALIBRATED`.
+Exact-structure historical replay deducts delivery fees from net PnL, while its
+risk denominator uses payoff loss plus entry fees.
+`delivery_fee_in_risk_denominator=false` makes that exclusion explicit, so net
+`R` can fall below `-1`; do not clip it. Check each artifact's settlement basis;
+signal validation uses a daily-close proxy.
+
+## 4. Copy A Research Review
+
+For a currently valid strategy card, select “复制研究复核” (Copy research review).
+The text includes exact legs, each bid/ask and unit, quote times, source, analysis
+and brief identities, evaluation time, contract expiry, minimum net credit,
+frozen costs, modeled loss budget, validity, cancellation, and recheck requirements.
+If clipboard access fails, selectable text is offered for manual copying.
+
+The copied result always retains `WATCH / execution_allowed=false`. It creates
+no order and supplies no position-size recommendation. Do not reuse it after
+validity expires. Obtain fresh positive, synchronized two-sided quotes and
+reevaluate all costs and evidence before further review. When no cards exist,
+select “复制拒绝原因” (Copy rejection reasons) to retain `NO_TRADE`, full reasons,
+source, times, and analysis identity. Expired records state that qualification is
+paused and contain no old strategy legs or credit instructions. Save the raw JSON
+separately for complete reproduction; teaching cards or lowered thresholds cannot replace the result.
+
+For complete reproduction, also retain the original snapshot, underlying history,
+UTC evaluation clock, build version, and analysis JSON locally or in an owned
+private evidence repository. Public bug reports need a minimal redacted fixture,
+reproduction command, and expected/actual behavior, never credentials or a full
+runtime directory. No trading journal or account setup is required.
+
+## 5. Recover According To The Reason
+
+| State | Next action | Evidence of recovery |
+| --- | --- | --- |
+| Connection failure, timeout, invalid response | Check service, port, files, and version; retry after recovery | A newly loaded report passes contract validation; old results are not a fallback |
+| Current quotes expired | Select Update public quotes and wait for collection and checks | The new input's cutoff and validity are verifiable |
+| Historical snapshot expired | Keep it as historical research, or restart with `start --current` | Mode changes honestly; edited timestamps do not create current eligibility |
+| Publication stalled | Wait for the operator to publish a qualified edition | A new edition passes current freshness checks; reloading the old one cannot recover |
+| Trust promotion pending, insufficient samples, missing artifact | Accumulate provenance, expiry cohorts, and protocol evidence | Actual requirements pass; refresh, JSON edits, and offline replay do not substitute |
+| Expired or mismatched evidence | Check protocol, exact legs, costs, validity, and source; reevaluate | Evidence matching the current strategy passes its own gates |
+| No reliable strategy | Retain rejection reasons and wait for changed input or evidence | Subsequent research passes without lowering thresholds |
+
+The report is authoritative for exact reasons. Missing account or model evidence
+describes an admission boundary; it does not request a newcomer's credentials.
+See the [historical and forecast protocol](../product/2026-08-30-actionable-strategy-brief-v0.2-v0.4-spec.md)
+for calibration requirements.
+
+## 6. Optional: Manual Capture And Reproducible Artifacts
+
+Existing CLI and HTTP API entry points remain compatible. Use this longer workflow
+when you need saved inputs, an explicit clock, or ongoing sample collection. It
+is not a first-use prerequisite. Run from the repository root; network access is
+needed, no account or keys are needed, and output stays local:
 
 ```powershell
 python -m crypto_options_report.underlying_history_tool --currency BTC --days 1200 `
@@ -39,23 +136,7 @@ python -m crypto_options_report.underlying_history_tool --currency BTC --days 12
 
 crypto-options-report pull-snapshot --currency BTC `
   --output artifacts/snapshots/btc-chain.json --compact
-```
 
-Refresh slower history first, then capture the short-lived market snapshot.
-The capture summary includes `quality_gate_passed`, `quality_reason_codes`,
-`validation_eligible_expiry_count`, and the output path. Saving a snapshot does
-not establish full-chain quality or promoted data trust. Index history supplies
-underlying observations; it does not create a historical options chain or a
-validated strategy.
-
-After a network or sampling failure, retain the reason and capture again when
-the source recovers. For ongoing work, append snapshots with
-`pull-snapshot --output-dir artifacts/snapshots/btc-series` and maintain history,
-signal, and series artifacts using the [operator guide](operator-guide.en.md).
-
-## 3. Generate And Inspect The Analysis
-
-```powershell
 crypto-options-report report `
   --snapshot-fixture artifacts/snapshots/btc-chain.json `
   --underlying-history-fixture artifacts/history/btc-daily.json `
@@ -67,15 +148,15 @@ crypto-options-report analysis `
   --output artifacts/reports/analysis.json --compact
 ```
 
-For `report --fail-on-blocked`, exit `10` means market quality is blocked. Exit
-`0` only establishes command success and that check; inspect `data_trust`,
-admission decisions, and `strategy_brief` separately. `analysis` saves the
-immutable record, including build identity, input hashes, evidence lineage,
-and conditions actually evaluated. Each command defaults to its own execution
-clock; pass the same timezone-aware `--generated-at` for strict comparison.
+Capture slower history first, then the short-lived quotes. Capture quality is
+not trust-promotion evidence. `report --fail-on-blocked` exit `10` means market
+quality is blocked; exit `0` still requires inspecting trust, admission, and brief.
+`analysis` retains build identity, input hashes, lineage, and evaluated conditions.
+Each command defaults to its own clock; pass the same timezone-aware
+`--generated-at` for strict comparison.
 
-Start a read-only local server in another terminal. Stop a demo using port 8000
-with `Ctrl+C` first, or select port 8001 below:
+Inspect these files with `start --snapshot … --underlying-history …`, or retain
+the existing API command:
 
 ```powershell
 python -m crypto_options_report.api --host 127.0.0.1 --port 8000 `
@@ -83,63 +164,19 @@ python -m crypto_options_report.api --host 127.0.0.1 --port 8000 `
   --underlying-history-fixture artifacts/history/btc-daily.json
 ```
 
-Open the [research brief](http://127.0.0.1:8000/evidence). Read the data time and
-overall result before candidates and supporting evidence. Browser refresh reads
-configured files; it does not capture market data. Update inputs before refreshing.
+This file mode only rereads configured files; update inputs to update the market.
+Add `--replay` to evaluate at capture time. Ongoing research can append with
+`pull-snapshot --output-dir artifacts/snapshots/btc-series`, or use the existing
+`python -m crypto_options_report.snapshot_sidecar --output <path>` with `--once`
+for one capture or `--interval` for periodic refresh. See the
+[operator guide](operator-guide.en.md) for history, signal, and series maintenance.
+Do not publicly commit raw captures, logs, or private evidence.
 
-Add `--replay` to inspect an old snapshot at its capture-time evaluation clock.
-The interface still reports age against the reader's current time. A historical
-pass does not restore present eligibility; changing timestamps cannot cure staleness.
+The [fixed offline case](reproducible-case.md) needs no network:
 
-## 4. Read In Evidence Order
+```powershell
+python tools/reproduce_research.py --check
+```
 
-| Check | Meaning |
-| --- | --- |
-| Source, capture time, evaluation time, freshness | Historical calculations and current availability are separate |
-| `data_status`, `data_trust`, reason codes | Complete, valid fields do not authenticate their source |
-| Relative value, post-cost EV, risk, ranking basis | A rank is a comparison, not a probability |
-| `strategy_brief.action`, exact legs, expiry, itemized costs, loss basis, cancellation | Cards remain at most `WATCH`; none passing means `NO_TRADE` |
-| History and forecast states, scope, protocol and selection identities | Historical rates require `VALIDATED`; forecast intervals require `CALIBRATED` |
-| Manifest, conditions, lineage and hashes | These support explanation and reproduction, not execution |
-
-`entry.cost_breakdown` lists entry fees, slippage, legging, and settlement
-reserves in `entry.currency`. Minimum net credit deducts the first three;
-the loss budget also includes the settlement reserve.
-`risk.max_loss_basis=PAYOFF_BOUND_PLUS_FROZEN_COST_BUDGET` and
-`delivery_fee_upper_bound_verified=false` explicitly distinguish a modeled
-budget from an absolute fee-inclusive loss cap. Missing numeric costs prevent
-cards; boolean “fees included” labels or inserted zeroes do not establish coverage.
-
-Exact-structure historical replay deducts delivery fees calculated under its
-fee rules from net PnL, while the risk denominator uses payoff loss plus entry
-fees. `delivery_fee_in_risk_denominator=false` makes that exclusion explicit,
-so net `R` can fall below `-1`. Do not clip this result. Also check each historical
-artifact's settlement basis; signal validation uses a daily-close proxy.
-
-## 5. Recover From Blocking States
-
-| State | Next action | Evidence of recovery |
-| --- | --- | --- |
-| Connection failure, timeout, HTTP error | Check the local service, port and paths; retry after it recovers | A newly loaded report passes contract validation |
-| Non-JSON or invalid contract | Check service version and response; repair the input or service | A valid report replaces the error; old output is not used as a fallback |
-| Stale data or suspended publication | Recapture local inputs; operators regenerate and publish a qualified edition | A verifiable new cutoff passes current freshness checks |
-| Trust promotion pending | Accumulate authenticated observations and provenance through the runbook | Actual trust requirements pass; refreshes and JSON edits do not substitute |
-| Missing artifact or insufficient sample | Continue capture, retain expiry cohorts, generate and configure the artifact | The UI distinguishes unconfigured, collecting, and statistical outcomes |
-| Expired or mismatched historical/forecast evidence | Check protocol, exact legs, validity and lineage; reevaluate under the model protocol | Current evidence matches the strategy and passes its own gates |
-| No reliable strategy | Read rejection reasons, save the observation, and wait for changed inputs/evidence | A subsequent analysis passes without lowering thresholds |
-
-The report is authoritative for exact reason codes. Missing account or model
-evidence describes an admission boundary; it is not a request for a newcomer's
-credentials. Offline replay cannot create calibration. See the
-[historical and forecast specification](../product/2026-08-30-actionable-strategy-brief-v0.2-v0.4-spec.md).
-
-## 6. Keep A Reproducible Record
-
-Retain snapshots, underlying history, UTC evaluation clock, build version, and
-analysis JSON. Record the observation, blocking reasons, and evidence needed
-next. Keep these locally or in an owned private evidence repository. A public
-bug report should contain a minimal redacted fixture, reproduction command,
-and expected/actual behavior, never credentials or a full runtime directory.
-
-Completion means that inputs, conclusions, and limits are reviewable. It does
-not require a strategy card or demonstrate profitability.
+A matching replay means one build, input set, and clock produce the same output.
+It does not establish strategy validity, execution eligibility, or profitability.

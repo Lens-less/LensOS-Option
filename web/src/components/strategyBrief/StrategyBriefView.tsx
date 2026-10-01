@@ -20,9 +20,9 @@ function formatTimestamp(value: string | null): string {
   }
   return new Intl.DateTimeFormat("zh-CN", {
     dateStyle: "medium",
-    timeStyle: "short",
+    timeStyle: "medium",
     timeZone: "Asia/Shanghai",
-  }).format(parsed);
+  }).format(parsed) + " UTC+8";
 }
 
 function formatNumber(value: number | null, digits = 4): string {
@@ -55,12 +55,12 @@ function structureLabel(value: StrategyBriefStrategy["structure_type"]): string 
 
 function actionLabel(value: StrategyBriefSurfaceProjection["action"]): string {
   if (value === "STRATEGIES_AVAILABLE") {
-    return "今日行动：有可靠的有限风险策略";
+    return "通过研究门槛 · 仍需人工复核";
   }
   if (value === "WATCH") {
-    return "今日行动：仅观察，不升级为推荐";
+    return "仅观察 · 尚未达到推荐标准";
   }
-  return "今日行动：今日暂无可靠策略";
+  return "没有候选通过完整研究门槛";
 }
 
 function recommendationLabel(
@@ -101,10 +101,73 @@ function forecastLabel(forecast: StrategyBriefForecast): string {
   return "预测：暂不可用";
 }
 
-function CopyCombinationButton({
-  strategy,
+function buildResearchReviewCopy(
+  brief: StrategyBrief,
+  strategy: StrategyBriefStrategy,
+  surface?: StrategyBriefSurfaceState,
+): string {
+  const recipe = strategy.copy_recipe;
+  const context = [
+    `BRIEF ID: ${brief.brief_id}`,
+    `RECOMMENDATION ID: ${strategy.recommendation_id}`,
+    `SOURCE: ${surface?.source_label ?? "未提供"} (${surface?.source_kind ?? "fallback"}; ${surface?.presented_as ?? "published"})`,
+    `MARKET AS OF: ${brief.market.as_of}`,
+  ];
+  // Older v1 records remain reviewable, with context from validated fields.
+  if (!recipe.includes("STATUS:")) context.push(`STATUS: ${strategy.recommendation_status} / execution_allowed=false`);
+  if (!recipe.includes("ANALYSIS RUN:")) context.push(`ANALYSIS RUN: ${brief.analysis_run_id}`);
+  if (!recipe.includes("EVALUATED AT:")) context.push(`EVALUATED AT: ${brief.generated_at}`);
+  if (!recipe.includes("CONTRACT EXPIRY:")) context.push(`CONTRACT EXPIRY: ${strategy.expiry_date ?? "见合约名，须人工复核"}`);
+  if (!recipe.includes("LEG QUOTE:")) {
+    context.push(...strategy.legs.map((leg) =>
+      `LEG QUOTE: ${leg.instrument_name} / BID ${leg.bid} / ASK ${leg.ask} / ${leg.premium_currency ?? strategy.entry.currency} (${leg.premium_unit}) / OBSERVED AT ${leg.observed_at}`,
+    ));
+  }
+  const recheck = recipe.includes("RECHECK:") ? [] : [
+    "RECHECK: 复核前重新取得正的、同步的双边报价，重新评估证据与冻结成本。超过 VALID UNTIL 后不得沿用。本记录不构成订单或执行授权。",
+  ];
+  return [...context, recipe, ...recheck].join("\n");
+}
+
+function buildRejectionReviewCopy(
+  brief: StrategyBrief,
+  projection: StrategyBriefSurfaceProjection,
+  reasons: string[],
+  surface?: StrategyBriefSurfaceState,
+): string {
+  return [
+    "RESEARCH_ONLY / MANUAL REVIEW REQUIRED",
+    "STATUS: NO_TRADE / execution_allowed=false",
+    `BRIEF ID: ${brief.brief_id}`,
+    `ANALYSIS RUN: ${brief.analysis_run_id}`,
+    `SOURCE: ${surface?.source_label ?? "未提供"} (${surface?.source_kind ?? "fallback"}; ${surface?.presented_as ?? "published"})`,
+    `SOURCE FRESHNESS: ${surface?.freshness_status ?? "UNAVAILABLE"}`,
+    `MARKET AS OF: ${brief.market.as_of}`,
+    `EVALUATED AT: ${brief.generated_at}`,
+    `SNAPSHOT EXPIRES AT: ${brief.market.expires_at}`,
+    ...(projection.suppression.suppress_cards ? [
+      "CURRENT QUALIFICATION: PAUSED / 当前资格已暂停；快照判定仅作为历史记录，不恢复当前资格。",
+    ] : ["CURRENT QUALIFICATION: NO_TRADE / 当前没有可复核的策略卡。"]),
+    ...reasons.map((reason) => `REASON: ${reason}`),
+    ...projection.suppression.reasons_zh.map((reason) => `SUPPRESSION REASON: ${reason}`),
+    `SNAPSHOT REASON CODES: ${projection.no_trade.primary_reason_codes.join(", ") || "未提供"}`,
+    ...Object.entries(brief.evidence_summary.rejection_counts).map(
+      ([code, count]) => `SNAPSHOT REJECTION COUNT: ${code} / ${count}`,
+    ),
+    "RECHECK: 重新取得有效来源与双边报价，重新评估证据和成本。已过期的判定不得沿用；本记录只解释研究阻断，不构成订单或执行授权。",
+  ].join("\n");
+}
+
+function CopyResearchReviewButton({
+  text,
+  label = "复制研究复核",
+  copiedLabel = "已复制研究复核",
+  copiedMessage = "已复制报价、成本和证据标识；复核前须重新取数。",
 }: {
-  strategy: StrategyBriefStrategy;
+  text: string;
+  label?: string;
+  copiedLabel?: string;
+  copiedMessage?: string;
 }): React.JSX.Element {
   const [status, setStatus] = useState<"idle" | "copying" | "copied" | "failed">("idle");
   const statusId = useId();
@@ -113,7 +176,7 @@ function CopyCombinationButton({
   useEffect(() => {
     setStatus("idle");
     return () => { request.current += 1; };
-  }, [strategy.copy_recipe]);
+  }, [text]);
   return (
     <div className="strategy-brief-copy-area">
     <button
@@ -126,7 +189,7 @@ function CopyCombinationButton({
         void (async () => {
           try {
             if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
-            await navigator.clipboard.writeText(strategy.copy_recipe);
+            await navigator.clipboard.writeText(text);
             if (request.current === sequence) setStatus("copied");
           } catch {
             if (request.current === sequence) setStatus("failed");
@@ -135,16 +198,16 @@ function CopyCombinationButton({
       }}
       type="button"
     >
-      {status === "copied" ? "已复制组合" : status === "copying" ? "复制中…" : "复制组合"}
+      {status === "copied" ? copiedLabel : status === "copying" ? "复制中…" : label}
     </button>
     <p id={statusId} role="status" className="strategy-brief-copy-status">
-      {status === "copied" ? "已复制研究组合，请人工复核全部条件。"
-        : status === "failed" ? "无法访问剪贴板，请选择下方组合文本手动复制。" : ""}
+      {status === "copied" ? copiedMessage
+        : status === "failed" ? "无法访问剪贴板，请选择下方复核文本手动复制。" : ""}
     </p>
     {status === "failed" ? (
       <div className="strategy-brief-copy-fallback">
-        <label htmlFor={recipeId}>研究组合文本</label>
-        <textarea id={recipeId} readOnly value={strategy.copy_recipe} rows={8}
+        <label htmlFor={recipeId}>研究复核文本</label>
+        <textarea id={recipeId} readOnly value={text} rows={8}
           onFocus={(event) => event.currentTarget.select()} />
       </div>
     ) : null}
@@ -154,8 +217,12 @@ function CopyCombinationButton({
 
 function StrategyCard({
   strategy,
+  brief,
+  surface,
 }: {
   strategy: StrategyBriefStrategy;
+  brief: StrategyBrief;
+  surface?: StrategyBriefSurfaceState;
 }): React.JSX.Element {
   return (
     <article
@@ -176,11 +243,15 @@ function StrategyCard({
       <p>{strategy.thesis_zh}</p>
       <ul aria-label={`${structureLabel(strategy.structure_type)} 精确合约腿`}>
         {strategy.legs.map((leg) => (
-          <li key={`${leg.side}-${leg.instrument_name}`}>
+          <li className="strategy-brief-leg" key={`${leg.side}-${leg.instrument_name}`}>
             <strong>
               {leg.side} {leg.quantity}
             </strong>{" "}
             {leg.instrument_name}
+            <p className="strategy-brief-leg-quote">
+              Bid {String(leg.bid)} / Ask {String(leg.ask)}{" "}
+              {leg.premium_currency ?? strategy.entry.currency} · {leg.premium_unit}
+            </p>
           </li>
         ))}
       </ul>
@@ -212,6 +283,21 @@ function StrategyCard({
       <p className="strategy-brief-cost-boundary">
         模型损失上限包含列明的成本预算；未来交割费可能超出预算，实际损失可能更高。当前仅观察。
       </p>
+      <details className="strategy-brief-review-details">
+        <summary>查看报价时间与研究来源</summary>
+        <dl>
+          {strategy.legs.map((leg) => (
+            <div key={leg.instrument_name}>
+              <dt>{leg.instrument_name} 采集于</dt>
+              <dd>{formatTimestamp(leg.observed_at)}</dd>
+            </div>
+          ))}
+          <div><dt>评估于</dt><dd>{formatTimestamp(brief.generated_at)}</dd></div>
+          <div><dt>分析标识</dt><dd><code>{brief.analysis_run_id}</code></dd></div>
+          <div><dt>简报标识</dt><dd><code>{brief.brief_id}</code></dd></div>
+        </dl>
+        <p>这是该时点的研究记录。复核前须重新取得双边报价并重新评估成本与证据，超过有效期不得沿用。</p>
+      </details>
       <details className="strategy-brief-risk-details">
         <summary>查看成本预算与模型风险</summary>
         <dl>
@@ -238,7 +324,7 @@ function StrategyCard({
           ))}
         </ul>
       ) : null}
-      <CopyCombinationButton strategy={strategy} />
+      <CopyResearchReviewButton text={buildResearchReviewCopy(brief, strategy, surface)} />
     </article>
   );
 }
@@ -292,8 +378,8 @@ export function StrategyBriefView({
     <section className="strategy-brief-view" aria-label="策略简报">
       <header className="strategy-brief-header">
         <p>{brief.market.underlying}</p>
-        <h2>{suppressed ? "策略简报已暂停" : brief.market.summary_zh}</h2>
-        <p role="status">{actionLabel(visibleAction)}</p>
+        <h2>{suppressed ? "策略简报已暂停" : visibleAction === "NO_TRADE" ? "暂无可复核策略" : brief.market.summary_zh}</h2>
+        <p role="status">{suppressed ? "当前资格已暂停 · 请更新数据后重新评估" : actionLabel(visibleAction)}</p>
         <dl className="strategy-brief-meta">
           <div>
             <dt>{suppressed ? "快照计算于" : "更新于"}</dt>
@@ -309,7 +395,7 @@ export function StrategyBriefView({
           </div>
         </dl>
         <p className="strategy-brief-boundary">
-          RESEARCH_ONLY · execution_allowed=false · 复制研究组合供人工复核，不会提交订单
+          仅供入场前研究 · 复制复核记录不产生订单
         </p>
         {suppressed ? <p className="strategy-brief-counts">
           当前展示 0 张卡；当前资格已暂停，须取得有效证据后重新评估。
@@ -323,13 +409,14 @@ export function StrategyBriefView({
       {projection.strategies.length > 0 ? (
         <section className="strategy-brief-grid" aria-label="策略卡">
           {projection.strategies.map((strategy) => (
-            <StrategyCard key={strategy.recommendation_id} strategy={strategy} />
+            <StrategyCard key={strategy.recommendation_id} strategy={strategy} brief={brief} surface={effectiveSurface} />
           ))}
         </section>
       ) : (
         <section className="strategy-brief-no-trade" aria-label="NO_TRADE" role="status">
-          <strong>{projection.no_trade.headline_zh ?? "今日暂无可靠策略"}</strong>
-          {projection.no_trade.summary_zh ? <p>{projection.no_trade.summary_zh}</p> : null}
+          {projection.no_trade.summary_zh && !noTradeReasons.some((reason) =>
+            reason.replace(/[。.!\s]/g, "") === projection.no_trade.summary_zh?.replace(/[。.!\s]/g, ""),
+          ) ? <p>{projection.no_trade.summary_zh}</p> : null}
           {noTradeReasons.length > 0 ? (
             <ol>
               {noTradeReasons.slice(0, 2).map((reason) => (
@@ -337,9 +424,23 @@ export function StrategyBriefView({
               ))}
             </ol>
           ) : null}
-          {!suppressed && projection.no_trade.next_update_at ? (
-            <p>下次更新时间：{formatTimestamp(projection.no_trade.next_update_at)}</p>
+          {noTradeReasons.length > 2 ? (
+            <details className="strategy-brief-rejection-details">
+              <summary>全部拒绝原因（{noTradeReasons.length}）</summary>
+              <ol>
+                {noTradeReasons.map((reason) => <li key={reason}>{reason}</li>)}
+              </ol>
+            </details>
           ) : null}
+          {!suppressed && projection.no_trade.next_update_at ? (
+            <p>建议复核时刻：{formatTimestamp(projection.no_trade.next_update_at)} · 需手动更新数据</p>
+          ) : null}
+          <CopyResearchReviewButton
+            text={buildRejectionReviewCopy(brief, projection, noTradeReasons, effectiveSurface)}
+            label="复制拒绝原因"
+            copiedLabel="已复制拒绝原因"
+            copiedMessage="已复制研究阻断和证据标识；须取得有效数据后重新评估。"
+          />
         </section>
       )}
 

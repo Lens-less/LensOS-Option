@@ -11,7 +11,7 @@ export const FOOTER_LINKS = [
 ] as const;
 
 export const VIEW_LINKS = [
-  { href: APP_INDEX_HREF, id: "evidence", label: "① 研究简报" },
+  { href: `${APP_INDEX_HREF}?view=legacy`, id: "evidence", label: "① 研究简报" },
   { href: `${APP_INDEX_HREF}?view=series`, id: "series", label: "② 波动时序" },
   {
     href: `${APP_INDEX_HREF}?view=workbench`,

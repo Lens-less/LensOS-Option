@@ -78,6 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "examples:\n"
+            "  # Start the local platform (offline demo by default):\n"
+            "  crypto-options-report start\n"
+            "\n"
+            "  # Read current public market data through the local platform:\n"
+            "  crypto-options-report start --current\n"
+            "\n"
             "  # Replay a fixed snapshot (deterministic, no network):\n"
             "  crypto-options-report analysis \\\n"
             "      --snapshot-fixture tests/fixtures/deribit_btc_option_chain_snapshot.json \\\n"
@@ -126,6 +132,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_report_replay_args(analysis)
     analysis.add_argument("--output", help="optional path to write JSON")
+
+    start = subcommands.add_parser(
+        "start",
+        help="open the local platform: offline demo, a recorded snapshot, or current public data",
+        description=(
+            "Start the research-only platform on 127.0.0.1. The default demo is offline. "
+            "Use --snapshot for historical replay or --current to collect Deribit public "
+            "market data when the research view requests it."
+        ),
+    )
+    source = start.add_mutually_exclusive_group()
+    source.add_argument(
+        "--current",
+        action="store_true",
+        help="enable the existing approved Deribit public-data source; no account or credentials",
+    )
+    source.add_argument(
+        "--snapshot",
+        help="replay this recorded snapshot at its capture time; refresh rereads local inputs",
+    )
+    start.add_argument(
+        "--underlying-history",
+        help="optional local underlying history JSON for --current or --snapshot",
+    )
+    start.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="loopback port for the local platform (default 8000)",
+    )
+    start.add_argument(
+        "--open-browser",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="open the platform in your default browser (default on; --no-open-browser for headless use)",
+    )
 
     demo = subcommands.add_parser(
         "demo",
@@ -466,6 +508,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "start":
+            from .local_app import run_start
+
+            return run_start(
+                port=args.port,
+                open_browser=args.open_browser,
+                current=args.current,
+                snapshot=args.snapshot,
+                underlying_history=args.underlying_history,
+            )
         if args.command == "demo":
             from .demo import run_demo
 

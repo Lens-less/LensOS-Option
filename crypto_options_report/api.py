@@ -140,6 +140,8 @@ GET_SURFACE_PATHS = {
     "/dashboard",
 }
 POST_SURFACE_PATHS = {"/backtest/run"}
+DESK_POST_PATHS = {"/desk/discover", "/desk/compare", "/desk/review"}
+MAX_DESK_REQUEST_BYTES = 512 * 1024
 LIVENESS_PATHS = {"/health", "/livez"}
 READINESS_PATH = "/readyz"
 ALLOWED_HOSTS_ENV = "CRYPTO_OPTIONS_API_ALLOWED_HOSTS"
@@ -261,6 +263,9 @@ class RuntimeConfig:
     snapshot_fixture: str | None = None
     account_snapshot_fixture: str | None = None
     allow_live_fetch: bool = False
+    # The new desk has its own bounded public-source collector. This policy
+    # does not grant live inputs or account capabilities to the legacy report.
+    allow_desk_live_fetch: bool = False
     # Replay pins the evaluation clock to the configured snapshot's own capture
     # time, which is the only way a recorded chain can be read in a browser at
     # all: market data older than `market_data_max_age_sec` is blocked, so a
@@ -318,6 +323,10 @@ class RuntimeConfig:
             raise ValueError(
                 "production HTTP live fetch is unsupported; capture a snapshot with the CLI"
             )
+        if not isinstance(self.allow_desk_live_fetch, bool):
+            raise ValueError("allow_desk_live_fetch must be a boolean")
+        if self.published and self.allow_desk_live_fetch:
+            raise ValueError("published editions cannot collect live desk data")
         if self.signal_artifact and not Path(self.signal_artifact).expanduser().is_file():
             raise ValueError("signal_artifact not found")
         if self.series_artifact and not Path(self.series_artifact).expanduser().is_file():
@@ -385,6 +394,11 @@ class ResearchHTTPServer(ThreadingHTTPServer):
         self._worker_slots = threading.BoundedSemaphore(self.runtime.max_workers)
         self._analysis_record_lock = threading.Lock()
         self._analysis_records: dict[str, AnalysisRecord] = {}
+        from .desk_service import DeskService
+
+        self.desk_service = DeskService(
+            allow_live=self.runtime.allow_desk_live_fetch or self.runtime.allow_live_fetch
+        )
         try:
             if ipaddress.ip_address(server_address[0]).version == 6:
                 self.address_family = socket.AF_INET6
@@ -867,6 +881,9 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
         if not self._start_request():
             return
         parsed = urlparse(self.path)
+        if parsed.path in DESK_POST_PATHS:
+            self._desk_post(parsed.path, parsed.query)
+            return
         if parsed.path not in POST_SURFACE_PATHS:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
@@ -1152,6 +1169,52 @@ class ResearchReportHandler(BaseHTTPRequestHandler):
                 remaining -= len(chunk)
         except OSError:
             return
+
+    def _desk_post(self, path: str, query: str) -> None:
+        from .desk_service import DeskRequestError
+
+        try:
+            if query:
+                raise _RequestContractError(HTTPStatus.BAD_REQUEST, "desk research uses JSON body fields")
+            if self.headers.get_content_type() != "application/json":
+                raise _RequestContractError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json")
+            lengths = self.headers.get_all("Content-Length", [])
+            if len(lengths) != 1 or self.headers.get("Transfer-Encoding"):
+                raise _RequestContractError(HTTPStatus.BAD_REQUEST, "one Content-Length and no transfer encoding required")
+            try:
+                length = int(lengths[0])
+            except ValueError as exc:
+                raise _RequestContractError(HTTPStatus.BAD_REQUEST, "invalid Content-Length") from exc
+            if not 1 <= length <= MAX_DESK_REQUEST_BYTES:
+                raise _RequestContractError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "desk request size is invalid")
+            raw = self.rfile.read(length)
+            self._request_body_consumed = True
+            if len(raw) != length:
+                raise _RequestContractError(HTTPStatus.BAD_REQUEST, "incomplete research request")
+
+            def unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+                result: dict[str, Any] = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError("duplicate JSON field")
+                    result[key] = value
+                return result
+
+            def reject_constant(value: str) -> Any:
+                raise ValueError("nonfinite JSON number")
+
+            request = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_fields, parse_constant=reject_constant)
+            payload = self.server.desk_service.dispatch(path, request)
+        except (DeskRequestError, _RequestContractError) as exc:
+            self._write_json(exc.status, {"error": str(exc)})
+            return
+        except (UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "invalid research request"})
+            return
+        except OSError:
+            self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "research source unavailable"})
+            return
+        self._write_json(HTTPStatus.OK, payload)
 
     def _read_backtest_request(self) -> dict[str, Any]:
         if self.headers.get_content_type() != "application/json":
@@ -2479,6 +2542,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--allow-desk-live-fetch",
+        action="store_true",
+        default=_environment_flag("CRYPTO_OPTIONS_API_ALLOW_DESK_LIVE_FETCH"),
+        help="operator opt-in: bounded public BTC/ETH discovery for the private decision desk",
+    )
+    parser.add_argument(
         "--signal-artifact",
         help=(
             "JSON written by validate-signal (with or without --preflight); "
@@ -2583,6 +2652,7 @@ def main(argv: list[str] | None = None) -> int:
         snapshot_fixture=args.snapshot_fixture,
         account_snapshot_fixture=args.account_snapshot_fixture,
         allow_live_fetch=args.allow_live_fetch,
+        allow_desk_live_fetch=args.allow_desk_live_fetch,
         replay=args.replay,
         published=args.published,
         signal_artifact=args.signal_artifact,

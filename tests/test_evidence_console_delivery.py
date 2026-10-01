@@ -127,7 +127,7 @@ class EvidenceConsoleDeliveryTests(unittest.TestCase):
                         "text/javascript; charset=utf-8",
                         headers["content-type"],
                     )
-                    self.assertIn(b"/research/report", body)
+                    self.assertIn(b"/desk/discover", body)
                 else:
                     self.assertEqual(
                         "text/css; charset=utf-8",

@@ -176,7 +176,7 @@ export function DemoGuide(): React.JSX.Element {
           </div>
         ) : (
           <div data-testid="demo-evidence-step">
-            <p className="demo-stage-description">{complete ? "你已经能分辨可计算的结构边界与仍需验证的研究结论。接下来可以检查随安装包附带的真实阻断快照。" : "读懂收益曲线，还不能判断这个策略是否值得研究。以下证据各自回答不同的问题。"}</p>
+            <p className="demo-stage-description">{complete ? "你已经能分辨可计算的结构边界与仍需验证的研究结论。接下来进入研究简报，先核对数据模式、时间与拒绝原因。数据来源由启动时选择的模式决定。" : "读懂收益曲线，还不能判断这个策略是否值得研究。以下证据各自回答不同的问题。"}</p>
             <div className="demo-evidence-grid">
               <article><span className="demo-evidence-label">结构计算</span><h3>到期边界可以算清</h3><p>这个例子的最大收益是 {example.credit} 点，最大亏损是 {example.maxLoss} 点。它说明可能的到期结果，不说明每种结果发生的概率。</p></article>
               <article><span className="demo-evidence-label">行情与成本</span><h3>实际可成交性仍需核验</h3><p>示例未计费用、滑点和提前平仓，也不对应真实交易所的合约计价或结算规则。真实研究需要新鲜报价、流动性和成本证据。</p></article>
@@ -184,7 +184,7 @@ export function DemoGuide(): React.JSX.Element {
             </div>
             <div className="demo-takeaway" role="note"><strong>没有证据时，明确暂停结论。</strong><p>真实快照可能显示“暂无可靠策略”。那表示当前证据没有通过检查，并不是导览中的示例获得了研究资格。</p></div>
             <div className="demo-actions">
-              {complete ? <a className="demo-primary" href="./index.html">查看真实快照</a>
+              {complete ? <a className="demo-primary" href="./index.html">进入研究简报</a>
                 : <button className="demo-primary" type="button" onClick={() => setComplete(true)}>完成导览</button>}
               <button className="demo-secondary" type="button" onClick={() => { setStep(0); setComplete(false); }}>重新选择示例</button>
             </div>
@@ -194,7 +194,7 @@ export function DemoGuide(): React.JSX.Element {
 
       <footer className="demo-guide-footer">
         <span>仅用于学习结构 · 不连接账户，不发送订单</span>
-        {!complete ? <a href="./index.html">跳过导览，查看真实快照</a> : null}
+        {!complete ? <a href="./index.html">跳过导览，进入研究简报</a> : null}
       </footer>
     </main>
   );

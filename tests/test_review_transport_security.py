@@ -833,8 +833,10 @@ class ReviewTransportSecurityTests(unittest.TestCase):
             target_hits = 0
 
             def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 self.send_response(302)
                 self.send_header("Location", "/redirect-target")
+                self.send_header("Content-Length", "0")
                 self.end_headers()
 
             def do_GET(self):

@@ -49,7 +49,7 @@ class FullSystemSurfaceTests(unittest.TestCase):
             action for action in parser._actions if action.__class__.__name__ == "_SubParsersAction"
         )
 
-        self.assertEqual(set(subparsers.choices), set(CLI_COMMANDS))
+        self.assertEqual(set(subparsers.choices), set(CLI_COMMANDS) | {"start"})
 
     def test_api_and_dashboard_descriptors_include_required_surfaces(self):
         report = generate_research_report(generated_at="2026-07-07T00:01:30Z")

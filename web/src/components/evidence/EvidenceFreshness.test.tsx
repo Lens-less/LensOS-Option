@@ -108,12 +108,12 @@ describe("EvidenceConsole current eligibility expires with the visible clock", (
       stale_after: new Date(evaluationMs + 48 * 60 * 60 * 1000).toISOString(),
     };
     const { rerender } = render(<EvidenceConsole report={report} receivedAtMs={receiptMs} nowMs={receiptMs} />);
-    expect(screen.getByRole("button", { name: "复制组合" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "复制研究复核" })).toBeInTheDocument();
 
     rerender(<EvidenceConsole report={report} receivedAtMs={receiptMs} nowMs={receiptMs + 300_000} />);
     expect(screen.getByRole("heading", { name: "策略简报已暂停" })).toBeInTheDocument();
     expect(screen.getByText("策略简报的有效期已过，等待重新计算。")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "复制组合" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制研究复核" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "发布已停摆" })).not.toBeInTheDocument();
   });
 
@@ -137,6 +137,11 @@ describe("EvidenceConsole current eligibility expires with the visible clock", (
       }
 
       const refreshed = snapshot(mode);
+      if (mode === "live") {
+        const evaluatedAt = new Date(receivedAtMs + 61_000).toISOString();
+        refreshed.generated_at = evaluatedAt;
+        refreshed.runtime_context!.evaluation_clock = evaluatedAt;
+      }
       refreshed.publish_edition = mode === "published" ? {
         captured_at: "2026-09-05T08:01:00Z",
         published_at: "2026-09-05T08:01:00Z",

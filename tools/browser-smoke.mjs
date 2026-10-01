@@ -13,6 +13,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { verifyExtension } from "./extension-browser-smoke.mjs";
 import { verifyPublic } from "./public-browser-smoke.mjs";
+import { verifyDecisionDesk } from "./decision-desk-browser-smoke.mjs";
 
 const { values } = parseArgs({ options: {
   python: { type: "string" },
@@ -225,7 +226,7 @@ try {
   const has = (selector) => evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].some((element) => element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}))`);
   const click = async (label) => {
     const point = await evaluate(`(() => {
-      const element = [...document.querySelectorAll('button, a')].find((item) => item.textContent.trim() === ${JSON.stringify(label)} && item.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}));
+      const element = [...document.querySelectorAll('button, a, summary')].find((item) => item.textContent.trim() === ${JSON.stringify(label)} && item.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}));
       if (!element || element.disabled) throw new Error('Missing enabled control: ' + ${JSON.stringify(label)});
       element.scrollIntoView({block: 'center', behavior: 'instant'});
       const box = element.getBoundingClientRect();
@@ -257,6 +258,9 @@ try {
       await click(label);
       await until(() => has('[data-testid="mobile-navigation-toggle"][aria-expanded="true"]'), "expanded mobile navigation");
     }
+    if (await has('.research-more-navigation:not([open])')) {
+      await click("深入研究");
+    }
   };
   const inFirstViewport = async (selector, label) => {
     await evaluate("window.scrollTo({top:0, left:0, behavior:'instant'})");
@@ -271,14 +275,20 @@ try {
     assert(width.document <= width.viewport + 1, `${name}: horizontal overflow ${JSON.stringify(width)}`);
     report.checks.push(name);
   };
-  const screenshot = async (name) => {
+  const screenshot = async (name, { fullPage = false } = {}) => {
     if (!outputDir) return;
     await evaluate("window.scrollTo({top: 0, left: 0, behavior: 'instant'})");
-    const { data } = await page("Page.captureScreenshot", { format: "png" });
+    const options = { format: "png" };
+    if (fullPage) {
+      const { cssContentSize } = await page("Page.getLayoutMetrics");
+      options.captureBeyondViewport = true;
+      options.clip = { x: 0, y: 0, width: cssContentSize.width, height: cssContentSize.height, scale: 1 };
+    }
+    const { data } = await page("Page.captureScreenshot", options);
     await writeFile(path.join(outputDir, `${name}.png`), Buffer.from(data, "base64"));
   };
   await page("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
-  const navigation = await page("Page.navigate", { url: `${origin}/index.html` });
+  const navigation = await page("Page.navigate", { url: `${origin}/index.html?view=legacy` });
   assert(!navigation.errorText, `Research navigation failed: ${navigation.errorText}`);
   await until(() => evaluate("document.querySelector('[role=alert]')?.innerText.includes('研究数据不可用')"), "initial research connection failure");
   assert.equal(blockedResearchReports, 1, "Initial research request must encounter the controlled outage");
@@ -308,7 +318,9 @@ try {
   report.checks.push("keyboard Tab and Enter complete the tour; arrow key adjusts payoff input");
   assert.equal(researchRequests, requestsBeforeLearning, "Independent learning must not request report, signal or series APIs");
   report.checks.push("research outage still allows a complete keyboard learning journey without research API requests");
-  await click("查看真实快照");
+  await click("进入研究简报");
+  await until(() => has(".decision-desk"), "learning returns to the rebuilt decision desk");
+  await page("Page.navigate", { url: `${origin}/index.html?view=legacy` });
   await until(() => evaluate("document.querySelector('[role=alert]')?.innerText.includes('研究数据不可用')"), "returning from learning preserves the real research outage");
   assert.equal(blockedResearchReports, 2, "Returning from learning must check the real research service again");
   await noOverflow("mobile research outage after learning");
@@ -326,7 +338,7 @@ try {
   assert(await has('[data-freshness="current"]'), "Snapshot must begin current before the controlled refresh failure");
   failNextReport = true;
   await openNavigation();
-  await click("刷新");
+  await click("重新读取快照");
   await until(() => evaluate(`[...document.querySelectorAll('[role="alert"]')].some((element) =>
     element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}) && element.innerText.includes('无法连接研究服务'))`), "visible connection failure after refresh");
   assert.equal(simulatedReportFailures, 1, "Exactly one loopback report request must be interrupted");
@@ -345,6 +357,7 @@ try {
     await inFirstViewport(`section[aria-label="${region}"] h2, section[aria-label="${region}"] .research-next-step`, `mobile ${region} conclusion and next step fit the first viewport`);
     await screenshot(region === "信号验证进度" ? "mobile-signal" : "mobile-series");
   }
+  await verifyDecisionDesk({ page, evaluate, until, click, keyboardActivate, noOverflow, screenshot, origin, report });
   await openNavigation();
   await click("① 研究简报");
   await until(() => has('[data-freshness="current"]'), "return to current brief before expiry");

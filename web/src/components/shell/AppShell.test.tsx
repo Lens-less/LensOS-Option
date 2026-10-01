@@ -33,7 +33,7 @@ describe("compact research navigation", () => {
     expect(screen.getByText("仅研究 · NO_TRADE")).toBeVisible();
   });
 
-  it("keeps desktop links and report context expanded", () => {
+  it("keeps the mode visible and lets desktop readers open source details", () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     render(<AppShell report={safeResearchReport} view="signal" refreshing={false}>
       <main id="surface-main"><h1>当前研究结论</h1></main>
@@ -42,6 +42,8 @@ describe("compact research navigation", () => {
     expect(within(nav).getByRole("link", { name: "④ 排序验证" })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getByRole("link", { name: "学习导览" })).toHaveAttribute("href", "./index.html?view=demo");
     expect(screen.queryByRole("button", { name: /导航/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("数据模式")).toBeVisible();
+    fireEvent.click(screen.getByText("研究边界与来源"));
     expect(screen.getByText("数据截止")).toBeVisible();
     expect(screen.getByRole("link", { name: "原始 JSON" })).toBeVisible();
   });
