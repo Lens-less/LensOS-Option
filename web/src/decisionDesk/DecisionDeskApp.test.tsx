@@ -6,6 +6,7 @@ import { buildDeskResearchCopy, CompareWorkspace } from "./CompareWorkspace";
 import { DiscoverWorkspace } from "./DiscoverWorkspace";
 import { observeComparisonFixture, observeDeskFixture, observeReviewFixture } from "./observeFixtures";
 import { OBSERVE_STORAGE_KEY } from "./observeStore";
+import { maximumScenarioDays, scenarioForSelection } from "./scenario";
 import type { DecisionDesk, DeskAsset, DeskComparison, DeskCriteria, DeskMode, DeskScenario } from "./types";
 
 const clipboard = vi.fn(async (_text: string) => undefined);
@@ -117,6 +118,58 @@ describe("DecisionDesk core journey", () => {
     expect(loadDesk.mock.calls[2][2]).toBe("live");
     fireEvent.click(screen.getByRole("button", { name: /观察复盘/ }));
     expect(screen.getByRole("heading", { name: "从一个看清楚的结构开始" })).toBeVisible();
+  });
+
+  it("resets the actual shared horizon when a long-expiry selection is replaced by a short one", async () => {
+    const desk = observeDeskFixture();
+    const expiryCandidates = (days: number) => desk.candidates.map((candidate, index) => ({ ...structuredClone(candidate),
+      candidate_id: `expiry-${days}-${index}`, dte_days: days,
+      expiration_timestamp: Date.parse(desk.generated_at) + days * 86_400_000,
+      expiry_date: new Date(Date.parse(desk.generated_at) + days * 86_400_000).toISOString().slice(0, 10) }));
+    desk.candidates = [...expiryCandidates(35), ...expiryCandidates(7)];
+    const { loadComparison } = readyApp(desk);
+    await chooseAndCompare();
+    fireEvent.change(screen.getByRole("slider", { name: "经过时间天数" }), { target: { value: "20" } });
+    fireEvent.change(screen.getByRole("slider", { name: "标的价格变化百分比" }), { target: { value: "5" } });
+    fireEvent.change(screen.getByRole("slider", { name: "IV平移百分点" }), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "计算共同情景" }));
+    await screen.findByRole("img", { name: /条件到期损益/ });
+    expect(loadComparison.mock.lastCall?.[2].time_days).toBe(20);
+    fireEvent.click(screen.getByRole("button", { name: "调整所选结构" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "移出比较" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "移出比较" })[0]);
+    const choices = screen.getAllByRole("button", { name: "加入比较" });
+    fireEvent.click(choices[2]); fireEvent.click(choices[3]);
+    fireEvent.click(screen.getByRole("button", { name: "比较这些结构" }));
+    await screen.findByRole("img", { name: /条件到期损益/ });
+    expect(screen.getByRole("slider", { name: "经过时间天数" })).toHaveValue("0");
+    expect(screen.getByRole("slider", { name: "经过时间天数" })).toHaveAttribute("max", "7");
+    expect(loadComparison.mock.lastCall?.[2]).toEqual({ price_change_pct: 5, time_days: 0, iv_shift_points: 4 });
+    expect(screen.getByText(/经过时间由 20 天调整为 0 天/)).toBeVisible();
+  });
+
+  it("resets a prior time horizon on refresh and uses the same normalized value in the new comparison request", async () => {
+    const { loadComparison } = readyApp();
+    await chooseAndCompare();
+    fireEvent.change(screen.getByRole("slider", { name: "经过时间天数" }), { target: { value: "20" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新载入样例" }));
+    await screen.findByRole("heading", { name: "先选择同一到期日的两个结构" });
+    fireEvent.click(screen.getByRole("button", { name: "返回发现机会" }));
+    await chooseAndCompare();
+    expect(loadComparison.mock.lastCall?.[2].time_days).toBe(0);
+    expect(screen.getByRole("slider", { name: "经过时间天数" })).toHaveValue("0");
+    expect(screen.getByText(/经过时间由 20 天重置为 0 天/)).toBeVisible();
+  });
+
+  it("limits scenario time using exact frozen timestamps even if the displayed DTE rounds up", () => {
+    const desk = observeDeskFixture();
+    desk.candidates.forEach((candidate) => {
+      candidate.dte_days = 7;
+      candidate.expiration_timestamp = Date.parse(desk.generated_at) + 7 * 86_400_000 - 1;
+    });
+    expect(maximumScenarioDays(desk, desk.candidates)).toBe(6);
+    expect(scenarioForSelection(desk, desk.candidates, { price_change_pct: 5, time_days: 20, iv_shift_points: 4 }))
+      .toEqual({ price_change_pct: 5, time_days: 6, iv_shift_points: 4 });
   });
 
   it("enforces same expiry and max three selections without hiding complete legs", () => {

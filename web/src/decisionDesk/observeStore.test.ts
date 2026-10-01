@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { observeComparisonFixture, observeDeskFixture, observeReviewFixture } from "./observeFixtures";
 import {
-  OBSERVE_STORAGE_KEY, appendObservationNote, appendObservationReview, archiveObservation,
+  OBSERVE_STORAGE_KEY, ObserveStorageConflictError, appendObservationNote, appendObservationReview, archiveObservation,
   emptyObserveState, loadObserveState, persistObserveState, removeObservation, saveObservation,
 } from "./observeStore";
 
@@ -106,5 +106,78 @@ describe("private browser observation storage", () => {
     const changedElsewhere = appendObservationNote(state, record.id, "另一个页面的复盘");
     expect(() => archiveObservation(state, record.id, true)).toThrow("未保存");
     expect(loadObserveState().state).toEqual(changedElsewhere);
+  });
+
+  it.each(["note", "archive", "review", "persist"] as const)("does not resurrect a deleted observation or private notes through a stale %s", (action) => {
+    const saved = save();
+    const tabA = appendObservationNote(saved.state, saved.record.id, "删除后不能恢复的私密笔记");
+    const tabB = loadObserveState().state;
+    removeObservation(tabA, saved.record.id);
+    const deletedStorage = localStorage.getItem(OBSERVE_STORAGE_KEY);
+    const mutate = () => {
+      if (action === "note") appendObservationNote(tabB, saved.record.id, "旧页面里的后续判断");
+      else if (action === "archive") archiveObservation(tabB, saved.record.id, true);
+      else if (action === "review") appendObservationReview(tabB, saved.record.id, observeReviewFixture(saved.record.desk));
+      else persistObserveState(tabB);
+    };
+
+    expect(mutate).toThrow(ObserveStorageConflictError);
+    expect(mutate).toThrow("请重新读取观察列表");
+    expect(localStorage.getItem(OBSERVE_STORAGE_KEY)).toBe(deletedStorage);
+    expect(loadObserveState().state).toEqual(emptyObserveState());
+    expect(deletedStorage).not.toContain("私密笔记");
+    expect(deletedStorage).not.toContain(saved.record.id);
+  });
+
+  it("keeps cleared private browser data absent when a stale page attempts to save", () => {
+    const { state, record } = save();
+    localStorage.removeItem(OBSERVE_STORAGE_KEY);
+    expect(() => appendObservationNote(state, record.id, "不能恢复已清除的记录")).toThrow(ObserveStorageConflictError);
+    expect(localStorage.getItem(OBSERVE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("preserves newer records and events during stale edits, then accepts a reloaded base", () => {
+    const { input, state, record } = save();
+    const tabB = loadObserveState().state;
+    const newSave = saveObservation(state, { ...input, note: "另一个页面的新观察" });
+    const latest = appendObservationNote(newSave.state, newSave.record.id, "新观察的私密复盘");
+    const latestStorage = localStorage.getItem(OBSERVE_STORAGE_KEY);
+    const staleActions = [
+      () => appendObservationNote(tabB, record.id, "旧页面追加"),
+      () => archiveObservation(tabB, record.id, true),
+      () => removeObservation(tabB, record.id),
+      () => saveObservation(tabB, input),
+    ];
+    for (const action of staleActions) {
+      expect(action).toThrow(ObserveStorageConflictError);
+      expect(localStorage.getItem(OBSERVE_STORAGE_KEY)).toBe(latestStorage);
+    }
+    expect(loadObserveState().state).toEqual(latest);
+
+    const reloaded = loadObserveState().state;
+    const recovered = appendObservationNote(reloaded, record.id, "重新读取后保存");
+    expect(recovered.records).toEqual(latest.records);
+    expect(recovered.reviews.slice(1)).toEqual(latest.reviews);
+    expect(recovered.reviews[0].note).toBe("重新读取后保存");
+    expect(loadObserveState().state).toEqual(recovered);
+  });
+
+  it("does not roll back another page's archive status using a stale base", () => {
+    const { state, record } = save();
+    const archived = archiveObservation(state, record.id, true);
+    expect(() => appendObservationNote(state, record.id, "旧页面的笔记")).toThrow(ObserveStorageConflictError);
+    expect(loadObserveState().state).toEqual(archived);
+  });
+
+  it("continues to load and append to the unchanged saved v1 format", () => {
+    const { state, record } = save();
+    localStorage.setItem(OBSERVE_STORAGE_KEY, JSON.stringify({ reviews: state.reviews, records: state.records, version: 1 }));
+    const loaded = loadObserveState();
+    expect(loaded.error).toBeNull();
+    const updated = appendObservationNote(loaded.state, record.id, "旧版本记录继续复盘");
+    expect(updated.records[0]).toEqual(record);
+    expect(Object.isFrozen(updated.records[0].desk)).toBe(true);
+    expect(Object.keys(JSON.parse(localStorage.getItem(OBSERVE_STORAGE_KEY)!)).sort()).toEqual(["records", "reviews", "version"]);
+    expect(loadObserveState().state).toEqual(updated);
   });
 });

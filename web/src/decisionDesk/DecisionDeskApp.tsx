@@ -5,6 +5,7 @@ import { CompareWorkspace } from "./CompareWorkspace";
 import { candidateComparable, deskExpired, deskTime, DiscoverWorkspace } from "./DiscoverWorkspace";
 import { ObserveWorkspace } from "./ObserveWorkspace";
 import { loadObserveState, saveObservation } from "./observeStore";
+import { scenarioForSelection } from "./scenario";
 import { DEFAULT_DESK_CRITERIA, DEFAULT_DESK_SCENARIO } from "./types";
 import type { DecisionDesk, DeskAsset, DeskCandidate, DeskComparison, DeskCriteria, DeskMode, DeskScenario } from "./types";
 import "./decisionDesk.css";
@@ -46,6 +47,7 @@ export function DecisionDeskApp({ loadDesk = discoverDesk, loadComparison = comp
   const [scenario, setScenario] = useState<DeskScenario>({ ...DEFAULT_DESK_SCENARIO });
   const [comparison, setComparison] = useState<DeskComparison | null>(null);
   const [scenarioAdjusted, setScenarioAdjusted] = useState(false);
+  const [scenarioNotice, setScenarioNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
   const [comparing, setComparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +61,8 @@ export function DecisionDeskApp({ loadDesk = discoverDesk, loadComparison = comp
   const comparisonSequence = useRef(0);
   const criteriaRef = useRef(criteria);
   criteriaRef.current = criteria;
+  const scenarioRef = useRef(scenario);
+  scenarioRef.current = scenario;
   const headingRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async (nextAsset: DeskAsset, nextMode: DeskMode, nextCriteria: DeskCriteria) => {
@@ -66,6 +70,11 @@ export function DecisionDeskApp({ loadDesk = discoverDesk, loadComparison = comp
     ++comparisonSequence.current;
     setBusy(true); setComparing(false); setError(null); setComparisonError(null); setNotice(null);
     setSelectedIds([]); setComparison(null); setScenarioAdjusted(false); setDesk(null);
+    const previous = scenarioRef.current;
+    const reset = scenarioForSelection(null, [], previous);
+    scenarioRef.current = reset; setScenario(reset);
+    setScenarioNotice(previous.time_days === reset.time_days ? null
+      : `数据已重新读取，经过时间由 ${previous.time_days} 天重置为 0 天。重新选腿后可调整共同情景。`);
     try {
       const result = await loadDesk(nextAsset, nextCriteria, nextMode);
       if (sequence !== discoverySequence.current) return;
@@ -95,8 +104,9 @@ export function DecisionDeskApp({ loadDesk = discoverDesk, loadComparison = comp
 
   const select = (candidate: DeskCandidate) => {
     if (!desk) return;
+    let nextIds: string[];
     if (selectedIds.includes(candidate.candidate_id)) {
-      setSelectedIds((ids) => ids.filter((id) => id !== candidate.candidate_id));
+      nextIds = selectedIds.filter((id) => id !== candidate.candidate_id);
     } else {
       if (deskExpired(desk, Date.now())) return;
       if (!candidateComparable(candidate) || selectedIds.length >= 3) return;
@@ -104,8 +114,14 @@ export function DecisionDeskApp({ loadDesk = discoverDesk, loadComparison = comp
       if (first && first.expiry_date !== candidate.expiry_date) {
         setNotice("为了使用同一时间假设，请选择同一到期日的结构。"); return;
       }
-      setSelectedIds((ids) => [...ids, candidate.candidate_id]);
+      nextIds = [...selectedIds, candidate.candidate_id];
     }
+    const nextCandidates = desk.candidates.filter((item) => nextIds.includes(item.candidate_id));
+    const previous = scenarioRef.current;
+    const normalized = scenarioForSelection(desk, nextCandidates, previous);
+    setSelectedIds(nextIds); scenarioRef.current = normalized; setScenario(normalized);
+    if (normalized.time_days !== previous.time_days) setScenarioNotice(
+      `选腿期限已变化，经过时间由 ${previous.time_days} 天调整为 ${normalized.time_days} 天。价格和 IV 假设保留。`);
     ++comparisonSequence.current; setComparing(false); setComparison(null); setScenarioAdjusted(false); setComparisonError(null);
   };
 
@@ -117,8 +133,14 @@ export function DecisionDeskApp({ loadDesk = discoverDesk, loadComparison = comp
     })) { setComparisonError("所选结构的报价已到复核期限，请重新读取行情后比较。"); return; }
     const sequence = ++comparisonSequence.current;
     setComparing(true); setComparisonError(null); setNotice(null);
+    const previous = scenarioRef.current;
+    const normalized = scenarioForSelection(desk,
+      desk.candidates.filter((candidate) => selectedIds.includes(candidate.candidate_id)), previous);
+    scenarioRef.current = normalized; setScenario(normalized);
+    if (normalized.time_days !== previous.time_days) setScenarioNotice(
+      `经过时间已调整为所选结构允许的 ${normalized.time_days} 天；本次计算使用调整后的共同情景。`);
     try {
-      const result = await loadComparison(desk.snapshot_id, selectedIds, scenario, desk.analysis_id);
+      const result = await loadComparison(desk.snapshot_id, selectedIds, normalized, desk.analysis_id);
       if (sequence === comparisonSequence.current) { setComparison(result); setScenarioAdjusted(false); }
     } catch (failure) {
       if (sequence === comparisonSequence.current) { setComparison(null); setComparisonError(failureCopy(failure)); }
@@ -139,8 +161,9 @@ export function DecisionDeskApp({ loadDesk = discoverDesk, loadComparison = comp
       setObserveState(saved.state); setStorageError(null); setWorkspace("observe");
       setNotice("已保存在此浏览器本地；原快照和共同假设已冻结，后续复核会单独记录。");
       window.scrollTo({ top: 0, behavior: "instant" });
-    } catch {
-      setStorageError("浏览器本地存储不可用，记录尚未保存。可先复制研究复核；不要关闭当前比较。");
+    } catch (failure) {
+      setStorageError(failure instanceof Error ? failure.message
+        : "浏览器本地存储不可用，记录尚未保存。可先复制研究复核；不要关闭当前比较。");
       setNotice("保存未完成，当前比较仍保留。请先复制研究复核。");
     }
   };
@@ -179,7 +202,7 @@ export function DecisionDeskApp({ loadDesk = discoverDesk, loadComparison = comp
     {storageError && workspace !== "observe" ? <div className="desk-global-notice" role="alert">{storageError}</div> : null}
     <div ref={headingRef} tabIndex={-1} className="desk-workspace-focus" aria-label={WORKSPACES.find((item) => item.id === workspace)!.label} />
 
-    {workspace === "observe" ? <ObserveWorkspace state={observeState} onChange={setObserveState} onReview={reviewRecord} storageError={storageError ?? undefined} />
+    {workspace === "observe" ? <ObserveWorkspace state={observeState} onChange={(next) => { setObserveState(next); setStorageError(null); }} onReview={reviewRecord} storageError={storageError ?? undefined} />
       : !desk ? <main className="desk-workspace" id="decision-desk-main"><section className="desk-empty" role={error ? "alert" : "status"}>
         <span className={busy ? "desk-loading-mark" : ""} aria-hidden="true">{busy ? "◌" : "○"}</span><h1>{busy ? mode === "demo" ? "准备你的研究工作台" : "正在读取公开期权结构" : "这次数据尚未读取成功"}</h1>
         <p>{error ?? "先扫描合约范围，再核验入选结构的每一条腿。不推断缺失报价。"}</p>
@@ -188,8 +211,11 @@ export function DecisionDeskApp({ loadDesk = discoverDesk, loadComparison = comp
         onCriteriaChange={setCriteria} onApply={() => void refresh(asset, mode, criteria)} onSelect={select}
         onCompare={() => { navigate("compare"); void runComparison(); }} />
       : <CompareWorkspace desk={desk} candidates={selectedCandidates} comparison={comparison} scenario={scenario} busy={comparing} nowMs={nowMs}
-        error={comparisonError} scenarioAdjusted={scenarioAdjusted} onScenarioChange={(next) => {
-          ++comparisonSequence.current; setScenario(next); setComparison(null); setScenarioAdjusted(true); setComparing(false); setComparisonError(null);
+        error={comparisonError} scenarioAdjusted={scenarioAdjusted} scenarioNotice={scenarioNotice} onScenarioChange={(next) => {
+          ++comparisonSequence.current;
+          const normalized = scenarioForSelection(desk, selectedCandidates, next);
+          scenarioRef.current = normalized; setScenario(normalized); setScenarioNotice(null);
+          setComparison(null); setScenarioAdjusted(true); setComparing(false); setComparisonError(null);
         }} onRunComparison={() => void runComparison()}
         onRemove={(id) => { const candidate = desk.candidates.find((item) => item.candidate_id === id); if (candidate) select(candidate); }}
         onSave={save} onBack={() => navigate("discover")} />}

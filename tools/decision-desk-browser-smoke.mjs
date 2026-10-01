@@ -56,7 +56,9 @@ export async function verifyDecisionDesk({ page, evaluate, until, click, keyboar
     await until(() => visible(".desk-expiry-chart svg"), "real backend returns comparison payoff curves");
     await until(() => enabled("更新情景比较"), "comparison calculation finishes");
     assert.equal(await evaluate("document.querySelectorAll('.desk-expiry-chart path').length"), 3);
-    assert.equal(await evaluate("document.querySelectorAll('.desk-stress-grid > div').length"), 3);
+    const modelValues = await evaluate("[...document.querySelectorAll('.desk-model-outcome td')].map((element) => element.textContent.trim())");
+    assert.equal(modelValues.length, 3, "Comparison must expose exactly three model outcomes in the shared table");
+    assert(modelValues.every((value) => value !== "" && Number.isFinite(Number(value.replaceAll(',', '')))), "Synthetic comparison must return three calculable model values");
   };
 
   await page("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
@@ -73,7 +75,7 @@ export async function verifyDecisionDesk({ page, evaluate, until, click, keyboar
 
   const before = await evaluate(`({
     payoff: [...document.querySelectorAll('.desk-expiry-chart path')].map((element) => element.getAttribute('d')),
-    stress: [...document.querySelectorAll('.desk-stress-grid strong')].map((element) => element.textContent)
+    stress: [...document.querySelectorAll('.desk-model-outcome td')].map((element) => element.textContent)
   })`);
   await setRange("标的价格变化百分比", -8);
   await setRange("经过时间天数", 2);
@@ -86,7 +88,7 @@ export async function verifyDecisionDesk({ page, evaluate, until, click, keyboar
   await until(async () => await enabled("保存到本地观察") && await visible(".desk-expiry-chart svg"), "real updated scenario becomes available");
   const after = await evaluate(`({
     payoff: [...document.querySelectorAll('.desk-expiry-chart path')].map((element) => element.getAttribute('d')),
-    stress: [...document.querySelectorAll('.desk-stress-grid strong')].map((element) => element.textContent)
+    stress: [...document.querySelectorAll('.desk-model-outcome td')].map((element) => element.textContent)
   })`);
   assert.deepEqual(after.payoff, before.payoff, "Elapsed time and IV changes must not alter the fixed conditional expiry payoff");
   assert.notDeepEqual(after.stress, before.stress, "Price/time/IV changes must recalculate the pre-expiry stress model");
@@ -148,6 +150,19 @@ export async function verifyDecisionDesk({ page, evaluate, until, click, keyboar
 
   await page("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await clickSelector(".desk-masthead nav button:nth-child(1)");
+  await until(() => visible(".desk-opportunities"), "mobile discovery after observation reload");
+  await click("重新载入样例");
+  await waitDiscover();
+  await selectThree();
+  await openCompare();
+  assert(await evaluate("Number(document.querySelector('input[aria-label=\"经过时间天数\"]').max) >= 20"), "Real demo selection must permit the twenty-day horizon regression");
+  await setRange("标的价格变化百分比", -8);
+  await setRange("经过时间天数", 20);
+  await setRange("IV平移百分点", 5);
+  await click("计算共同情景");
+  await until(async () => await enabled("更新情景比较") && await visible(".desk-expiry-chart svg"), "real engine calculates the twenty-day comparison");
+  assert(await evaluate("document.querySelector('.desk-outcome-assumptions').textContent.includes('时间 20 天')"), "The real comparison response must retain the requested twenty-day scenario");
+  await clickSelector(".desk-masthead nav button:nth-child(1)");
   await until(() => visible(".desk-opportunities"), "mobile discovery workspace");
   await click("重新载入样例");
   await waitDiscover();
@@ -155,9 +170,63 @@ export async function verifyDecisionDesk({ page, evaluate, until, click, keyboar
   await noOverflow("DecisionDesk 390px discovery has no page overflow");
   await screenshot("desk-mobile-discover");
   await openCompare();
+  assert.equal(await evaluate("document.querySelector('input[aria-label=\"经过时间天数\"]').value"), "0", "Fresh discovery and selection must reset the actual horizon to zero");
+  assert(await evaluate("document.querySelector('.desk-outcome-assumptions').textContent.includes('时间 0 天')"), "The real fresh comparison response must use the reset zero-day horizon");
+  assert(await evaluate("document.querySelector('.desk-outcome-assumptions').textContent.includes('价格 -8%') && document.querySelector('.desk-outcome-assumptions').textContent.includes('IV 5 点')"), "Refreshing the time horizon must preserve the shared price and IV assumptions");
+  assert(await evaluate("document.querySelector('.desk-scenario-panel').textContent.includes('经过时间由 20 天重置为 0 天')"), "The reset must be explained at the visible shared controls");
+  await evaluate("window.scrollTo({top:0, left:0, behavior:'instant'})");
+  const decisionFocus = await evaluate(`(() => {
+    const selectors = {
+      controls: '.desk-scenario-controls', summary: '.desk-comparison-outcomes',
+      chart: '.desk-expiry-chart', assumptions: '.desk-evidence-details > summary',
+      decision: '.desk-decision-panel', legs: '.desk-comparison-evidence'
+    };
+    const boxes = Object.fromEntries(Object.entries(selectors).map(([name, selector]) => {
+      const element = document.querySelector(selector);
+      if (!element) throw new Error('Missing mobile decision region: ' + name);
+      const box = element.getBoundingClientRect();
+      return [name, {top:box.top + scrollY, bottom:box.bottom + scrollY,
+        left:box.left, right:box.right, width:box.width, visible:element.checkVisibility()}];
+    }));
+    return {viewport:innerWidth, boxes,
+      legDetails: [...document.querySelectorAll('.desk-comparison-leg-details')].map((detail) => detail.open),
+      assumptionsOpen: document.querySelector('.desk-evidence-details').open};
+  })()`);
+  assert.equal(decisionFocus.viewport, 390);
+  for (const [name, box] of Object.entries(decisionFocus.boxes)) {
+    assert(box.visible && box.width > 0 && box.left >= -1 && box.right <= 391,
+      `Mobile ${name} must fit the actual 390px viewport: ${JSON.stringify(box)}`);
+  }
+  const decisionOrder = ["controls", "summary", "chart", "assumptions", "decision", "legs"];
+  for (let index = 1; index < decisionOrder.length; index += 1) {
+    const previous = decisionOrder[index - 1];
+    const current = decisionOrder[index];
+    assert(decisionFocus.boxes[previous].bottom <= decisionFocus.boxes[current].top + 1,
+      `Mobile ${previous} must precede ${current}, keeping the shared decision ahead of leg evidence`);
+  }
+  assert.deepEqual(decisionFocus.legDetails, [false, false, false], "All three mobile contract details must begin collapsed");
+  assert.equal(decisionFocus.assumptionsOpen, false, "Dense common assumptions must begin collapsed on mobile");
+  assert(!await visible(".desk-comparison-leg-details .desk-legs"), "Closed mobile contract details must hide the dense leg lists");
   await noOverflow("DecisionDesk 390px comparison has no page overflow");
   await screenshot("desk-mobile-compare");
   await screenshot("desk-mobile-compare-full", { fullPage: true });
+  const legSummary = await evaluate("document.querySelector('.desk-comparison-leg-details > summary').textContent.trim()");
+  await keyboardActivate(legSummary);
+  await until(() => visible(".desk-comparison-leg-details .desk-legs"), "keyboard opens the exact mobile contract quotes");
+  const mobileLegs = await evaluate(`(() => {
+    const detail = document.querySelector('.desk-comparison-leg-details');
+    const list = detail.querySelector('.desk-legs');
+    return {open:detail.open, label:list.getAttribute('aria-label'),
+      legs:[...list.querySelectorAll('li')].map((leg) => ({visible:leg.checkVisibility(), text:leg.innerText}))};
+  })()`);
+  assert(mobileLegs.open && mobileLegs.label?.includes("完整合约腿"), "Mobile quotes must be available through a labeled native disclosure");
+  assert([2, 4].includes(mobileLegs.legs.length), "Expanded mobile disclosure must retain the complete structure");
+  for (const leg of mobileLegs.legs) {
+    assert(leg.visible && ["Bid ", "Ask ", "USDC", "合约单位", "报价于", "结算"].every((token) => leg.text.includes(token)),
+      "Every revealed contract must expose bid/ask, units and quote time without truncating evidence");
+  }
+  await noOverflow("DecisionDesk 390px expanded contract quotes have no page overflow");
+  await screenshot("desk-mobile-compare-legs", { fullPage: true });
   await clickSelector(".desk-masthead nav button:nth-child(3)");
   await until(() => visible(".desk-observe-detail"), "mobile observation workspace");
   await noOverflow("DecisionDesk 390px observation has no page overflow");
@@ -169,11 +238,15 @@ export async function verifyDecisionDesk({ page, evaluate, until, click, keyboar
     copiedVia: copy.channel, scenario: original.comparison.scenario,
     originalCandidateId: original.candidate_id, reviewedCandidateId: review.reviewed_candidate_id,
     browserStorageOnly: true, originalPreservedAfterReloadAndReview: true,
+    mobileDecisionFocus: decisionFocus, mobileExactLegsKeyboardAccessible: true,
+    refreshedScenarioHorizon: {previous:20, actualControl:0, responseAssumptions:0},
   };
   report.checks.push(
     "real DecisionDesk discovers three complete same-expiry structures and compares shared payoff/stress assumptions",
     "real scenario controls invalidate stale save/copy until recalculation; keyboard copies research with boundary metadata",
     "browser-private observation restores after reload and reviews exact saved legs with truthful new identity",
+    "real twenty-day scenario resets to zero after fresh discovery and selection while price and IV assumptions persist",
+    "390px shared controls, outcome table and chart precede collapsed contract evidence; keyboard reveals complete bid/ask and quote metadata",
     "desktop and 390px DecisionDesk discovery, comparison, and observation remain research-only with explicit synthetic source",
   );
 

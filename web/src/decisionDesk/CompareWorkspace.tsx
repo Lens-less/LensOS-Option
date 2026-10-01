@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 
 import type { DecisionDesk, DeskCandidate, DeskComparison, DeskScenario } from "./types";
 import { CandidateLegs, candidateComparable, deskExpired, deskNumber, deskTime, STRUCTURE_LABELS, VIEWPOINT_LABELS } from "./DiscoverWorkspace";
+import { maximumScenarioDays } from "./scenario";
 
 const COLORS = ["#176b52", "#4967a1", "#956324"];
 
@@ -82,6 +83,52 @@ function ExpiryComparisonChart({ candidates, comparison, spot }: {
   </figure>;
 }
 
+function ComparisonOutcomes({ candidates, comparison }: {
+  candidates: DeskCandidate[]; comparison: DeskComparison;
+}): React.JSX.Element {
+  return <div className="desk-comparison-outcomes">
+    <table className="desk-outcomes-table"><caption>共同情景下的结构参考 · USDC</caption>
+      <thead><tr><th scope="col">比较口径</th>{candidates.map((candidate, index) => <th scope="col" key={candidate.candidate_id}>
+        <span className="desk-outcome-structure"><i style={{ background: COLORS[index % COLORS.length] }}>{index + 1}</i>
+          <span>{STRUCTURE_LABELS[candidate.structure]}</span></span></th>)}</tr></thead>
+      <tbody>
+        <tr><th scope="row">净入场参考</th>{candidates.map((candidate) => <td key={candidate.candidate_id}>{deskNumber(candidate.economics.net_entry_cash)}</td>)}</tr>
+        <tr><th scope="row">入场费用</th>{candidates.map((candidate) => <td key={candidate.candidate_id}>{deskNumber(candidate.economics.entry_fees)}</td>)}</tr>
+        <tr><th scope="row">未含费损失边界</th>{candidates.map((candidate) => <td key={candidate.candidate_id}>{deskNumber(candidate.economics.option_payoff_loss_bound)}</td>)}</tr>
+        <tr className="desk-model-outcome"><th scope="row">模型压力损益</th>{candidates.map((candidate) => {
+          const member = comparison.members.find((item) => item.candidate_id === candidate.candidate_id)!;
+          return <td key={candidate.candidate_id}>{member.stress ? deskNumber(member.stress.hypothetical_pnl) : "不可计算"}
+            {!member.stress ? <small>{member.stress_reason ?? "报价 IV 或模型输入不足"}</small> : null}</td>;
+        })}</tr>
+      </tbody>
+    </table>
+    <p className="desk-outcome-assumptions">模型压力：价格 {comparison.scenario.price_change_pct}% · 时间 {comparison.scenario.time_days} 天 · IV {comparison.scenario.iv_shift_points} 点。理论损益不是预计利润。</p>
+    <p className="desk-risk-scope">期权收益损失边界不含入场、退出及交割费用，不是含费实际损失上限。结构比例是比较口径，不是推荐手数。</p>
+  </div>;
+}
+
+function CandidateEvidence({ candidate, index, wideLayout, onRemove }: {
+  candidate: DeskCandidate; index: number; wideLayout: boolean; onRemove: (candidateId: string) => void;
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(wideLayout);
+  useEffect(() => { setExpanded(wideLayout); }, [wideLayout]);
+  return <article className="desk-comparison-card">
+    <header><span className="desk-comparison-number" style={{ background: COLORS[index % COLORS.length] }}>{index + 1}</span>
+      <div><h3>{STRUCTURE_LABELS[candidate.structure]}</h3><p>{VIEWPOINT_LABELS[candidate.viewpoint]} · {candidate.expiry_date}</p></div>
+      <button className="desk-icon-button" onClick={() => onRemove(candidate.candidate_id)} type="button" aria-label={`移除${STRUCTURE_LABELS[candidate.structure]}`}>×</button></header>
+    <details className="desk-comparison-leg-details" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary>查看 {candidate.legs.length} 条完整合约腿、报价与证据</summary><div>
+        <CandidateLegs candidate={candidate} detailed />
+        <dl className="desk-comparison-metrics desk-leg-economics"><div><dt>从中间价到双边报价的差额</dt><dd>{deskNumber(candidate.economics.mid_to_touch_drag)} USDC</dd></div>
+          <div><dt>入场费用政策</dt><dd><code>{candidate.economics.fee_policy_id}</code></dd></div></dl>
+        <div className="desk-leg-evidence"><h4>研究证据与失效条件</h4><p>假设 <code>{candidate.assumptions_id}</code></p>
+          {candidate.reasons.map((reason) => <p key={reason.code}>{reason.detail} <code>{reason.code}</code></p>)}
+          {candidate.invalidation.map((reason) => <p key={reason.code}>{reason.detail}</p>)}
+          <p>建议复核 {deskTime(candidate.recheck_at)}</p></div>
+      </div></details>
+  </article>;
+}
+
 function CopyReview({ text, disabled, current }: { text: string; disabled: boolean; current: () => boolean }): React.JSX.Element {
   const [status, setStatus] = useState<"idle" | "copied" | "failed" | "expired">("idle");
   const textareaId = useId();
@@ -109,6 +156,7 @@ export interface CompareWorkspaceProps {
   nowMs: number;
   error?: string | null;
   scenarioAdjusted?: boolean;
+  scenarioNotice?: string | null;
   onScenarioChange: (scenario: DeskScenario) => void;
   onRunComparison: () => void;
   onRemove: (candidateId: string) => void;
@@ -116,10 +164,18 @@ export interface CompareWorkspaceProps {
   onBack: () => void;
 }
 
-export function CompareWorkspace({ desk, candidates, comparison, scenario, busy, nowMs, error, scenarioAdjusted = false,
+export function CompareWorkspace({ desk, candidates, comparison, scenario, busy, nowMs, error, scenarioAdjusted = false, scenarioNotice,
   onScenarioChange, onRunComparison, onRemove, onSave, onBack }: CompareWorkspaceProps): React.JSX.Element {
   const [chosenId, setChosenId] = useState("");
   const [note, setNote] = useState("");
+  const [wideLayout, setWideLayout] = useState(() => window.matchMedia?.("(min-width: 700px)").matches ?? true);
+  useEffect(() => {
+    const media = window.matchMedia?.("(min-width: 700px)");
+    if (!media) return;
+    const sync = () => setWideLayout(media.matches);
+    sync(); media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
   const ids = candidates.map((candidate) => candidate.candidate_id).join("|");
   useEffect(() => { setChosenId(""); setNote(""); }, [ids, desk.snapshot_id]);
   const expired = deskExpired(desk, nowMs) || candidates.some((candidate) => !candidateComparable(candidate, nowMs));
@@ -130,7 +186,7 @@ export function CompareWorkspace({ desk, candidates, comparison, scenario, busy,
   const scenarioChanged = matches && (comparison.scenario.price_change_pct !== scenario.price_change_pct
     || comparison.scenario.time_days !== scenario.time_days || comparison.scenario.iv_shift_points !== scenario.iv_shift_points);
   const canUse = matches && !scenarioChanged && !expired && !busy;
-  const maximumDays = Math.max(0, Math.floor(Math.min(...candidates.map((candidate) => candidate.dte_days))));
+  const maximumDays = maximumScenarioDays(desk, candidates);
 
   if (candidates.length < 2 || !sameExpiry) return <main className="desk-workspace" id="decision-desk-main">
     <div className="desk-workspace-heading"><div><p className="desk-eyebrow">02 · 比较与决策</p><h1>让结构在同一假设下比较</h1></div></div>
@@ -139,29 +195,12 @@ export function CompareWorkspace({ desk, candidates, comparison, scenario, busy,
       <button className="desk-button desk-button-primary" onClick={onBack} type="button">返回发现机会</button></section>
   </main>;
 
-  return <main className="desk-workspace" id="decision-desk-main">
+  return <main className="desk-workspace desk-comparison-workspace" id="decision-desk-main">
     <div className="desk-workspace-heading"><div><p className="desk-eyebrow">02 · 比较与决策</p><h1>在同一假设下，做出研究选择</h1>
       <p>{desk.asset} · 同于 {candidates[0].expiry_date} 到期 · 一个快照、一套成本口径。每条曲线分别表示一个结构，不叠加成仓位。</p></div>
       <button className="desk-button desk-button-quiet" onClick={onBack} type="button">调整所选结构</button></div>
     {expired ? <div className="desk-notice" role="alert"><strong>当前比较已暂停</strong><p>快照或所选结构报价已到复核期限。历史图表保留用于理解；取得新数据并重新选择后才可保存观察或复制复核。</p></div> : null}
     {error ? <div className="desk-notice" role="alert"><strong>比较暂未完成</strong><p>{error}</p></div> : null}
-
-    <div className="desk-comparison-cards" style={{ "--desk-compare-count": candidates.length } as React.CSSProperties}>
-      {candidates.map((candidate, index) => <article className="desk-comparison-card" key={candidate.candidate_id}>
-        <header><span className="desk-comparison-number" style={{ background: COLORS[index % COLORS.length] }}>{index + 1}</span><div><h2>{STRUCTURE_LABELS[candidate.structure]}</h2>
-          <p>{VIEWPOINT_LABELS[candidate.viewpoint]} · {candidate.expiry_date}</p></div><button className="desk-icon-button" onClick={() => onRemove(candidate.candidate_id)} type="button" aria-label={`移除${STRUCTURE_LABELS[candidate.structure]}`}>×</button></header>
-        <CandidateLegs candidate={candidate} detailed />
-        <dl className="desk-comparison-metrics"><div><dt>净权利金参考</dt><dd>{deskNumber(candidate.economics.net_entry_cash)} USDC</dd></div>
-          <div><dt>入场费用预算</dt><dd>{deskNumber(candidate.economics.entry_fees)} USDC</dd></div>
-          <div><dt>从中间价到双边报价的差额</dt><dd>{deskNumber(candidate.economics.mid_to_touch_drag)} USDC</dd></div>
-          <div><dt>期权到期收益损失边界</dt><dd>{deskNumber(candidate.economics.option_payoff_loss_bound)} USDC</dd></div></dl>
-        <p className="desk-risk-scope">期权收益损失边界不含入场、退出及交割费用，不是含费实际损失上限。结构比例是比较口径，不是推荐手数。</p>
-        <details className="desk-evidence-details"><summary>研究证据与失效条件</summary><div><p>假设 <code>{candidate.assumptions_id}</code></p>
-          {candidate.reasons.map((reason) => <p key={reason.code}>{reason.detail} <code>{reason.code}</code></p>)}
-          {candidate.invalidation.map((reason) => <p key={reason.code}>{reason.detail}</p>)}
-          <p>建议复核 {deskTime(candidate.recheck_at)}</p></div></details>
-      </article>)}
-    </div>
 
     <section className="desk-scenario-panel" aria-labelledby="desk-scenario-title"><div className="desk-section-heading"><div><h2 id="desk-scenario-title">共同情景</h2>
       <p>价格、时间与 IV 对所有结构同时生效；到期图与到期前模型压力分开解释。</p></div></div>
@@ -169,24 +208,20 @@ export function CompareWorkspace({ desk, candidates, comparison, scenario, busy,
         <label>标的价格变化 <output>{scenario.price_change_pct > 0 ? "+" : ""}{scenario.price_change_pct}%</output>
           <input aria-label="标的价格变化百分比" type="range" min={-40} max={40} step={1} value={scenario.price_change_pct}
             onChange={(event) => onScenarioChange({ ...scenario, price_change_pct: Number(event.currentTarget.value) })} /></label>
-        <label>经过时间 <output>{scenario.time_days} 天</output><input aria-label="经过时间天数" type="range" min={0} max={maximumDays} step={1} value={Math.min(scenario.time_days, maximumDays)}
+        <label>经过时间 <output>{scenario.time_days} 天</output><input aria-label="经过时间天数" type="range" min={0} max={maximumDays} step={1} value={scenario.time_days}
           onChange={(event) => onScenarioChange({ ...scenario, time_days: Number(event.currentTarget.value) })} /></label>
         <label>IV 平移 <output>{scenario.iv_shift_points > 0 ? "+" : ""}{scenario.iv_shift_points} 个百分点</output>
           <input aria-label="IV平移百分点" type="range" min={-20} max={20} step={1} value={scenario.iv_shift_points}
             onChange={(event) => onScenarioChange({ ...scenario, iv_shift_points: Number(event.currentTarget.value) })} /></label>
         <button className="desk-button desk-button-primary" disabled={expired || busy} type="submit">{busy ? "正在计算…" : matches ? "更新情景比较" : "计算共同情景"}</button>
       </div></form>
+      {scenarioNotice ? <p className="desk-action-feedback" role="status">{scenarioNotice}</p> : null}
       {scenarioAdjusted || scenarioChanged ? <p className="desk-action-feedback" role="status">情景已调整，请重新计算共同情景。{scenarioChanged ? "下方仍是上次计算结果，更新后再保存或复制。" : ""}</p> : null}
       {!comparison || !matches ? <div className="desk-chart-placeholder" role="status">{busy ? "正在按相同报价、费用和情景核验各结构…" : "计算后显示条件到期图和到期前模型压力。"}</div> : <>
+        <ComparisonOutcomes candidates={candidates} comparison={comparison} />
         <div className="desk-chart-heading"><h3>条件到期损益</h3><span>不受当前时间 / IV 平移影响</span></div>
         <ExpiryComparisonChart candidates={candidates} comparison={comparison} spot={desk.market.index_price} />
         <p className="desk-chart-caption">使用本次结构比例与双边报价，按列明入场费与标准交割费计算；实际费率与结算价需复核。条件曲线解释结构，不代表实际成交或未来收益。</p>
-        <div className="desk-chart-heading"><h3>到期前模型压力</h3><span>价格 {comparison.scenario.price_change_pct}% · 时间 {comparison.scenario.time_days} 天 · IV {comparison.scenario.iv_shift_points} 点</span></div>
-        <div className="desk-stress-grid">{candidates.map((candidate, index) => {
-          const member = comparison.members.find((item) => item.candidate_id === candidate.candidate_id)!;
-          return <div key={member.candidate_id}><p><span style={{ color: COLORS[index % COLORS.length] }}>{index + 1}</span> · {STRUCTURE_LABELS[candidate.structure]}</p>
-          <strong>{member.stress ? `${deskNumber(member.stress.hypothetical_pnl)} USDC` : "模型值不可用"}</strong><small>{member.stress ? "共同假设下的理论损益，不是预计利润" : member.stress_reason ?? "报价 IV 或模型输入不足"}</small></div>;
-        })}</div>
         <details className="desk-evidence-details"><summary>本次共同假设与分析身份</summary><div><ul>{comparison.assumptions.map((assumption, index) => <li key={index}>{assumption}</li>)}</ul>
           <p>快照 <code>{comparison.snapshot_id}</code></p><p>情景 <code>{comparison.scenario_id}</code></p><p>假设 <code>{comparison.assumptions_id}</code></p>
           <p>计算于 {deskTime(comparison.generated_at)} · 快照有效至 {deskTime(desk.expires_at)}</p></div></details>
@@ -205,6 +240,13 @@ export function CompareWorkspace({ desk, candidates, comparison, scenario, busy,
           {chosenId && comparison && matches ? <CopyReview text={buildDeskResearchCopy(desk, candidates.find((candidate) => candidate.candidate_id === chosenId)!, comparison)} disabled={!canUse}
             current={() => !deskExpired(desk, Date.now()) && candidates.every((candidate) => candidateComparable(candidate))} /> : <p className="desk-muted">暂不选择也是合理判断；不会自动生成订单。</p>}</div>
       </form>
+    </section>
+
+    <section className="desk-comparison-evidence" aria-labelledby="desk-legs-title"><div className="desk-section-heading"><div><h2 id="desk-legs-title">核对完整合约与原始证据</h2>
+      <p>上方比较使用这些精确合约腿。逐项查看双边报价、单位、时刻与失效条件；复制研究会完整保留。</p></div></div>
+      <div className="desk-comparison-cards" style={{ "--desk-compare-count": candidates.length } as React.CSSProperties}>
+        {candidates.map((candidate, index) => <CandidateEvidence key={candidate.candidate_id} candidate={candidate} index={index} wideLayout={wideLayout} onRemove={onRemove} />)}
+      </div>
     </section>
   </main>;
 }

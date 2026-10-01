@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { CandidateLegs, STRUCTURE_LABELS, VIEWPOINT_LABELS, deskNumber, deskTime } from "./DiscoverWorkspace";
 import {
-  appendObservationNote, appendObservationReview, archiveObservation, removeObservation,
+  OBSERVE_CONFLICT_MESSAGE, ObserveStorageConflictError,
+  appendObservationNote, appendObservationReview, archiveObservation, loadObserveState, removeObservation,
   type ObservationRecord, type ObservationReviewEvent, type ObserveState,
 } from "./observeStore";
 import type { DeskCandidate, DeskReview } from "./types";
@@ -18,14 +19,26 @@ export function ObserveWorkspace({ state, onChange, onReview, storageError }: Ob
   const [showArchived, setShowArchived] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
   const visible = state.records.filter((record) => record.archived === showArchived);
   const selected = visible.find((record) => record.id === selectedId) ?? visible[0];
   const activeCount = state.records.filter((record) => !record.archived).length;
   const archivedCount = state.records.length - activeCount;
+  const canReload = conflict || (!error && storageError === OBSERVE_CONFLICT_MESSAGE);
+
+  function showError(message: string | null, isConflict = false): void {
+    setError(message); setConflict(isConflict);
+  }
+
+  function reload(): void {
+    const latest = loadObserveState();
+    if (latest.error) { showError(latest.error, true); return; }
+    onChange(latest.state); showError(null);
+  }
 
   function mutate(action: () => ObserveState): void {
-    try { onChange(action()); setError(null); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "操作未保存，请检查浏览器的本地存储。"); }
+    try { onChange(action()); showError(null); }
+    catch (failure) { showError(failure instanceof Error ? failure.message : "操作未保存，请检查浏览器的本地存储。", failure instanceof ObserveStorageConflictError); }
   }
 
   return <main className="desk-workspace" id="decision-desk-main">
@@ -33,7 +46,9 @@ export function ObserveWorkspace({ state, onChange, onReview, storageError }: Ob
       <h1>保留当时的判断，复核同一组合</h1>
       <p>原始快照、完整合约腿与比较假设固定保存。新报价和后续笔记另记一条，便于看清判断如何变化。</p></div>
       <span className="desk-quiet-label">仅保存在此浏览器 · 无账户同步</span></div>
-    {storageError || error ? <div className="desk-notice" role="alert">{error ?? storageError}</div> : null}
+    {storageError || error ? <div className="desk-notice" role="alert"><p>{error ?? storageError}</p>
+      {canReload ? <button className="desk-button desk-button-secondary" type="button" onClick={reload}>重新读取观察</button> : null}
+    </div> : null}
     <div className="desk-results-toolbar"><div className="desk-segmented" aria-label="观察记录范围">
       <button type="button" aria-pressed={!showArchived} onClick={() => { setShowArchived(false); setSelectedId(null); }}>观察中 {activeCount}</button>
       <button type="button" aria-pressed={showArchived} onClick={() => { setShowArchived(true); setSelectedId(null); }}>已归档 {archivedCount}</button>
@@ -55,7 +70,7 @@ export function ObserveWorkspace({ state, onChange, onReview, storageError }: Ob
         })}
       </nav>
       {selected ? <ObservationDetail key={selected.id} record={selected} state={state} onReview={onReview}
-        onChange={onChange} onError={setError} onMutate={mutate} /> : null}
+        onChange={onChange} onError={showError} onMutate={mutate} /> : null}
     </div>}
   </main>;
 }
@@ -65,7 +80,7 @@ function ObservationDetail({ record, state, onReview, onChange, onError, onMutat
   state: ObserveState;
   onReview: ObserveWorkspaceProps["onReview"];
   onChange: ObserveWorkspaceProps["onChange"];
-  onError: (error: string | null) => void;
+  onError: (error: string | null, conflict?: boolean) => void;
   onMutate: (action: () => ObserveState) => void;
 }): React.JSX.Element {
   const [note, setNote] = useState("");
@@ -103,7 +118,7 @@ function ObservationDetail({ record, state, onReview, onChange, onError, onMutat
     try {
       onChange(appendObservationReview(stateRef.current, record.id, result));
     } catch (failure) {
-      onError(failure instanceof Error ? failure.message : "复查结果未保存，原始记录保持不变。");
+      onError(failure instanceof Error ? failure.message : "复查结果未保存，原始记录保持不变。", failure instanceof ObserveStorageConflictError);
     }
     setBusy(false);
   }
@@ -113,7 +128,7 @@ function ObservationDetail({ record, state, onReview, onChange, onError, onMutat
       onChange(appendObservationNote(state, record.id, note));
       setNote(""); onError(null);
     } catch (failure) {
-      onError(failure instanceof Error ? failure.message : "复盘笔记未保存，请检查浏览器存储。");
+      onError(failure instanceof Error ? failure.message : "复盘笔记未保存，请检查浏览器存储。", failure instanceof ObserveStorageConflictError);
     }
   }
 

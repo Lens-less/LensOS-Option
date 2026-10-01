@@ -2,6 +2,7 @@ import { validateDecisionDesk, validateDeskComparison, validateDeskReview } from
 import type { DecisionDesk, DeskComparison, DeskReview, Viewpoint } from "./types";
 
 export const OBSERVE_STORAGE_KEY = "lensos-option.observations.v1";
+export const OBSERVE_CONFLICT_MESSAGE = "观察记录未保存：此浏览器的记录已在其他页面更改或删除。请重新读取观察列表后再操作；最新记录和删除结果未被覆盖。";
 const MAX_RECORDS = 100;
 const MAX_EVENTS = 1_000;
 const MAX_NOTE_LENGTH = 2_000;
@@ -51,6 +52,13 @@ export class ObserveStorageError extends Error {
   }
 }
 
+export class ObserveStorageConflictError extends ObserveStorageError {
+  constructor() {
+    super(OBSERVE_CONFLICT_MESSAGE);
+    this.name = "ObserveStorageConflictError";
+  }
+}
+
 export function emptyObserveState(): ObserveState {
   return immutableCopy({ version: 1, records: [], reviews: [] });
 }
@@ -71,22 +79,32 @@ export function loadObserveState(storage?: Pick<Storage, "getItem">): { state: O
   }
 }
 
-/** A failed write does not become an apparent successful save in the UI. */
+/** Persist an unchanged current state; edits must carry their pre-edit base. */
 export function persistObserveState(state: ObserveState, storage?: Pick<Storage, "getItem" | "setItem">): void {
-  commitObserveState(state, storage);
+  commitObserveState(state, state, storage);
 }
 
 function commitObserveState(
   state: ObserveState,
+  baseState: ObserveState,
   storage?: Pick<Storage, "getItem" | "setItem">,
   removedObservationIds: string[] = [],
 ): void {
   try {
     const target = storage ?? browserStorage();
     const raw = target.getItem(OBSERVE_STORAGE_KEY);
+    validateObserveState(baseState);
+    if (raw !== null) require(raw.length <= MAX_STORAGE_BYTES);
+    const previous = raw === null ? emptyObserveState() : validateObserveState(JSON.parse(raw));
+    // Check the complete pre-edit state, including absent records and archive
+    // flags. Checking only surviving originals lets a stale tab resurrect a
+    // deleted observation and all of its private notes. Never merge stale edits.
+    // localStorage has no atomic compare-and-swap: this guards changes already
+    // visible at commit time, rather than promising cross-tab transactions.
+    if (JSON.stringify(previous) !== JSON.stringify(baseState)) {
+      throw new ObserveStorageConflictError();
+    }
     if (raw !== null) {
-      require(raw.length <= MAX_STORAGE_BYTES);
-      const previous = validateObserveState(JSON.parse(raw));
       for (const original of previous.records) {
         const next = state.records.find((record) => record.id === original.id);
         if (!next) require(removedObservationIds.includes(original.id));
@@ -106,7 +124,8 @@ function commitObserveState(
     const serialized = JSON.stringify(state);
     if (serialized.length > MAX_STORAGE_BYTES) throw new ObserveStorageError("Browser observation storage is full");
     target.setItem(OBSERVE_STORAGE_KEY, serialized);
-  } catch {
+  } catch (failure) {
+    if (failure instanceof ObserveStorageConflictError) throw failure;
     throw new ObserveStorageError("观察记录未保存。请检查浏览器的本地存储权限或空间；已有记录未被覆盖。");
   }
 }
@@ -135,7 +154,7 @@ export function saveObservation(
     archived: false,
   });
   const next = immutableCopy({ ...state, records: [record, ...state.records] });
-  persistObserveState(next, storage);
+  commitObserveState(next, state, storage);
   return { state: next, record };
 }
 
@@ -170,7 +189,7 @@ export function archiveObservation(
     ...state,
     records: state.records.map((record) => record.id === observationId ? { ...record, archived } : record),
   });
-  persistObserveState(next, storage);
+  commitObserveState(next, state, storage);
   return next;
 }
 
@@ -185,7 +204,7 @@ export function removeObservation(
     records: state.records.filter((record) => record.id !== observationId),
     reviews: state.reviews.filter((event) => event.observation_id !== observationId),
   });
-  commitObserveState(next, storage, [observationId]);
+  commitObserveState(next, state, storage, [observationId]);
   return next;
 }
 
@@ -204,7 +223,7 @@ function appendEvent(
     saved_at: new Date().toISOString(), kind, review, note,
   };
   const next = immutableCopy({ ...state, reviews: [event, ...state.reviews] });
-  persistObserveState(next, storage);
+  commitObserveState(next, state, storage);
   return next;
 }
 

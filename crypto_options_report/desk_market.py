@@ -17,6 +17,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
+from http.client import HTTPException
 from math import isfinite
 from typing import Any
 
@@ -131,7 +132,12 @@ class DeskMarketCollector:
             if remaining < 1:
                 raise ValueError("COLLECTION_DEADLINE: refresh the public snapshot")
             try:
-                payload = self.transport(f"{self.base_url}/api/v2/public/{endpoint}", params, min(10, max(1, int(remaining))))
+                try:
+                    payload = self.transport(f"{self.base_url}/api/v2/public/{endpoint}", params, min(10, max(1, int(remaining))))
+                except HTTPException as exc:
+                    # A truncated upstream response cannot close the browser's
+                    # research request or expose partial response bytes.
+                    raise OSError("PUBLIC_DATA_UNAVAILABLE: incomplete or invalid public HTTP response") from exc
                 if not isinstance(payload, dict):
                     raise ValueError("INVALID_RESPONSE: expected a JSON-RPC object")
                 error = payload.get("error")

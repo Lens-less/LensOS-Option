@@ -5,6 +5,7 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from http.client import IncompleteRead
 from itertools import pairwise
 
 from crypto_options_report.desk_market import DeskMarketCollector, _Pacer
@@ -103,6 +104,38 @@ class DeskMarketTests(unittest.TestCase):
 
     def make_collector(self, **kwargs):
         return DeskMarketCollector(transport=self.public, clock=self.clock.monotonic, sleep=self.clock.sleep, now=self.clock.now, pacer=_Pacer(), **kwargs)
+
+    def test_truncated_registry_is_reported_as_partial_without_leaking_response_bytes(self):
+        def transport(url, params, timeout):
+            if url.endswith("/get_instruments") and params["currency"] == "USDC":
+                raise IncompleteRead(b"private-response-fragment", 10)
+            return self.public(url, params, timeout)
+
+        self.collector.transport = transport
+        snapshot = self.collector.fetch_snapshot("BTC")
+        self.assertFalse(snapshot["coverage"]["scan_complete"])
+        failure = snapshot["coverage"]["failures"][0]
+        self.assertEqual("PUBLIC_DATA_UNAVAILABLE", failure["code"])
+        self.assertEqual("USDC", failure["scope"])
+        self.assertIn("incomplete", failure["message"])
+        self.assertNotIn("private-response-fragment", str(snapshot))
+
+    def test_truncated_exact_book_withdraws_the_previous_quote(self):
+        snapshot = self.collector.fetch_snapshot("BTC")
+        name = self.public.btc[0]["instrument_name"]
+        previous = self.collector.deepen(snapshot, [name])
+        self.assertIn(name, previous["quotes"])
+
+        def transport(url, params, timeout):
+            if url.endswith("/get_order_book"):
+                raise IncompleteRead(b"partial-book", 20)
+            return self.public(url, params, timeout)
+
+        self.collector.transport = transport
+        refreshed = self.collector.deepen(previous, [name])
+        self.assertNotIn(name, refreshed["quotes"])
+        self.assertEqual("PUBLIC_DATA_UNAVAILABLE", refreshed["coverage"]["failures"][-1]["code"])
+        self.assertIn(name, previous["quotes"])
 
     def test_complete_discovery_does_not_apply_ticker_sample_and_preserves_units(self):
         self.public.btc = [instrument(f"BTC_USDC-23OCT26-{65000 + i * 1000}-C") for i in range(140)]

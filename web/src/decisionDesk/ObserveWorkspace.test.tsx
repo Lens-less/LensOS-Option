@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ObserveWorkspace } from "./ObserveWorkspace";
 import { observeComparisonFixture, observeDeskFixture, observeReviewFixture } from "./observeFixtures";
-import { emptyObserveState, loadObserveState, saveObservation, type ObserveState } from "./observeStore";
+import { OBSERVE_STORAGE_KEY, appendObservationNote, emptyObserveState, loadObserveState, removeObservation, saveObservation, type ObserveState } from "./observeStore";
 import type { DeskReview } from "./types";
 
 function initialState(): ObserveState {
@@ -116,6 +116,62 @@ describe("ObserveWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "删除此记录" }));
     fireEvent.click(screen.getByRole("button", { name: "确认删除记录" }));
     expect(loadObserveState().state).toEqual(emptyObserveState());
+    expect(screen.getByRole("heading", { name: "从一个看清楚的结构开始" })).toBeInTheDocument();
+  });
+
+  it("explains a stale-page conflict and preserves the unsaved note without restoring deleted private data", () => {
+    const state = initialState();
+    render(<Harness initial={state} review={vi.fn()} />);
+    removeObservation(state, state.records[0].id);
+    const note = screen.getByRole("textbox", { name: /追加复盘笔记/ });
+    fireEvent.change(note, { target: { value: "旧页面尚未保存的判断" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存复盘笔记" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("记录已在其他页面更改或删除");
+    expect(screen.getByRole("alert")).toHaveTextContent("请重新读取观察列表");
+    expect(note).toHaveValue("旧页面尚未保存的判断");
+    expect(loadObserveState().state).toEqual(emptyObserveState());
+    const deletedStorage = localStorage.getItem(OBSERVE_STORAGE_KEY);
+    fireEvent.click(screen.getByRole("button", { name: "重新读取观察" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "从一个看清楚的结构开始" })).toBeInTheDocument();
+    expect(localStorage.getItem(OBSERVE_STORAGE_KEY)).toBe(deletedStorage);
+  });
+
+  it("reloads newer review events without a write or losing the unsaved note for a surviving record", () => {
+    const state = initialState();
+    render(<Harness initial={state} review={vi.fn()} />);
+    const latest = appendObservationNote(state, state.records[0].id, "另一个页面的新笔记");
+    const latestStorage = localStorage.getItem(OBSERVE_STORAGE_KEY);
+    const note = screen.getByRole("textbox", { name: /追加复盘笔记/ });
+    fireEvent.change(note, { target: { value: "本页未保存的判断" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存复盘笔记" }));
+    expect(note).toHaveValue("本页未保存的判断");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取观察" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /追加复盘笔记/ })).toHaveValue("本页未保存的判断");
+    expect(screen.getByText("另一个页面的新笔记")).toBeInTheDocument();
+    expect(localStorage.getItem(OBSERVE_STORAGE_KEY)).toBe(latestStorage);
+    fireEvent.click(screen.getByRole("button", { name: "保存复盘笔记" }));
+    expect(loadObserveState().state.records).toEqual(state.records);
+    expect(loadObserveState().state.reviews.slice(1)).toEqual(latest.reviews);
+    expect(loadObserveState().state.reviews[0].note).toBe("本页未保存的判断");
+    expect(screen.getByRole("textbox", { name: /追加复盘笔记/ })).toHaveValue("");
+  });
+
+  it("does not restore an observation deleted elsewhere while its quote review is pending", async () => {
+    const state = initialState();
+    const record = state.records[0];
+    let complete: (review: DeskReview) => void = () => undefined;
+    const review = vi.fn(() => new Promise<DeskReview>((resolve) => { complete = resolve; }));
+    render(<Harness initial={state} review={review} />);
+    fireEvent.click(screen.getByRole("button", { name: "复核同一组合" }));
+    removeObservation(state, record.id);
+    complete(observeReviewFixture(record.desk));
+    expect(await screen.findByRole("alert")).toHaveTextContent("记录已在其他页面更改或删除");
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText("已取得同一合约的新报价")).not.toBeInTheDocument();
+    expect(loadObserveState().state).toEqual(emptyObserveState());
+    fireEvent.click(screen.getByRole("button", { name: "重新读取观察" }));
     expect(screen.getByRole("heading", { name: "从一个看清楚的结构开始" })).toBeInTheDocument();
   });
 });
