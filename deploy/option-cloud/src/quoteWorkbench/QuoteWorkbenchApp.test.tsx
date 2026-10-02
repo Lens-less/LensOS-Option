@@ -24,6 +24,7 @@ describe('quote → actual conditions → compare → frozen plan → exact late
   const choices=screen.getAllByRole('checkbox',{name:/^比较 /});fireEvent.click(choices[0]);fireEvent.click(choices[1]);
   fireEvent.click(screen.getByRole('button',{name:'比较已选结构 →'}));
   await screen.findByRole('heading',{name:'相同假设，看看你更在意什么'});
+  expect(screen.getByRole('note')).toHaveTextContent('合成演练 · 不是真实市场报价');
   fireEvent.click(screen.getByRole('radio',{name:/候选 1/}));
   fireEvent.change(screen.getByRole('textbox',{name:'选择理由或尚待验证的问题'}),{target:{value:'保留完整保护腿，先核对后续报价和费用。'}});
   fireEvent.click(screen.getByRole('button',{name:'冻结为研究计划'}));
@@ -35,6 +36,7 @@ describe('quote → actual conditions → compare → frozen plan → exact late
   fireEvent.change(screen.getByRole('textbox',{name:'记录理由'}),{target:{value:'报价变化已记录，暂时继续研究。'}});
   fireEvent.click(screen.getByRole('button',{name:'追加一条记录，不覆盖原版'}));
   await screen.findByText('研究版本历史 · 1 次');
+  expect(screen.getByText('最近已保存复核 · 精确合约匹配')).toBeVisible();
   const latest=JSON.parse(localStorage.getItem(PLAN_STORAGE_KEY)!).plans[0];expect(latest.long).toEqual(original.long);expect(latest.rationale).toBe(original.rationale);expect(latest.events).toHaveLength(1);
   view.unmount();render(<QuoteWorkbenchApp />);fireEvent.click(screen.getByRole('button',{name:/03.*研究计划/}));await screen.findByText('研究版本历史 · 1 次');
   expect(network).not.toHaveBeenCalled();

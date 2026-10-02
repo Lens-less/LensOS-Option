@@ -107,7 +107,7 @@ export function QuoteWorkbenchApp():React.JSX.Element {
             <div className="q-compare-tray"><div><strong>已选 {selected.length} / 3</strong><p>同方向、同币种与单位；每个期限单独计算到期损益</p></div><button className="q-button q-primary" disabled={candidates.length<2||dirty||busy} onClick={()=>navigate('compare')}>比较已选结构 →</button></div>
           </section>:<div className="q-ready-note">报价定义已确认。填写本次约束并点击“枚举并筛选”，结果会由你的文件即时计算。</div>}
         </>:null}
-      </>:workspace==='compare'?<ComparePanel candidates={candidates} criteria={applied??draft??({} as Criteria)} onRemove={id=>setSelected(ids=>ids.filter(value=>value!==id))} onBack={()=>navigate('research')} onSave={savePlan} />:
+      </>:workspace==='compare'?<ComparePanel candidates={candidates} sourceContext={source?`${source.synthetic?'合成演练 · 不是真实市场报价':'用户导入快照 · 非实时，来源未独立核验'}｜${source.name}｜报价时点 ${when(source.lastQuote)}`:undefined} criteria={applied??draft??({} as Criteria)} onRemove={id=>setSelected(ids=>ids.filter(value=>value!==id))} onBack={()=>navigate('research')} onSave={savePlan} />:
       <section className="q-plans"><div className="q-section-heading"><div><span className="q-eyebrow">04 / 可复核的研究记录</span><h1>让后来的你知道，当时为什么选</h1><p>原始证据不覆盖。新报价、不同意或放弃，都追加成新的研究版本。</p></div><button className="q-button" disabled={planImportBusy} onClick={()=>importPlanRef.current?.click()}>{planImportBusy?'正在读取本地计划…':'导入计划 JSON'}</button></div>
         <input className="q-file-input" ref={importPlanRef} type="file" accept=".json,application/json" aria-label="导入本地研究计划 JSON" onChange={e=>{const file=e.target.files?.[0];if(file)void readPlan(file);e.target.value='';}} />
         <div className="q-local-note">仅存在此浏览器，无账户或云同步。清除浏览器数据会移除记录；导出 JSON 才能在其他设备继续。</div>
