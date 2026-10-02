@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Methodology | LensOS Option</title>
+    <link rel="stylesheet" href="../static-page.css" />
+  </head>
+  <body>
+    <main>
+      <div class="page-shell">
+        <header class="page-header">
+          <a href="../index.html">Back to public home</a>
+          <nav aria-label="Language switch">
+            <a href="../methodology.html">中文</a>
+          </nav>
+        </header>
+        <div class="page-title">
+          <p>Methodology / Public research contract</p>
+          <h1>Methodology</h1>
+          <p>This page explains how the public site publishes, how it defines the headline, how evidence is labeled, and what belongs in secondary disclosure.</p>
+        </div>
+        <section class="page-section">
+          <h2>Publication model</h2>
+          <p>
+            The public edition is a deterministic static snapshot. It is produced
+            from a captured instant plus precomputed research artifacts, then
+            served read-only.
+          </p>
+        </section>
+        <section class="page-section">
+          <h2>Headline contract</h2>
+          <p>
+            Public headlines are one day behind by design and use already-closed
+            daily data. That keeps same-day re-runs from producing two different
+            headlines.
+          </p>
+        </section>
+        <section class="page-section">
+          <h2>Data sources</h2>
+          <ul>
+            <li>Deribit public API: option chain, DVOL, and market state.</li>
+            <li>Self-captured underlying history: used for VRP, RV30, and historical distributions.</li>
+            <li>Generated research artifacts: used for candidates, release gates, and public summaries.</li>
+          </ul>
+          <p>
+            Alignment is capped by the capture clock: underlying candles enter
+            history at their true close-availability time, DVOL retains its own
+            observation time, and the headline uses only the latest evaluation
+            day available to both. DVOL is forward-looking implied volatility;
+            RV30 is trailing 30-day realized volatility. Their clocks, evaluation
+            day, and effective sample size are disclosed together.
+          </p>
+        </section>
+        <section class="page-section">
+          <h2>Evidence classes</h2>
+          <ul>
+            <li><code>trusted</code>: verified and suitable as a conclusion basis.</li>
+            <li><code>degraded</code>: readable but not strong enough to support a conclusion.</li>
+            <li><code>untrusted</code>: present but validation failed.</li>
+            <li><code>missing</code>: absent.</li>
+          </ul>
+        </section>
+        <section class="page-section">
+          <details>
+            <summary>Eight-stage workflow (secondary disclosure)</summary>
+            <ol>
+              <li>Collect</li>
+              <li>Analyze</li>
+              <li>Select</li>
+              <li>Enter</li>
+              <li>Risk</li>
+              <li>Exit</li>
+              <li>Monitor</li>
+              <li>Review</li>
+            </ol>
+            <p>This workflow stays in collapsed secondary disclosure, not on the homepage narrative.</p>
+          </details>
+        </section>
+        <footer class="page-footer">
+          <span>LensOS Option / research only</span>
+          <nav aria-label="Footer links">
+            <a href="../methodology.html">Methodology</a>
+            <a href="../disclaimer.html">Disclaimer</a>
+            <a href="../privacy.html">Privacy</a>
+            <a href="../terms.html">Terms</a>
+          </nav>
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>
