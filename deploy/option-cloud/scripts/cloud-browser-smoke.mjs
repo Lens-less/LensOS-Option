@@ -68,6 +68,14 @@ try{
 }finally{
  await writeFile(path.join(output,'report.json'),JSON.stringify(report,null,2));
  for(const item of pending.values()){clearTimeout(item.timer);item.reject(new Error('browser smoke cleanup'));}pending.clear();
- if(socket)socket.close();if(browser&&browser.exitCode===null)browser.kill('SIGTERM');
- if(server)await new Promise(resolve=>server.close(resolve));await rm(temporary,{recursive:true,force:true});
+ if(socket)socket.close();
+ if(browser&&browser.exitCode===null&&browser.signalCode===null){
+  browser.kill('SIGTERM');
+  await until(()=>browser.exitCode!==null||browser.signalCode!==null,'Chromium shutdown',5000).catch(async()=>{
+   browser.kill('SIGKILL');await until(()=>browser.exitCode!==null||browser.signalCode!==null,'forced Chromium shutdown',5000);
+  });
+ }
+ if(server)await new Promise(resolve=>server.close(resolve));
+ // Renderer/profile writers can finish just after the browser parent exits.
+ await rm(temporary,{recursive:true,force:true,maxRetries:5,retryDelay:100});
 }
