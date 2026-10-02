@@ -1,0 +1,50 @@
+name: Option cloud workbench acceptance
+on:
+  push:
+    branches: [deploy/option-cloud-acceptance]
+    paths: ['deploy/option-cloud/**', '.github/workflows/option-cloud-smoke.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: option-cloud-smoke-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: deploy/option-cloud
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.15.0'
+          cache: npm
+          cache-dependency-path: deploy/option-cloud/package-lock.json
+      - name: Install exact app dependencies
+        run: npm ci
+      - name: Reproduce original Python fixtures and verify production source
+        run: |
+          npm run fixtures
+          npm run oracle
+          npm run lint
+          npm test
+          npm run build
+      - name: Install Chinese screenshot fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends fonts-noto-cjk fontconfig
+          fc-match --format='%{family}' 'sans-serif:lang=zh-cn' | grep --quiet 'Noto Sans CJK'
+      - name: Verify one complete production workflow in isolated Chromium
+        run: node --experimental-strip-types scripts/cloud-browser-smoke.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: option-cloud-browser-acceptance
+          path: deploy/option-cloud/browser-artifacts/
+          if-no-files-found: error

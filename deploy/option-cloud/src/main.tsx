@@ -1,8 +1,10 @@
-import { StrictMode } from 'react';
+import { StrictMode, lazy, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
-import { DecisionDeskApp } from './decisionDesk/DecisionDeskApp';
+import { QuoteWorkbenchApp } from './quoteWorkbench/QuoteWorkbenchApp';
 import './base.css';
-import './preview.css';
+const Legacy = lazy(() => import('./decisionDesk/DecisionDeskApp').then(module => ({default:module.DecisionDeskApp})));
 const root = document.getElementById('root');
-if (!root) throw new Error('preview root missing');
-createRoot(root).render(<StrictMode><DecisionDeskApp /></StrictMode>);
+if (!root) throw new Error('application root missing');
+const legacy = new URLSearchParams(window.location.search).get('legacy') === '1';
+if (legacy) void import('./preview.css');
+createRoot(root).render(<StrictMode>{legacy ? <Suspense fallback={<p>正在载入旧版合成演练…</p>}><Legacy /></Suspense> : <QuoteWorkbenchApp />}</StrictMode>);

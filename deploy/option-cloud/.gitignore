@@ -3,3 +3,5 @@ node_modules/
 .sites-runtime/
 __pycache__/
 *.pyc
+
+browser-artifacts/
