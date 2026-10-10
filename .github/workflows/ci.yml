@@ -67,7 +67,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_installed_wheel.py --python wheel-venv\Scripts\python.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: runner.os == 'Linux' && matrix.python-version == '3.14'
         with:
           name: python-wheel
@@ -136,7 +136,7 @@ jobs:
           fc-match --format='%{family}' 'sans-serif:lang=zh-cn' | grep --quiet 'Noto Sans CJK'
       - name: Verify installed wheel in isolated Chrome
         run: node tools/browser-smoke.mjs --python "${{ github.workspace }}/browser-venv/bin/python" --extension-dir web/dist/chrome-extension --public-build-dir web/dist-public --output-dir browser-artifacts
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: browser-acceptance
