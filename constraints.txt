@@ -1,6 +1,6 @@
 # Shared exact pins for CI/dev/build resolution. The production image remains
 # source-only on Python 3.14 and does not install packaging toolchains.
-pip==26.2.1
+pip==26.2.2
 pytest==9.1.1
 colorama==0.4.6 ; sys_platform == "win32"
 iniconfig==2.3.0
